@@ -1,0 +1,58 @@
+# SmartKeyNet default configuration (PLAN.md §4, Addition A, Addition C).
+#
+# This is the single YAML all four owners read from. Treat top-level
+# keys as belonging to the module named in each comment; changes to
+# `reward.*` or `hard_rules.*` are floor-adjacent and should get a
+# team ping (split.md §3, "the shared files ... are the danger zone").
+
+scenario: S1  # one of S1..S6 (PLAN.md §5); S6 is held-out eval only (Hard Rule 8)
+
+seed: 0
+
+# --- env/forecast_provider.py, forecaster/model.py (Addition A) ---
+use_foresight: ewma  # off | ewma | lstm
+
+# --- env/pool_sim.py ---
+pool:
+  capacity_bits: 1_000_000
+  initial_fill_frac: 0.5
+
+# --- env/masking.py (Hard Rule 2, 4, 5) ---
+key_lifetime:
+  max_key_age_steps: 500  # SP 800-57-derived cap L; forced rekey at/above this (Addition C)
+
+# --- env/environment.py reward (PLAN.md §4; Hard Rule 1 -- no security term, ever) ---
+reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_fr: 0.1
+  w_qkd: 1.0
+  r_starve: 10.0         # ~= 10 * w_lat (PLAN.md §4)
+  c_rekey_base: 1.0       # c0 in c_rekey(load) = c0 * (1 + beta * load)
+  c_rekey_load_beta: 1.0  # beta in the same formula
+
+# --- env/request_generator.py ---
+tenant_graph:
+  n_nodes: 10  # start small (PLAN.md §10 step 4); scale toward ~50 later
+
+# --- agents/dqn.py ---
+dqn:
+  gamma: 0.99
+  lr: 0.001
+  batch_size: 64
+  target_update_every: 1000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 50_000
+
+# --- experiments/harness.py, agents/baselines.py ---
+baselines:
+  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+# --- attack/steering_trace.py (PLAN.md §5 S5) ---
+steering_attack:
+  doses: [0.0, 0.25, 0.5, 0.75, 1.0]
+  duration_steps: 1000
+
+# --- env/environment.py S6 migration wave (Hard Rule 3, 8 -- scripted, exogenous, held-out eval only) ---
+migration_schedule: []  # list of {step: int, tenant_cohort: str, new_floor: str} entries
