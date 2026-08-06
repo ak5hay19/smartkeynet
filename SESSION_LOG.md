@@ -35,7 +35,7 @@
 | Person | Area | Last session | Current branch | Status |
 |--------|------|-------------|----------------|--------|
 | A | Data + forecaster + graph | 2026-08-06 | main | Scaffolding verified, dataset placed — no feature code yet |
-| B | ENV + pool + reward + masking | 2026-08-06 | env/pool-sim | `pool_sim.py` implemented + tested — `deferral_queue.py` is next |
+| B | ENV + pool + reward + masking | 2026-08-06 | env/deferral-queue | `pool_sim.py` + `deferral_queue.py` + `metrics/regret.py` implemented + tested — `environment.py` wiring is next |
 | C | Agent + baselines | — | — | Not started |
 | D | Attack + dashboard + API + paper | — | — | Not started |
 
@@ -45,6 +45,22 @@
 ---
 
 ## Sessions (newest first)
+
+### [SOLO — env/deferral_queue + metrics/regret] — 2026-08-06 — env/deferral-queue
+
+**Session goal:** Implement `env/deferral_queue.py` and `metrics/regret.py` for real (Addition C: regret & churn accounting), plus real behavioral tests, per PLAN.md §10 step 3 / Hard Rule 9.
+
+**What got done:**
+- `env/deferral_queue.py`: implemented `DeferralQueue.enqueue/tick/pop_servable` behind the existing dataclass/class shapes (`QueuedRequest` untouched). `enqueue()` appends the request and returns a `RegretEvent` for the deferral's onset (once per request); floor is always `Action.SERVE_HYBRID` since only hybrid-mandatory requests land here (Hard Rule 9). `tick()` ages every queued request and returns one `DeferredCriticalStep` per still-queued request, never a `RegretEvent`. `pop_servable(can_draw)` sorts by `(-sensitivity_class, step_enqueued)` for priority/FIFO, and checks each candidate against a *cumulative* running total (not just its own `bits_required` in isolation) so one pass never over-commits the pool across several serves; a candidate that doesn't fit is skipped rather than blocking smaller lower-priority requests behind it.
+- `metrics/regret.py`: implemented `compute_episode_metrics()` (regret_events/deferred_critical_steps are separate counters — onsets vs. waiting-steps — plus `rekeys_per_100_requests` and `forced_rekey_ratio`, both zero-guarded) and `attribute_regret()` (retrospective log: each regret event claims every not-yet-claimed *discretionary* hybrid serve that happened strictly before its step; each serve's bits are claimed by at most one event ever, which is what makes the "bits attributed <= bits spent" invariant hold by construction).
+- `tests/test_deferral_queue.py`: replaced the import-smoke test with 8 behavioral tests — priority-before-FIFO ordering, cumulative-headroom correctness (no over-commit within one `pop_servable` pass), head-of-line non-blocking for a smaller lower-priority request, regret event firing once on enqueue (not per tick), tick emitting one entry per queued request, serving once the pool covers the request, and sensitivity_class/floor never changing while queued (Hard Rule 9).
+- `tests/test_regret.py`: replaced the import-smoke test with 11 behavioral tests — regret_events counts onsets not waiting-steps, deferred_critical_steps counts every waiting step, forced_rekey_ratio (including the zero-rekeys guard), rekeys_per_100_requests (including the zero-requests guard), discretionary_hybrid_serves pass-through, and the attribution invariant (bits attributed never exceed bits spent, non-discretionary/after-the-fact serves excluded, no double-counting a serve across two events).
+
+**What's working:** `DeferralQueue` + `metrics.regret` are fully implemented and unit-tested; full `pytest` suite is green (57 passed, no regressions elsewhere).
+**What's broken / incomplete:** `env/environment.py` still doesn't wire `PoolSim`/`DeferralQueue` together — that's the next real integration point. `attribute_regret()`'s `hybrid_serve_log` shape is my own documented assumption (`{"step", "bits", "discretionary"}`) since it isn't a frozen `contracts.py` type; whoever wires the real serve log in `environment.py` should conform to that shape or we revisit it together.
+**Blockers:** None.
+**Next session will:** Wire `env/environment.py` — construct `PoolSim` + `DeferralQueue` + masking + reward together for a full S1 episode (PLAN.md §10 step 5 / the W1-2 gate: "env runs a full S1 episode end-to-end with regret logging").
+**Hard Rules check:** None violated. Same class of flagged deviation as last session's `pool_sim.py`: `DeferralQueue.enqueue()` gained a fourth required parameter, `pool_fill_at_onset: float`, because `RegretEvent` (frozen in `env/contracts.py`) requires that field and the original three-parameter stub had no way to receive it. `request`/`bits_required`/`step`'s meaning and position are unchanged; `tick/pop_servable/__len__` are untouched, and `env/contracts.py` itself was not touched. Hard Rule 9 was central all session (never downgrade, never lower a floor while queued) — verified directly by `test_sensitivity_class_and_floor_never_change_while_queued`.
 
 ### [SOLO — env/pool_sim] — 2026-08-06 — env/pool-sim
 
