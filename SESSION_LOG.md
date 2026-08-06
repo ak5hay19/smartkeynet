@@ -34,7 +34,7 @@
 
 | Person | Area | Last session | Current branch | Status |
 |--------|------|-------------|----------------|--------|
-| A | Data + forecaster + graph | 2026-08-06 | main | Scaffolding verified, dataset placed — no feature code yet |
+| A | Data + forecaster + graph | 2026-08-06 | main | `forecast_provider.py`'s `MovingAverageForecaster` + `request_generator.py`'s `random_request_generator()` implemented + tested — dataset ingestion, `build_tenant_graph`/`RequestGenerator` still not started |
 | B | ENV + pool + reward + masking | 2026-08-06 | main | `pool_sim.py` + `deferral_queue.py` + `metrics/regret.py` + `masking.py` implemented + tested — `environment.py` wiring is next |
 | C | Agent + baselines | — | — | Not started |
 | D | Attack + dashboard + API + paper | — | — | Not started |
@@ -45,6 +45,24 @@
 ---
 
 ## Sessions (newest first)
+
+### [SOLO — env/forecast_provider + request_generator stub] — 2026-08-06 — main
+
+**Session goal:** Implement `MovingAverageForecaster` (Addition A EWMA fallback) and `random_request_generator()` for real, plus real behavioral tests -- the last two pieces `env/environment.py` needs before it can be wired.
+
+**What got done:**
+- `env/forecast_provider.py`: implemented `MovingAverageForecaster.__init__/update/get_threat_forecast/get_pool_forecast` behind the existing signatures. Threat head collapses the raw `threat_features` vector to a scalar via its mean, squashes through a sigmoid into (0,1), then EWMA-smooths that into `threat_score`; `posture_probs` is a fixed-temperature RBF-softmax over three anchors (0.0/0.5/1.0 = CALM/ELEVATED/HIGH) in that squashed space, which is what guarantees it always sums to 1 regardless of input. Pool head EWMA-smooths `pool_fill`/`skr`/`hybrid_serves` independently.
+  - **Flat-hold design (flagging per instructions):** both `get_pool_forecast()`'s three horizons (H in {10,25,50}) and `get_threat_forecast()`'s five `horizon_scores` repeat the *current* smoothed estimate at every horizon step -- no trend/extrapolation model, consistent with "no learned parameters" (the class's own docstring). Called out explicitly: `PoolForecast.hybrid_demand_hat` is documented in `contracts.py` as an *expected count over the horizon* (something that should grow with H), but this fallback flat-holds the current per-step hybrid-serve-rate EWMA instead of scaling by H -- an accepted, deliberate under-estimate at longer horizons for this fallback only, not something the real LSTM pool head should replicate. Fresh instances (no `update()` yet) default every EWMA to 0.0, so both getters return well-formed CALM-biased/empty output instead of crashing.
+  - Verified by construction and by test that `PoolForecast` never touches `ThreatForecast`'s computation or vice versa -- no code path here lets pool-head output reach `env/masking.py`'s floor logic, directly or indirectly (Hard Rule 2).
+- `env/request_generator.py`: implemented `random_request_generator()` only -- `build_tenant_graph()` and `RequestGenerator` were left untouched (still `NotImplementedError`), confirmed by two dedicated tests. Implemented as an infinite generator over a seeded `numpy` RNG: a stationary Poisson arrival process (`_ARRIVAL_RATE_PER_STEP = 1.0` mean requests/step, a documented simulator constant -- there's no arrival-rate key in `configs/default.yaml` yet) walks an internal step counter forward, yielding one `Request` per arrival with independently-drawn tenant/service/sensitivity_class/pqc_capable/hybrid_mandatory fields. Fully reproducible from `seed`.
+- `tests/test_forecast_provider.py`: replaced the import-smoke test with 9 behavioral tests -- fresh-instance sanity (no crash, well-formed zeroed output), `alpha` range validation, EWMA smoothing vs. snapping-to-newest, higher-alpha-reacts-faster, `alpha=1.0` exact-snap sanity check, `posture_probs` always summing to 1 across a range of inputs, posture shifting toward HIGH as the smoothed score rises, and both flat-hold invariants (pool horizons, threat `horizon_scores`).
+- `tests/test_request_generator.py`: replaced the import-smoke test with 8 behavioral tests -- field validity (types/ranges) over a sample, unique request IDs, non-decreasing steps, same-seed reproducibility, different-seeds divergence, arrival rate within a wide sane band of the documented mean over 5000 steps, and `build_tenant_graph`/`RequestGenerator` still raising `NotImplementedError`.
+
+**What's working:** `MovingAverageForecaster` + `random_request_generator` are fully implemented and unit-tested; full `pytest` suite is green (85 passed, no regressions elsewhere).
+**What's broken / incomplete:** `env/environment.py` still isn't wired -- that's the actual next session. `build_tenant_graph()`/`RequestGenerator` remain stubs by design (deliberately out of scope this session, per instructions).
+**Blockers:** None.
+**Next session will:** Wire `env/environment.py` -- construct `PoolSim` + `DeferralQueue` + `PolicyTable`/`compute_mask` + a `ForecastProvider` (`MovingAverageForecaster` via `use_foresight: ewma`) + `random_request_generator` + the full reward formula together for a full S1 episode (PLAN.md §10 step 5 / the W1-2 gate).
+**Hard Rules check:** Hard Rule 2 was central to the forecast-provider design -- verified in-line (no shared state or code path between the pool head's EWMAs and the threat head's) and documented explicitly in the class docstring: `PoolForecast` must never reach the floor computation, only `ThreatForecast` does, and only in the raise direction. `env/contracts.py` was not touched.
 
 ### [SOLO — env/masking] — 2026-08-06 — main
 
