@@ -16,6 +16,8 @@ use_foresight: ewma  # off | ewma | lstm
 pool:
   capacity_bits: 1_000_000
   initial_fill_frac: 0.5
+  bits_per_hybrid_draw: 256  # ETSI GS QKD 014 key size (256-bit); PLAN.md §4 Datasets & Provenance:
+                              # "ETSI GS QKD 014 gives key sizes (256-bit)" -- Hard Rule 4, no invented number
 
 # --- env/masking.py (Hard Rule 2, 4, 5) ---
 key_lifetime:
