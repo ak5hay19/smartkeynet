@@ -35,7 +35,7 @@
 | Person | Area | Last session | Current branch | Status |
 |--------|------|-------------|----------------|--------|
 | A | Data + forecaster + graph | 2026-08-06 | main | Scaffolding verified, dataset placed — no feature code yet |
-| B | ENV + pool + reward + masking | 2026-08-06 | env/deferral-queue | `pool_sim.py` + `deferral_queue.py` + `metrics/regret.py` implemented + tested — `environment.py` wiring is next |
+| B | ENV + pool + reward + masking | 2026-08-06 | main | `pool_sim.py` + `deferral_queue.py` + `metrics/regret.py` + `masking.py` implemented + tested — `environment.py` wiring is next |
 | C | Agent + baselines | — | — | Not started |
 | D | Attack + dashboard + API + paper | — | — | Not started |
 
@@ -45,6 +45,24 @@
 ---
 
 ## Sessions (newest first)
+
+### [SOLO — env/masking] — 2026-08-06 — main
+
+**Session goal:** Implement `env/masking.py` for real (`PolicyTable` + `compute_mask`) plus real behavioral tests — PLAN.md §4's "ACTION MASKING (structural, inviolable)" box, Hard Rule 2.
+
+**What got done:**
+- `env/masking.py`: implemented `PolicyTable.__init__/floor/ratchet_up` and `compute_mask` behind the existing signatures.
+  - **Placeholder floor table** (`_PLACEHOLDER_FLOOR_TABLE`, module-level, documented in-line): a 4x3 `(SensitivityClass, ThreatPosture) -> Action` mapping. S0 (public/non-sensitive) floors at `SERVE_CLASSICAL` under CALM/ELEVATED, `SERVE_PQC` at HIGH. S3 (patient-record-grade) never floors below `SERVE_PQC`, even at CALM, escalating to `SERVE_HYBRID` at ELEVATED/HIGH — exactly the instruction's worked example. Verified monotonically non-decreasing in both `sensitivity_class` and `threat_posture` by construction and by `test_floor_monotonic_in_sensitivity_class`/`test_floor_monotonic_in_threat_posture`. **This is explicitly a placeholder** — Q-OPSEC's `synthetic_context_dataset` calibration (Person A's future job) hasn't happened; only the relative ordering is asserted as load-bearing, not the exact table.
+  - **`ratchet_up` interpretation (flagging per instructions):** the stub's docstring says threat signals may only raise floors but doesn't say how `ratchet_up()` interacts with `floor()`'s own `threat_posture` argument. I implemented a **sticky ratchet**: `PolicyTable` keeps an internal `_ratcheted_posture` (starts at CALM), and `floor()` always resolves against `max(passed_in_posture, ratcheted_posture)`. So once `ratchet_up(HIGH)` is called, a later `floor()` call with `threat_posture=CALM` (e.g. the raw forecaster reading dropped back down) still returns at least the HIGH-posture floor for the life of that `PolicyTable` instance — a transient threat spike permanently raises the floor unless a new episode constructs a new `PolicyTable`. This is documented at length in the class docstring so a future calibration pass can revisit it directly.
+  - `compute_mask`: exactly the three documented rules (below-floor illegal; `SERVE_HYBRID` illegal iff `not pool_can_draw`, regardless of floor — routes to the deferral queue per Hard Rule 9 instead of ever downgrading; `REUSE` illegal iff `key_age >= max_key_age`). Nothing else masked. `REKEY_NOW`'s action index (4) is untouched by any rule and always >= any tier floor, so it's structurally always legal — the built-in deadlock escape hatch.
+  - Added `load_key_lifetime_config()` (mirrors `env.pool_sim.load_pool_config`) so `max_key_age_steps` is pulled from `configs/default.yaml`'s `key_lifetime:` block rather than hardcoded anywhere, including in tests.
+- `tests/test_masking.py`: replaced the import-smoke test with 14 behavioral tests — below-floor masking, `REUSE` at/under the age cap, `SERVE_HYBRID` masked by `pool_can_draw` (including when it's simultaneously the floor — Hard Rule 9 check), nothing masked at the lowest floor/pool-ok/fresh-key baseline, at-least-one-action-legal across the full floor x key_age x pool_can_draw product (no deadlock), `PolicyTable.floor` monotonicity in both dimensions, S3-never-below-PQC and S0-can-be-CLASSICAL-at-CALM spot checks, and four `ratchet_up` tests (raises subsequent floor, sticks even when a later call passes a lower posture, no-op when not higher than current, never lowers any (class, posture) pair after ratcheting).
+
+**What's working:** `PolicyTable` + `compute_mask` are fully implemented and unit-tested; full `pytest` suite is green (70 passed, no regressions elsewhere).
+**What's broken / incomplete:** `env/environment.py` still doesn't wire masking together with `PoolSim`/`DeferralQueue` — that's the next real integration point. The floor table is a documented placeholder, not calibrated against Q-OPSEC data yet.
+**Blockers:** None.
+**Next session will:** Wire `env/environment.py` — construct `PoolSim` + `DeferralQueue` + `PolicyTable`/`compute_mask` + reward together for a full S1 episode (PLAN.md §10 step 5 / the W1-2 gate).
+**Hard Rules check:** Hard Rule 2 was the whole session — verified structurally (masking is the only floor-enforcement path; nothing here computes a reward penalty) and by test (`ratchet_up` never-lowers tests, monotonicity tests). Hard Rule 4: floor table grounded only in relative ordering tied to NIST PQC categories / SP 800-57 / CNSA 2.0 / ETSI GS QKD 014 reasoning (documented inline in `env/masking.py`), no invented numeric thresholds — flagged above as still placeholder-calibration-pending. `env/contracts.py` was not touched.
 
 ### [SOLO — env/deferral_queue + metrics/regret] — 2026-08-06 — env/deferral-queue
 
