@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
-from env.contracts import DeferredCriticalStep, RegretEvent, Request
+from env.contracts import Action, DeferredCriticalStep, RegretEvent, Request
 
 
 @dataclass
@@ -40,13 +40,38 @@ class DeferralQueue:
 
     _queued: list[QueuedRequest] = field(default_factory=list)
 
-    def enqueue(self, request: Request, bits_required: float, step: int) -> RegretEvent:
+    def enqueue(
+        self,
+        request: Request,
+        bits_required: float,
+        step: int,
+        pool_fill_at_onset: float,
+    ) -> RegretEvent:
         """Queue a request the pool can't currently cover.
 
         Returns the `RegretEvent` marking this deferral's onset
-        (Addition C event log).
+        (Addition C event log). Called once per request, at the moment
+        it first can't be covered -- never re-emitted by `tick()`.
+
+        Only hybrid-mandatory requests land here (Hard Rule 9), so the
+        floor recorded on the `RegretEvent` is always
+        `Action.SERVE_HYBRID` -- the request's `sensitivity_class` and
+        floor are carried through unchanged, never lowered.
         """
-        raise NotImplementedError
+        queued = QueuedRequest(
+            request=request,
+            bits_required=bits_required,
+            step_enqueued=step,
+        )
+        self._queued.append(queued)
+        return RegretEvent(
+            step=step,
+            request_id=request["request_id"],
+            tenant=request["tenant"],
+            sensitivity_class=request["sensitivity_class"],
+            policy_floor=int(Action.SERVE_HYBRID),
+            pool_fill_at_onset=pool_fill_at_onset,
+        )
 
     def tick(self, step: int) -> list[DeferredCriticalStep]:
         """Advance one step: age every queued request by one step.
@@ -54,7 +79,17 @@ class DeferralQueue:
         Returns one `DeferredCriticalStep` log entry per still-queued
         request (Addition C).
         """
-        raise NotImplementedError
+        entries: list[DeferredCriticalStep] = []
+        for queued in self._queued:
+            queued.steps_waited += 1
+            entries.append(
+                DeferredCriticalStep(
+                    step=step,
+                    request_id=queued.request["request_id"],
+                    steps_waited=queued.steps_waited,
+                )
+            )
+        return entries
 
     def pop_servable(self, can_draw: Callable[[float], bool]) -> list[QueuedRequest]:
         """Pop and return all queued requests that `can_draw(bits_required)`
@@ -62,8 +97,35 @@ class DeferralQueue:
 
         Priority order: highest sensitivity class first, FIFO within
         class (Addition C unit test: "queue priority/FIFO ordering").
+
+        `can_draw` is a pure feasibility predicate (mirrors
+        `PoolSim.can_draw`), not a draw -- it doesn't account for bits
+        this call already "spent" on earlier, higher-priority requests
+        in the same pass. To avoid over-committing the pool within one
+        `pop_servable` call, each candidate is checked against the
+        *cumulative* bits already committed to requests popped earlier
+        in this same pass, not just its own `bits_required` in
+        isolation. A candidate that doesn't fit is skipped (left
+        queued) rather than blocking lower-priority requests behind it
+        that might still fit in the remaining headroom.
         """
-        raise NotImplementedError
+        ordered = sorted(
+            self._queued,
+            key=lambda queued: (-queued.request["sensitivity_class"], queued.step_enqueued),
+        )
+
+        servable: list[QueuedRequest] = []
+        committed_bits = 0.0
+        for queued in ordered:
+            candidate_total = committed_bits + queued.bits_required
+            if can_draw(candidate_total):
+                servable.append(queued)
+                committed_bits = candidate_total
+
+        popped_ids = {id(queued) for queued in servable}
+        self._queued = [queued for queued in self._queued if id(queued) not in popped_ids]
+
+        return servable
 
     def __len__(self) -> int:
         return len(self._queued)
