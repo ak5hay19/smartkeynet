@@ -35,7 +35,7 @@
 | Person | Area | Last session | Current branch | Status |
 |--------|------|-------------|----------------|--------|
 | A | Data + forecaster + graph | 2026-08-06 | main | Scaffolding verified, dataset placed — no feature code yet |
-| B | ENV + pool + reward + masking | 2026-08-06 | main | Scaffolding verified — `pool_sim.py` is next |
+| B | ENV + pool + reward + masking | 2026-08-06 | env/pool-sim | `pool_sim.py` implemented + tested — `deferral_queue.py` is next |
 | C | Agent + baselines | — | — | Not started |
 | D | Attack + dashboard + API + paper | — | — | Not started |
 
@@ -45,6 +45,22 @@
 ---
 
 ## Sessions (newest first)
+
+### [SOLO — env/pool_sim] — 2026-08-06 — env/pool-sim
+
+**Session goal:** Implement `env/pool_sim.py` for real (refill/drain/exhaustion arithmetic behind the frozen `PoolSim` signatures) plus real behavioral tests, per PLAN.md §10 step 2.
+
+**What got done:**
+- `env/pool_sim.py`: implemented `PoolSim.__init__/reset/step/can_draw/draw` behind the existing signatures (kept `PoolState`, `SKRQBERTrace`, `PoolExhaustedError` untouched). `step()` pulls `(skr_kbps, qber)` from the trace and refills the pool as `skr_kbps * 1000 * 1 second/step` bits, capped at capacity; `draw()` drains and raises `PoolExhaustedError` on insufficient fill without ever going negative.
+- Added `SyntheticSKRQBERTrace` (documented synthetic SKR/QBER generator, per PLAN.md's sanctioned fallback): Gaussian SKR around a mean kbps, Gaussian QBER baseline, and a dial-in `spike_start/spike_duration/spike_magnitude` window for S3-style degradation (QBER up, correlated SKR down). Generation procedure fully stated in its docstring; deterministic/re-iterable via a seeded RNG re-seeded on each `__iter__` call (this is what lets `PoolSim.reset()` "rewind" the trace).
+- Added `load_pool_config()` helper in `env/pool_sim.py` that reads `configs/default.yaml`'s `pool:` block, so `capacity_bits`/`initial_fill_frac` are never hardcoded in Python (test file pulls from this rather than duplicating the numbers).
+- `tests/test_pool_sim.py`: replaced the import-smoke test with 19 real behavioral tests — refill matches trace SKR exactly, refill never exceeds capacity, reset rewinds the trace, draw drains by exact amount, exhaustion fires (`can_draw` False + `PoolExhaustedError`) at zero fill, pool level never goes negative (single draw-to-zero and a multi-step draw loop), construction guards (bad capacity / out-of-range fill frac / negative draw), config-driven construction matches the real yaml, and the synthetic trace's mean rate / determinism / QBER-spike behavior / valid-range invariants.
+
+**What's working:** `PoolSim` + `SyntheticSKRQBERTrace` are fully implemented and unit-tested; full `pytest` suite is green (40 passed, no regressions elsewhere).
+**What's broken / incomplete:** Pool exhaustion handling itself (deferral) is still `NotImplementedError` in `env/deferral_queue.py` — intentionally out of scope for this session. `env/environment.py` doesn't wire `PoolSim` in yet.
+**Blockers:** None.
+**Next session will:** Build `env/deferral_queue.py` (priority/FIFO regret accounting, Addition C) — the env's exhaustion semantics depend on it (Hard Rule 9) per PLAN.md §10 step 3.
+**Hard Rules check:** None violated — no security term anywhere. One deliberate design call outside the letter of "don't redesign the signature": `PoolSim.__init__` gained a third parameter, `initial_fill_frac` (required, no default), because the original two-parameter stub (`capacity`, `trace`) had no way to receive it and the task explicitly required pulling `initial_fill_frac` from config with nothing hardcoded in Python. `capacity`/`trace`'s meaning and position are unchanged; `reset/step/can_draw/draw` are untouched. Flagging this here per the instruction to flag anything that touches the frozen interface shape — `env/contracts.py` itself was not touched.
 
 ### [SOLO — repo setup] — 2026-08-06 — main
 
