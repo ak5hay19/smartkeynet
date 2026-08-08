@@ -46,6 +46,20 @@
 
 ## Sessions (newest first)
 
+### [SOLO — add PROGRESS.md] — 2026-08-08 — main
+
+**Session goal:** Add `PROGRESS.md` at the repo root so a fresh Claude Code session or new person can read `PLAN.md` + `SESSION_LOG.md` + `PROGRESS.md` and immediately know what's done and the single next task, without reconstructing status from session-log prose. Docs-only; `env/contracts.py` and all other code untouched.
+
+**What got done:**
+- Read `PLAN.md`, `split.md`, and `SESSION_LOG.md` in full, then verified real repo state rather than trusting log prose: grepped every `.py` file for `raise NotImplementedError`, checked which `tests/test_*.py` files are still 11-line import-smoke stubs vs. real behavioral suites (line/function counts per file), inspected `env/forecast_provider.py` (confirmed `LSTMForecastProvider` doesn't exist yet, only `MovingAverageForecaster`) and `env/request_generator.py` (confirmed `build_tenant_graph`/`RequestGenerator` still raise `NotImplementedError`, only `random_request_generator` is real), checked `configs/default.yaml` (confirmed `migration_schedule: []` is empty and `scenario` is read but not dispatched), checked `docs/report.md` (confirmed section-header skeleton with `_TODO_` markers only), and ran the full `pytest` suite (98 passed, matches the prior session's reported count — no drift).
+- `PROGRESS.md` (new, repo root): a "Next task" line at the top, a milestone checklist pulled from PLAN.md §10 + §7/split.md §2's weekly gates, a granular per-file table (one row per file under `env/`, `agents/`, `forecaster/`, `metrics/`, `experiments/`, `attack/`, `dashboard/`, `api/`, `data/`, `docs/`, `configs/`) with not-started/stub-partial/implemented+tested status based on the verification above (not on trusting prior session-log prose alone), and a last-verified line (date, commit hash, pytest count). Top of the file states the update convention: this file gets updated (not rewritten) as part of the same end-of-session step as `SESSION_LOG.md`.
+
+**What's working:** `PROGRESS.md` exists and reflects verified repo state as of commit `1c0902d` / 98 passing tests.
+**What's broken / incomplete:** N/A — docs-only session, nothing in the codebase changed.
+**Blockers:** None.
+**Next session will:** Per `PROGRESS.md`'s "Next task" line — build `env/request_generator.py`'s `build_tenant_graph()`/`RequestGenerator` (NetworkX tenant graph, PLAN.md §10 step 4), or start `agents/` (masked DQN + four tuned baselines, PLAN.md §10 steps 5-6) against the now-real environment.
+**Hard Rules check:** None applicable/violated — no code touched. `env/contracts.py` not touched, per instructions.
+
 ### [SOLO — env/environment.py wiring] — 2026-08-07 — main
 
 **Session goal:** Wire `env/environment.py` for real -- `PoolSim` + `DeferralQueue` + `PolicyTable`/`compute_mask` + `ForecastProvider` + `random_request_generator` + persistent session-key state + the full reward formula, with Hard Rule 9 pre-screening structurally guaranteed -- plus unit tests and the split.md Gate W2 integration test.
