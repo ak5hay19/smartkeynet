@@ -11,10 +11,14 @@
 
 ## Next task
 
-Build the masked DQN agent (`agents/dqn.py`), overfitting S1 on purpose
-first to prove the training loop works (PLAN.md §10 step 5), then
-generalize — it's the only piece left before Gate W3 ("DQN beats the
-tuned threshold baseline on S1 and S3") can even be attempted.
+Build `experiments/train.py`: a real overfit-S1-on-purpose training
+campaign for `agents/dqn.py`'s `DQNAgent` (PLAN.md §10 step 5), with
+checkpointing (`DQNAgent.save`/`load` already exist) and a training curve
+— then evaluate the trained agent through `experiments/harness.py`
+against the tuned `StaticThresholdPolicy` baseline on S1 and S3 to
+attempt Gate W3. (S3 scenario dispatch isn't wired into `environment.py`
+yet either — check that first; it may need to happen in the same
+session or immediately before it.)
 
 ---
 
@@ -32,7 +36,7 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       a full S1 episode; regret events logged
 - [ ] Real NetworkX tenant graph + graph-driven `RequestGenerator`
       (`build_tenant_graph`, `RequestGenerator.reset/step`) — PLAN.md §10 step 4
-- [ ] Masked DQN agent (`agents/dqn.py`)
+- [x] Masked DQN agent (`agents/dqn.py`)
 - [x] Four tuned baselines — always-PQC, always-hybrid, static-threshold
       (grid-searched), random (`agents/baselines.py`) + comparison harness
       (`experiments/harness.py`) — Hard Rule 7
@@ -76,7 +80,7 @@ behavioral tests, part of the green `pytest` run).
 
 | File | Status | Notes |
 |---|---|---|
-| `agents/dqn.py` | not started | Stub, `test_dqn.py` is 1 import-smoke test. |
+| `agents/dqn.py` | implemented+tested | `flatten_state` (genuinely variable-length: 13 dims under `off`, 28 under `ewma`/`lstm`, detected from `state["threat_score"] != 0.0` since the signature can't take a mode flag directly), `QNetwork` (2-hidden-layer MLP), `DQNConfig`/`load_dqn_config` (reads `configs/default.yaml`'s `dqn:` block), `DQNAgent` (internal circular-buffer replay, `act`/`observe`/`learn`/`save`/`load`) — masking applied structurally at both action-selection *and* bootstrap-target time (Hard Rule 2), no security term anywhere (Hard Rule 1). 20 tests (`test_dqn.py`), incl. an integration test training against the real `SmartKeyNetEnv` on S1 for 3000 steps with loss trending down. Not yet run to convergence — that's `experiments/train.py`. |
 | `agents/baselines.py` | implemented+tested | `AlwaysPQCPolicy`, `AlwaysHybridPolicy`, `StaticThresholdPolicy` (incl. `grid_search`), `RandomPolicy` — all real, sharing a `_lowest_legal_action` fallback. 261 tests (`test_baselines.py`), incl. an adversarial parametrized sweep over all 31 non-empty action masks per policy (never returns an illegal action, however contrived the mask). |
 | `agents/soft_reward_baseline.py` | not started | Stub, `test_soft_reward_baseline.py` is 1 import-smoke test. |
 
@@ -144,5 +148,5 @@ behavioral tests, part of the green `pytest` run).
 ## Last verified
 
 - **Date:** 2026-08-08
-- **Commit:** `da6fc75` ("log: [solo] add PROGRESS.md — 2026-08-07") — the commit this session started from; see SESSION_LOG.md for this session's own commit
-- **`pytest` pass count:** 364 passed, 0 failed
+- **Commit:** `4adaf2a` ("log: [solo] agents/baselines.py + experiments/harness.py + tests — 2026-08-08") — the commit this session started from; see SESSION_LOG.md for this session's own commit
+- **`pytest` pass count:** 383 passed, 0 failed
