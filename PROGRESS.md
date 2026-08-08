@@ -11,11 +11,10 @@
 
 ## Next task
 
-Build `env/request_generator.py`'s `build_tenant_graph()` + `RequestGenerator`
-(NetworkX tenant graph, PLAN.md §10 step 4) — or, if prioritized instead,
-start `agents/` (masked DQN + the four tuned baselines, PLAN.md §10 steps
-5-6) against the now-real environment. Either unblocks the W3 gate track;
-neither has been started yet.
+Build the masked DQN agent (`agents/dqn.py`), overfitting S1 on purpose
+first to prove the training loop works (PLAN.md §10 step 5), then
+generalize — it's the only piece left before Gate W3 ("DQN beats the
+tuned threshold baseline on S1 and S3") can even be attempted.
 
 ---
 
@@ -34,7 +33,7 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
 - [ ] Real NetworkX tenant graph + graph-driven `RequestGenerator`
       (`build_tenant_graph`, `RequestGenerator.reset/step`) — PLAN.md §10 step 4
 - [ ] Masked DQN agent (`agents/dqn.py`)
-- [ ] Four tuned baselines — always-PQC, always-hybrid, static-threshold
+- [x] Four tuned baselines — always-PQC, always-hybrid, static-threshold
       (grid-searched), random (`agents/baselines.py`) + comparison harness
       (`experiments/harness.py`) — Hard Rule 7
 - [ ] 🚩 Gate W3 (make-or-break) — DQN beats the tuned threshold baseline on S1 and S3
@@ -78,7 +77,7 @@ behavioral tests, part of the green `pytest` run).
 | File | Status | Notes |
 |---|---|---|
 | `agents/dqn.py` | not started | Stub, `test_dqn.py` is 1 import-smoke test. |
-| `agents/baselines.py` | not started | Stub, `test_baselines.py` is 1 import-smoke test. |
+| `agents/baselines.py` | implemented+tested | `AlwaysPQCPolicy`, `AlwaysHybridPolicy`, `StaticThresholdPolicy` (incl. `grid_search`), `RandomPolicy` — all real, sharing a `_lowest_legal_action` fallback. 261 tests (`test_baselines.py`), incl. an adversarial parametrized sweep over all 31 non-empty action masks per policy (never returns an illegal action, however contrived the mask). |
 | `agents/soft_reward_baseline.py` | not started | Stub, `test_soft_reward_baseline.py` is 1 import-smoke test. |
 
 ### forecaster/
@@ -99,7 +98,7 @@ behavioral tests, part of the green `pytest` run).
 
 | File | Status | Notes |
 |---|---|---|
-| `experiments/harness.py` | not started | Stub, `test_harness.py` is 1 import-smoke test. |
+| `experiments/harness.py` | implemented+tested | `run_scenario` (one policy x scenario x seed episode → `ScenarioResult`, truncated via `max_steps`, default 250) + `run_grid` (every combination). Recomputes per-decision latency/hybrid-draw resolution from public `StateDict` fields (mirrors `env.environment`'s private cost tables/`REKEY_NOW` resolution, since `step()` doesn't surface them directly). 7 tests (`test_harness.py`), incl. the S1 x four-baselines zero-floor-violations check and a `run_grid` combination-count check. Only S1 exercised this session (S2-S6 dispatch not wired in `environment.py` yet). |
 
 ### attack/
 
@@ -145,5 +144,5 @@ behavioral tests, part of the green `pytest` run).
 ## Last verified
 
 - **Date:** 2026-08-08
-- **Commit:** `1c0902d` ("log: [solo] env/environment.py wiring + tests — 2026-08-07")
-- **`pytest` pass count:** 98 passed, 0 failed
+- **Commit:** `da6fc75` ("log: [solo] add PROGRESS.md — 2026-08-07") — the commit this session started from; see SESSION_LOG.md for this session's own commit
+- **`pytest` pass count:** 364 passed, 0 failed

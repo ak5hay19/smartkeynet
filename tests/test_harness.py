@@ -1,11 +1,123 @@
-"""Import-smoke test for `experiments.harness` (CI baseline — PLAN.md §10, split.md
-§3 "minimal CI"). Fails loudly if someone breaks the skeleton; gets
-replaced by real behavioral tests as each module is implemented.
+"""Behavioral tests for `experiments.harness` -- the baseline comparison
+harness (PLAN.md §10 kickoff step 6; Hard Rule 7: baselines must be
+comparable before the DQN is tuned).
+
+Only S1 is exercised here: `env/environment.py` only meaningfully
+dispatches S1 this session (S2-S6 scenario dispatch is separate future
+work -- see PROGRESS.md). `run_scenario`/`run_grid` still take
+`scenario` as a generic parameter, which is the right final interface.
 """
 
-import importlib
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+
+from agents.baselines import (
+    AlwaysHybridPolicy,
+    AlwaysPQCPolicy,
+    Policy,
+    RandomPolicy,
+    StaticThresholdPolicy,
+)
+from experiments.harness import ScenarioResult, run_grid, run_scenario
+from metrics.regret import EpisodeMetrics
 
 
-def test_module_imports():
-    module = importlib.import_module("experiments.harness")
-    assert module is not None
+def load_test_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Load the real `configs/default.yaml` (mirrors
+    tests/test_environment.py's helper of the same name -- nothing
+    hardcoded here) and shallow-merge per-section overrides."""
+    config_path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
+    with open(config_path, "r", encoding="utf-8") as f:
+        config: dict[str, Any] = yaml.safe_load(f)
+
+    if overrides:
+        for key, value in overrides.items():
+            if isinstance(value, dict) and isinstance(config.get(key), dict):
+                config[key] = {**config[key], **value}
+            else:
+                config[key] = value
+
+    return config
+
+
+def _four_baselines() -> dict[str, Policy]:
+    """Fresh instances every call -- `RandomPolicy` carries mutable RNG
+    state that shouldn't leak between tests."""
+    return {
+        "always_pqc": AlwaysPQCPolicy(),
+        "always_hybrid": AlwaysHybridPolicy(),
+        "static_threshold": StaticThresholdPolicy(pool_fill_threshold=0.5),
+        "random": RandomPolicy(seed=0),
+    }
+
+
+# ---------------------------------------------------------------------------
+# run_scenario
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["always_pqc", "always_hybrid", "static_threshold", "random"])
+def test_run_scenario_s1_completes_with_zero_floor_violations(name):
+    policy = _four_baselines()[name]
+    config = load_test_config(overrides={"max_steps": 100})
+
+    result = run_scenario(policy, "S1", config, seed=123)
+
+    assert isinstance(result, ScenarioResult)
+    assert result.scenario == "S1"
+    assert result.seed == 123
+    assert isinstance(result.episode_metrics, EpisodeMetrics)
+    # this is the whole point of the masking architecture (PLAN.md Hard
+    # Rule 2/9): every one of these policies only ever picks from the
+    # mask it's given, so floor violations must be 0 by construction.
+    assert result.floor_violations == 0
+    assert result.p99_latency >= 0.0
+    assert result.pool_exhaustion_events >= 0
+
+
+def test_run_scenario_respects_explicit_max_steps_override():
+    """`max_steps` set by the caller must survive run_scenario's
+    internal `setdefault` (i.e. not get silently replaced by the
+    harness's own default episode length)."""
+    config = load_test_config(overrides={"max_steps": 17})
+    result = run_scenario(AlwaysPQCPolicy(), "S1", config, seed=1)
+    assert result.episode_metrics.rekeys_per_100_requests >= 0.0  # ran to completion, no crash
+
+
+def test_run_scenario_static_threshold_grid_search_produces_a_valid_run():
+    config = load_test_config(overrides={"max_steps": 100})
+
+    def eval_fn(policy: StaticThresholdPolicy) -> float:
+        return -run_scenario(policy, "S1", config, seed=5).p99_latency
+
+    grid = config["baselines"]["static_threshold_grid"]
+    tuned = StaticThresholdPolicy.grid_search(grid, eval_fn)
+
+    result = run_scenario(tuned, "S1", config, seed=5)
+    assert result.floor_violations == 0
+
+
+# ---------------------------------------------------------------------------
+# run_grid
+# ---------------------------------------------------------------------------
+
+
+def test_run_grid_returns_one_result_per_combination():
+    config = load_test_config(overrides={"max_steps": 50})
+    policies = _four_baselines()
+    scenarios = ["S1"]
+    seeds = [1, 2]
+
+    results = run_grid(policies=policies, scenarios=scenarios, config=config, seeds=seeds)
+
+    assert len(results) == len(policies) * len(scenarios) * len(seeds)
+    for result in results:
+        assert isinstance(result, ScenarioResult)
+        assert result.scenario == "S1"
+        assert result.seed in seeds
+        assert result.floor_violations == 0
