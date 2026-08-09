@@ -35,6 +35,7 @@ from env.environment import SmartKeyNetEnv
 def _make_state(
     *,
     forecast: bool,
+    threat_score: float | None = None,
     pool_fill: float = 0.5,
     key_age: float = 10.0,
     key_type_onehot: tuple[float, float, float] = (0.0, 1.0, 0.0),
@@ -46,22 +47,28 @@ def _make_state(
     exactly what env/environment.py's `_prepare_decision` actually
     zeroes under `off` vs. populates under `ewma` -- see
     tests/test_environment.py's `test_foresight_fields_zeroed_under_off`
-    / `test_foresight_fields_populated_under_ewma`."""
+    / `test_foresight_fields_populated_under_ewma`.
+
+    `threat_score` can be overridden independently of `forecast` -- used
+    to build a legitimately-near-zero-but-still-forecast-mode state
+    (see test_flatten_state_forecast_mode_with_near_zero_threat_score),
+    since `flatten_state` must no longer key off this value at all.
+    """
     if forecast:
-        threat_score = 0.42
         threat_forecast = [0.1, 0.2, 0.3, 0.4, 0.5]
         pool_level_hat = [0.3, 0.4, 0.5]
         skr_mean_hat = [1.0, 1.1, 1.2]
         hybrid_demand_hat = [2.0, 3.0, 4.0]
+        resolved_threat_score = 0.42 if threat_score is None else threat_score
     else:
-        threat_score = 0.0
         threat_forecast = [0.0] * 5
         pool_level_hat = [0.0] * 3
         skr_mean_hat = [0.0] * 3
         hybrid_demand_hat = [0.0] * 3
+        resolved_threat_score = 0.0 if threat_score is None else threat_score
 
     return {
-        "threat_score": threat_score,
+        "threat_score": resolved_threat_score,
         "threat_forecast": threat_forecast,
         "qber": 0.01,
         "skr": 500.0,
@@ -92,20 +99,20 @@ def _mask(*legal_actions: Action) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# flatten_state
+# flatten_state -- has_forecast is explicit, never inferred from `state`
 # ---------------------------------------------------------------------------
 
 
 def test_flatten_state_off_mode_excludes_forecast_fields():
     state = _make_state(forecast=False)
-    tensor = flatten_state(state)
+    tensor = flatten_state(state, has_forecast=False)
     assert tensor.shape == (_OFF_STATE_DIM,)
     assert tensor.shape == (13,)
 
 
 def test_flatten_state_forecast_mode_includes_forecast_fields():
     state = _make_state(forecast=True)
-    tensor = flatten_state(state)
+    tensor = flatten_state(state, has_forecast=True)
     assert tensor.shape == (_FORECAST_STATE_DIM,)
     assert tensor.shape == (28,)
 
@@ -115,10 +122,38 @@ def test_flatten_state_forecast_values_actually_present_not_just_longer():
     actually appear in it (a real dimensionality difference, not
     cosmetic zero-padding)."""
     state = _make_state(forecast=True)
-    tensor = flatten_state(state)
+    tensor = flatten_state(state, has_forecast=True)
     values = tensor.tolist()
     assert any(abs(v - 0.42) < 1e-6 for v in values)  # threat_score
     assert any(abs(v - 4.0) < 1e-6 for v in values)  # hybrid_demand_hat[-1]
+
+
+def test_flatten_state_forecast_mode_with_zero_threat_score_still_28_dim():
+    """The regression case the old `threat_score != 0.0` inference would
+    have gotten wrong: a legitimately foresight-enabled state whose
+    `threat_score` happens to be exactly 0.0 (e.g. once real threat
+    data replaces today's always-non-negative placeholder, nothing
+    guarantees the sigmoid stays away from zero). `has_forecast=True`
+    is passed explicitly here, so this must still flatten to 28 dims
+    with the forecast fields genuinely present -- not silently
+    misclassified as an `off`-mode 13-dim vector."""
+    state = _make_state(forecast=True, threat_score=0.0)
+    tensor = flatten_state(state, has_forecast=True)
+    assert tensor.shape == (_FORECAST_STATE_DIM,)
+    assert tensor.shape == (28,)
+    values = tensor.tolist()
+    assert any(abs(v - 4.0) < 1e-6 for v in values)  # hybrid_demand_hat[-1] still present
+
+
+def test_flatten_state_off_mode_ignores_a_stray_nonzero_threat_score():
+    """Symmetric check: even if `threat_score` were somehow nonzero on
+    an `off`-mode state, `has_forecast=False` must still produce the
+    13-dim vector -- the value of `threat_score` is irrelevant to the
+    decision now, only the explicit flag matters."""
+    state = _make_state(forecast=False, threat_score=0.99)
+    tensor = flatten_state(state, has_forecast=False)
+    assert tensor.shape == (_OFF_STATE_DIM,)
+    assert tensor.shape == (13,)
 
 
 # ---------------------------------------------------------------------------
@@ -175,11 +210,11 @@ def _random_config() -> DQNConfig:
 
 
 def test_act_epsilon_zero_picks_the_highest_legal_q_value_full_mask():
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=_greedy_config())
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_greedy_config())
     state = _make_state(forecast=False)
 
     with torch.no_grad():
-        q_values = agent.q_network(flatten_state(state).unsqueeze(0)).squeeze(0)
+        q_values = agent.q_network(flatten_state(state, has_forecast=False).unsqueeze(0)).squeeze(0)
     expected = int(torch.argmax(q_values).item())
 
     action = agent.act(state, _full_mask())
@@ -190,11 +225,11 @@ def test_act_epsilon_zero_respects_a_restrictive_mask():
     """Excluding the network's globally-preferred action from the mask
     must make act() fall back to the best *legal* one, not the global
     argmax."""
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=_greedy_config())
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_greedy_config())
     state = _make_state(forecast=False)
 
     with torch.no_grad():
-        q_values = agent.q_network(flatten_state(state).unsqueeze(0)).squeeze(0)
+        q_values = agent.q_network(flatten_state(state, has_forecast=False).unsqueeze(0)).squeeze(0)
     global_best = int(torch.argmax(q_values).item())
 
     restrictive_mask = _full_mask()
@@ -211,14 +246,14 @@ def test_act_epsilon_zero_respects_a_restrictive_mask():
 
 
 def test_act_epsilon_zero_single_legal_action_mask():
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=_greedy_config())
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_greedy_config())
     state = _make_state(forecast=False)
     mask = _mask(Action.REKEY_NOW)
     assert agent.act(state, mask) == Action.REKEY_NOW
 
 
 def test_act_epsilon_one_always_returns_a_legal_action_full_mask():
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=_random_config())
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_random_config())
     state = _make_state(forecast=False)
     mask = _full_mask()
     seen = set()
@@ -230,7 +265,7 @@ def test_act_epsilon_one_always_returns_a_legal_action_full_mask():
 
 
 def test_act_epsilon_one_respects_a_restrictive_mask():
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=_random_config())
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_random_config())
     state = _make_state(forecast=False)
     mask = _mask(Action.SERVE_PQC, Action.REKEY_NOW)
     seen = set()
@@ -242,7 +277,7 @@ def test_act_epsilon_one_respects_a_restrictive_mask():
 
 
 def test_act_epsilon_one_single_legal_action_mask():
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=_random_config())
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_random_config())
     state = _make_state(forecast=False)
     mask = _mask(Action.REUSE)
     for _ in range(20):
@@ -250,11 +285,22 @@ def test_act_epsilon_one_single_legal_action_mask():
 
 
 def test_act_raises_on_all_illegal_mask():
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=_greedy_config())
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_greedy_config())
     state = _make_state(forecast=False)
     mask = np.zeros(N_ACTIONS, dtype=bool)
     with pytest.raises(ValueError):
         agent.act(state, mask)
+
+
+def test_act_uses_28_dim_flattening_when_agent_constructed_with_has_forecast_true():
+    """An agent built with `has_forecast=True` must flatten every
+    `act()` call's state to 28 dims -- exercised end-to-end (not just
+    via `flatten_state` directly) so a regression in how `DQNAgent`
+    threads `self.has_forecast` through would be caught here too."""
+    agent = DQNAgent(state_dim=_FORECAST_STATE_DIM, has_forecast=True, config=_greedy_config())
+    state = _make_state(forecast=True)
+    action = agent.act(state, _full_mask())
+    assert action in set(Action)
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +309,7 @@ def test_act_raises_on_all_illegal_mask():
 
 
 def test_observe_accumulates_transitions_in_replay_buffer():
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=DQNConfig(batch_size=4))
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=DQNConfig(batch_size=4))
     state = _make_state(forecast=False)
     next_state = _make_state(forecast=False)
     mask = _full_mask()
@@ -280,13 +326,13 @@ def test_observe_accumulates_transitions_in_replay_buffer():
 
 
 def test_learn_is_a_noop_below_batch_size():
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=DQNConfig(batch_size=64))
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=DQNConfig(batch_size=64))
     metrics = agent.learn()
     assert metrics["loss"] == 0.0
 
 
 def test_learn_changes_network_weights():
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=DQNConfig(batch_size=4))
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=DQNConfig(batch_size=4))
     state = _make_state(forecast=False)
     next_state = _make_state(forecast=False)
     mask = _full_mask()
@@ -308,7 +354,7 @@ def test_learn_moves_q_values_toward_the_obviously_correct_answer():
     should end up ranking A above B."""
     torch.manual_seed(0)
     config = DQNConfig(batch_size=8, gamma=0.0, lr=0.02, target_update_every=10_000)
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=config)
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=config)
 
     state = _make_state(forecast=False)
     next_state = _make_state(forecast=False)  # irrelevant: gamma=0, done=True zeroes the bootstrap term
@@ -325,7 +371,7 @@ def test_learn_moves_q_values_toward_the_obviously_correct_answer():
         agent.learn()
 
     with torch.no_grad():
-        q = agent.q_network(flatten_state(state).unsqueeze(0)).squeeze(0)
+        q = agent.q_network(flatten_state(state, has_forecast=False).unsqueeze(0)).squeeze(0)
 
     assert q[int(good_action)] > q[int(bad_action)]
 
@@ -336,7 +382,7 @@ def test_learn_moves_q_values_toward_the_obviously_correct_answer():
 
 
 def test_save_then_load_produces_identical_q_values(tmp_path):
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=DQNConfig(batch_size=4))
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=DQNConfig(batch_size=4))
     state = _make_state(forecast=False)
     next_state = _make_state(forecast=False)
     mask = _full_mask()
@@ -348,10 +394,10 @@ def test_save_then_load_produces_identical_q_values(tmp_path):
     checkpoint_path = tmp_path / "agent.pt"
     agent.save(str(checkpoint_path))
 
-    fresh_agent = DQNAgent(state_dim=_OFF_STATE_DIM, config=DQNConfig(batch_size=4))
+    fresh_agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=DQNConfig(batch_size=4))
     fresh_agent.load(str(checkpoint_path))
 
-    probe = flatten_state(_make_state(forecast=False, pool_fill=0.9)).unsqueeze(0)
+    probe = flatten_state(_make_state(forecast=False, pool_fill=0.9), has_forecast=False).unsqueeze(0)
     with torch.no_grad():
         q1 = agent.q_network(probe)
         q2 = fresh_agent.q_network(probe)
@@ -381,6 +427,11 @@ def test_dqn_agent_loss_trends_down_training_against_real_env_s1():
     with open(config_path, "r", encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
+    # The one place has_forecast is derived from: the same config-time
+    # fact env/environment.py's own `_build_forecaster` branches on --
+    # never inferred from a StateDict later.
+    has_forecast = full_config.get("use_foresight", "off") != "off"
+
     dqn_config = load_dqn_config()
     dqn_config.epsilon_decay_steps = 1000  # short run -- reach low epsilon within budget, don't hardcode everything else
 
@@ -388,8 +439,8 @@ def test_dqn_agent_loss_trends_down_training_against_real_env_s1():
     state, info = env.reset(seed=0)
     mask = info["action_mask"]
 
-    state_dim = flatten_state(state).shape[0]  # derived from the real state, not assumed
-    agent = DQNAgent(state_dim=state_dim, config=dqn_config)
+    state_dim = flatten_state(state, has_forecast).shape[0]  # derived from the real state, not assumed
+    agent = DQNAgent(state_dim=state_dim, has_forecast=has_forecast, config=dqn_config)
 
     losses: list[float] = []
     truncated = False

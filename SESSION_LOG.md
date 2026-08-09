@@ -36,7 +36,7 @@
 |--------|------|-------------|----------------|--------|
 | A | Data + forecaster + graph | 2026-08-06 | main | `forecast_provider.py`'s `MovingAverageForecaster` + `request_generator.py`'s `random_request_generator()` implemented + tested — dataset ingestion, `build_tenant_graph`/`RequestGenerator` still not started |
 | B | ENV + pool + reward + masking | 2026-08-07 | main | `pool_sim.py` + `deferral_queue.py` + `metrics/regret.py` + `masking.py` + `environment.py` all implemented + tested — full MDP loop runs end-to-end; DQN/baselines are next |
-| C | Agent + baselines | 2026-08-08 | main | `agents/baselines.py`'s four tuned policies + `experiments/harness.py`'s `run_scenario`/`run_grid` + `agents/dqn.py`'s masked `DQNAgent` all implemented + tested against the real environment — `agents/soft_reward_baseline.py` and `experiments/train.py` still not started |
+| C | Agent + baselines | 2026-08-08 | main | `agents/baselines.py`'s four tuned policies + `experiments/harness.py`'s `run_scenario`/`run_grid` + `agents/dqn.py`'s masked `DQNAgent` all implemented + tested against the real environment (incl. a same-day fix removing `flatten_state`'s fragile mode-inference trick) — `agents/soft_reward_baseline.py` and `experiments/train.py` still not started |
 | D | Attack + dashboard + API + paper | — | — | Not started |
 
 **contracts.py frozen:** ☑ Yes — `env/contracts.py` is complete and committed on `main` (Action enum, StateDict, ForecastProvider ABC, Request, event-log TypedDicts).
@@ -45,6 +45,30 @@
 ---
 
 ## Sessions (newest first)
+
+### [SOLO — fix flatten_state mode inference] — 2026-08-08 — main
+
+**Session goal:** Remove `agents/dqn.py`'s `state["threat_score"] != 0.0` mode-inference trick (from this same day's earlier DQN session), replacing it with an explicit, config-derived `has_forecast` value threaded through `flatten_state` and `DQNAgent` — the trick was correct today only by accident of the current placeholder `threat_features`, not by any real guarantee.
+
+**What got done:**
+- `agents/dqn.py`: deleted `_state_has_forecast()` entirely.
+  - `flatten_state(state, has_forecast: bool)`: signature changed to take `has_forecast` as a required second positional parameter. Nothing in the function body infers mode from `state`'s contents anymore — the `if has_forecast:` branches that decide whether to include the five forecast-derived fields now read straight from the parameter. Docstring rewritten to explain both the removed trick's failure mode (today's `[qber, load]` placeholder threat_features are always non-negative, which happened to keep `MovingAverageForecaster`'s sigmoid-based `threat_score` away from exactly `0.0` — but nothing guarantees that once real, possibly negative/normalized threat data replaces the placeholder) and the natural source of the correct value at any call site: `config["use_foresight"] != "off"`, the exact same config-time fact `env/environment.py`'s own `_build_forecaster` branches on.
+  - `DQNAgent.__init__(self, state_dim, has_forecast: bool, config=None)`: added `has_forecast` as a new required parameter, stored as `self.has_forecast`. A given training run is in one `use_foresight` mode for its whole lifetime, so this is fixed once at construction rather than passed to every `act`/`observe` call — the caller derives it from the same `config` dict used to build the `SmartKeyNetEnv` it's paired with.
+  - `DQNAgent.act()` and `DQNAgent.observe()`: both internal `flatten_state(...)` calls updated to `flatten_state(state, self.has_forecast)`. `learn()` needed no change — it only operates on already-flattened tensors stored in `_Transition`s by `observe()`, never calls `flatten_state` itself.
+- `tests/test_dqn.py`: updated every call site.
+  - `_make_state()` gained an optional `threat_score` override (independent of the `forecast` flag) so tests can construct a state whose `threat_score` doesn't match what the old inference would have expected.
+  - Every `flatten_state(...)` call now passes `has_forecast` explicitly; every `DQNAgent(...)` construction now passes `has_forecast` explicitly (`False` for all the existing off-mode-flavored tests, matching their `_make_state(forecast=False)` states).
+  - Added `test_flatten_state_forecast_mode_with_zero_threat_score_still_28_dim`: a `has_forecast=True` state with `threat_score=0.0` still flattens to 28 dims with the forecast fields genuinely present — this is exactly the case the old `threat_score != 0.0` inference would have silently misclassified as `off`-mode (13 dims), so it's the regression test that would have caught the original bug.
+  - Added `test_flatten_state_off_mode_ignores_a_stray_nonzero_threat_score`: the symmetric check — an `off`-mode state with a stray nonzero `threat_score` (e.g. `0.99`) still flattens to 13 dims when `has_forecast=False` is passed, confirming the flag is the only thing that matters now, not the data.
+  - Added `test_act_uses_28_dim_flattening_when_agent_constructed_with_has_forecast_true`: an end-to-end check (through `DQNAgent.act()`, not `flatten_state` directly) that `self.has_forecast` is actually threaded through correctly, not just correct in isolation.
+  - The real-environment integration test (`test_dqn_agent_loss_trends_down_training_against_real_env_s1`) now derives `has_forecast` the documented way — `full_config.get("use_foresight", "off") != "off"` — and passes it to both `flatten_state` (for `state_dim`) and `DQNAgent`'s constructor.
+- Full `pytest` suite: 386 passed (up from 383 — net +3: 2 new regression tests plus the new end-to-end `act()` test, after also updating the pre-existing 20 without changing their count).
+
+**What's working:** `agents/dqn.py` no longer contains any logic that infers `use_foresight` mode from a `StateDict`'s runtime values — `has_forecast` is explicit everywhere, sourced from config at the one place it's actually decided (mirroring `env/environment.py`'s own `_build_forecaster` branch). Both directions of the original bug are now covered by tests (a foresight-mode state with a zero-valued threat_score; an off-mode state with a stray nonzero one).
+**What's broken / incomplete:** Nothing new — this was a scoped fix, not new functionality. `experiments/train.py` is still the next real milestone (a caller there will need to derive and pass `has_forecast` the same documented way).
+**Blockers:** None.
+**Next session will:** Build `experiments/train.py` — a real overfit-S1 training run with checkpointing via `DQNAgent.save`/`load` (constructing `DQNAgent` with `has_forecast` derived from its own config, per this session's fix), then evaluate through `experiments/harness.py` against `StaticThresholdPolicy` to attempt Gate W3.
+**Hard Rules check:** Not directly implicated (this was a robustness fix to state representation, not reward or masking logic), but reconfirmed by construction while touching the file: Hard Rule 1 (no security term in the reward) and Hard Rule 2 (masking structural, not learned) are both untouched by this change — `act()`'s and `learn()`'s masking logic wasn't modified, only how the state tensor going *into* the network is assembled. `env/contracts.py` and `env/environment.py` were not touched, per instructions — this fix is fully contained to `agents/dqn.py` and its tests.
 
 ### [SOLO — agents/dqn.py] — 2026-08-08 — main
 

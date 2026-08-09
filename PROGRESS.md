@@ -80,7 +80,7 @@ behavioral tests, part of the green `pytest` run).
 
 | File | Status | Notes |
 |---|---|---|
-| `agents/dqn.py` | implemented+tested | `flatten_state` (genuinely variable-length: 13 dims under `off`, 28 under `ewma`/`lstm`, detected from `state["threat_score"] != 0.0` since the signature can't take a mode flag directly), `QNetwork` (2-hidden-layer MLP), `DQNConfig`/`load_dqn_config` (reads `configs/default.yaml`'s `dqn:` block), `DQNAgent` (internal circular-buffer replay, `act`/`observe`/`learn`/`save`/`load`) — masking applied structurally at both action-selection *and* bootstrap-target time (Hard Rule 2), no security term anywhere (Hard Rule 1). 20 tests (`test_dqn.py`), incl. an integration test training against the real `SmartKeyNetEnv` on S1 for 3000 steps with loss trending down. Not yet run to convergence — that's `experiments/train.py`. |
+| `agents/dqn.py` | implemented+tested | `flatten_state(state, has_forecast)` (genuinely variable-length: 13 dims under `off`, 28 under `ewma`/`lstm`; `has_forecast` is now an **explicit required parameter** — the earlier `state["threat_score"] != 0.0` inference trick was removed 2026-08-08 as fragile-by-accident, see that session's log entry). `QNetwork` (2-hidden-layer MLP), `DQNConfig`/`load_dqn_config` (reads `configs/default.yaml`'s `dqn:` block), `DQNAgent(state_dim, has_forecast, config)` (internal circular-buffer replay, `act`/`observe`/`learn`/`save`/`load`, `has_forecast` fixed once at construction and threaded through every internal `flatten_state` call) — masking applied structurally at both action-selection *and* bootstrap-target time (Hard Rule 2), no security term anywhere (Hard Rule 1). 23 tests (`test_dqn.py`), incl. a regression test for a foresight-mode state with `threat_score == 0.0` still flattening to 28 dims, and an integration test training against the real `SmartKeyNetEnv` on S1 for 3000 steps with loss trending down. Not yet run to convergence — that's `experiments/train.py`. |
 | `agents/baselines.py` | implemented+tested | `AlwaysPQCPolicy`, `AlwaysHybridPolicy`, `StaticThresholdPolicy` (incl. `grid_search`), `RandomPolicy` — all real, sharing a `_lowest_legal_action` fallback. 261 tests (`test_baselines.py`), incl. an adversarial parametrized sweep over all 31 non-empty action masks per policy (never returns an illegal action, however contrived the mask). |
 | `agents/soft_reward_baseline.py` | not started | Stub, `test_soft_reward_baseline.py` is 1 import-smoke test. |
 
@@ -148,5 +148,5 @@ behavioral tests, part of the green `pytest` run).
 ## Last verified
 
 - **Date:** 2026-08-08
-- **Commit:** `4adaf2a` ("log: [solo] agents/baselines.py + experiments/harness.py + tests — 2026-08-08") — the commit this session started from; see SESSION_LOG.md for this session's own commit
-- **`pytest` pass count:** 383 passed, 0 failed
+- **Commit:** `5ec8371` ("log: [solo] agents/dqn.py + tests — 2026-08-08") — the commit this session started from; see SESSION_LOG.md for this session's own commit
+- **`pytest` pass count:** 386 passed, 0 failed

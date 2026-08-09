@@ -39,53 +39,49 @@ below. See `flatten_state`'s docstring for the field-by-field
 breakdown that produces each number."""
 
 
-def _state_has_forecast(state: StateDict) -> bool:
-    """Detect whether `state` came from an `off`-mode decision (every
-    forecast-derived field hard-zeroed by `env/environment.py`'s
-    `_prepare_decision`, in its `if self._forecaster is None` branch)
-    or an `ewma`/`lstm`-mode one (real `ForecastProvider` output).
-
-    `flatten_state`'s signature is frozen to a single positional
-    `StateDict` argument (no `use_foresight` flag to key off of
-    directly), so this infers it from `state` itself instead:
-    `env/forecast_provider.py`'s `MovingAverageForecaster` computes
-    `threat_score` as a sigmoid of real observations, which is
-    provably in the open interval (0, 1) for any finite input -- it
-    can never equal exactly `0.0` -- whereas `off` mode writes the
-    literal `0.0` (see `tests/test_environment.py`'s
-    `test_foresight_fields_zeroed_under_off`, which asserts this exact
-    zeroing byte-for-byte). Checking `threat_score != 0.0` is therefore
-    an exact mirror of environment.py's own contract, not a fuzzy
-    heuristic.
-    """
-    return state["threat_score"] != 0.0
-
-
-def flatten_state(state: StateDict) -> torch.Tensor:
+def flatten_state(state: StateDict, has_forecast: bool) -> torch.Tensor:
     """Flatten a `StateDict` into the fixed-order tensor the Q-network
     consumes.
+
+    `has_forecast` must be supplied explicitly by the caller -- it is
+    never inferred from `state`'s own contents. An earlier version of
+    this function guessed the mode via `state["threat_score"] != 0.0`
+    (relying on `MovingAverageForecaster`'s sigmoid output never being
+    exactly `0.0`). That guess was only correct by accident: it held
+    solely because today's placeholder `threat_features`
+    (`[qber, load]`, both always non-negative -- see
+    `env/environment.py`'s `_threat_features_placeholder`) happen to
+    keep the sigmoid input away from wherever it might round to
+    exactly zero. Nothing guarantees that once real (possibly
+    negative/normalized) threat data replaces the placeholder, so the
+    inference was removed rather than hardened -- the real answer
+    ("is this episode running with foresight on?") is a config-time
+    fact, not something derivable from a single state observation.
+    The natural source at any call site is `config["use_foresight"] !=
+    "off"` -- the exact same condition `env/environment.py`'s
+    `_build_forecaster` uses to decide whether forecast fields get
+    populated at all.
 
     Field order matches `env/contracts.py`'s `StateDict` declaration
     order exactly; forecast-derived fields (`threat_score`,
     `threat_forecast`, `pool_level_hat`, `skr_mean_hat`,
-    `hybrid_demand_hat`) are included only when `state` actually came
-    from a foresight-enabled decision (see `_state_has_forecast`) --
-    genuinely omitted, not zero-padded, under `off`. This is what
-    makes the eventual E-A ablation (off vs. ewma vs. lstm) a real
-    input-dimensionality difference rather than a cosmetic one.
+    `hybrid_demand_hat`) are included only when `has_forecast` is
+    True -- genuinely omitted, not zero-padded, when False. This is
+    what makes the eventual E-A ablation (off vs. ewma vs. lstm) a
+    real input-dimensionality difference rather than a cosmetic one.
     `regret_event_recent` (Addition C bookkeeping, not forecast-derived)
-    is always included.
+    is always included regardless of `has_forecast`.
 
     Two possible lengths, both fixed and documented:
-      - `off`:  13 -- qber, skr, pool_fill, arrival_rate, load,
-                avg_latency, key_age, key_type_onehot(3),
-                sensitivity_class, policy_floor, regret_event_recent.
-      - `ewma`/`lstm`: 28 -- threat_score, threat_forecast(5), [the 13
-                fields above], pool_level_hat(3), skr_mean_hat(3),
+      - `has_forecast=False` (`use_foresight: off`): 13 -- qber, skr,
+                pool_fill, arrival_rate, load, avg_latency, key_age,
+                key_type_onehot(3), sensitivity_class, policy_floor,
+                regret_event_recent.
+      - `has_forecast=True` (`use_foresight: ewma`/`lstm`): 28 --
+                threat_score, threat_forecast(5), [the 13 fields
+                above], pool_level_hat(3), skr_mean_hat(3),
                 hybrid_demand_hat(3).
     """
-    has_forecast = _state_has_forecast(state)
-
     fields: list[float] = []
     if has_forecast:
         fields.append(float(state["threat_score"]))
@@ -242,8 +238,18 @@ class DQNAgent:
     own (Hard Rule 1: no security term in the reward, ever).
     """
 
-    def __init__(self, state_dim: int, config: DQNConfig | None = None) -> None:
+    def __init__(self, state_dim: int, has_forecast: bool, config: DQNConfig | None = None) -> None:
+        """`has_forecast` must match whatever `use_foresight` mode the
+        environment this agent will run against was built with (True
+        for `ewma`/`lstm`, False for `off`) -- a given training run is
+        in one mode for its whole lifetime, so this is fixed once here
+        rather than passed to every `act`/`observe` call. The natural
+        way to derive it: `config["use_foresight"] != "off"`, using
+        the same `config` dict passed to `SmartKeyNetEnv`. Every
+        internal `flatten_state` call uses this value; nothing in this
+        class infers the mode from a `StateDict`'s contents."""
         self.state_dim = state_dim
+        self.has_forecast = has_forecast
         self.config = config if config is not None else DQNConfig()
 
         self.q_network = QNetwork(state_dim)
@@ -285,7 +291,7 @@ class DQNAgent:
             return Action(random.choice(legal_indices))
 
         with torch.no_grad():
-            q_values = self.q_network(flatten_state(state).unsqueeze(0)).squeeze(0)
+            q_values = self.q_network(flatten_state(state, self.has_forecast).unsqueeze(0)).squeeze(0)
         masked_q_values = q_values.clone()
         illegal = ~torch.as_tensor(np.asarray(mask, dtype=bool))
         masked_q_values[illegal] = float("-inf")
@@ -304,10 +310,10 @@ class DQNAgent:
         """Push a transition to the replay buffer."""
         self._replay_buffer.push(
             _Transition(
-                state=flatten_state(state),
+                state=flatten_state(state, self.has_forecast),
                 action=int(action),
                 reward=float(reward),
-                next_state=flatten_state(next_state),
+                next_state=flatten_state(next_state, self.has_forecast),
                 next_mask=np.asarray(next_mask, dtype=bool).copy(),
                 done=bool(done),
             )
