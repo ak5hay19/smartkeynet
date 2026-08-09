@@ -11,15 +11,39 @@
 
 ## Next task
 
-Wire S2-S4 scenario dispatch into `environment.py` (`config["scenario"]`
-is currently read but not acted on beyond S1) — needed before Gate W3
-("DQN beats the tuned threshold baseline on S1 and S3") can even be
-attempted for real, since S3 doesn't exist as a runnable scenario yet.
-Separately (not blocking): the 2026-08-10 S1-only training run showed
-real learning (reward curve trending up) but did *not* clearly beat the
-tuned threshold baseline on `p99_latency` (exact tie) — worth
-investigating (reward-shaping-free diagnosis only, Hard Rule 1) once S3
-exists, rather than re-tuning blind on S1 alone.
+The epsilon/total_steps mismatch hypothesis (below) turned out **not**
+to be the bottleneck — it's been superseded by a more specific finding,
+so pick this thread up instead of re-testing step budgets:
+
+Fixing `dqn.epsilon_decay_steps` (50,000 → 12,500, 2026-08-10) let training
+genuinely converge (reward plateaus near -3 to -5 from step ~15,000
+onward — more `total_steps` under the same weights won't move this
+further). But the converged policy's `forced_rekey_ratio` went *to
+1.000* (never proactively rekeys), and `p99_latency` still ties the
+tuned threshold exactly. The likely explanation, worked out with actual
+numbers: under the current `reward:` weights, `w_fr=0.1`'s max freshness
+bonus (+0.1) is dwarfed by `c_rekey_base=1.0`'s minimum rekey cost (≥1.0
+before considering hybrid pool-bit cost) — REUSE dominates any proactive
+rekey in expected reward on benign S1, where there's no scarcity pressure
+to make early rekeying pay off. So "wait until forced" may be the
+genuinely reward-optimal S1 policy today, not a training shortfall.
+Separately, `p99_latency` is a coarse metric here (4-value discrete
+latency set, ~250 samples/episode, floor-driven HYBRID moments are
+environment- not policy-determined) and may not be the right number to
+judge "did the DQN learn well" by.
+
+Two candidate next steps, **neither is a config-only change — flag to
+the user before touching `reward.*`** (per `configs/default.yaml`'s own
+"floor-adjacent, team ping" convention for that block):
+1. Wire S2-S4 scenario dispatch into `environment.py` and re-run this
+   comparison on S3 (QKD degradation) — real scarcity pressure there
+   might make proactive rekeying actually reward-optimal, testing
+   whether S1's specific triviality (not the agent) is why this
+   didn't show up.
+2. Discuss whether `reward.w_fr`/`reward.c_rekey_base` need
+   recalibration, and/or whether `experiments/harness.py`'s
+   `ScenarioResult` should track raw episode reward (it currently
+   doesn't) as a less coarse comparison metric than `p99_latency`.
 
 ---
 
@@ -42,8 +66,11 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       (grid-searched), random (`agents/baselines.py`) + comparison harness
       (`experiments/harness.py`) — Hard Rule 7
 - [ ] 🚩 Gate W3 (make-or-break) — DQN beats the tuned threshold baseline on S1 and S3
-      *(S1-only checkpoint run 2026-08-10: real learning, but tied — not beaten — on
-      `p99_latency`; S3 doesn't exist as a scenario yet, so the gate can't be attempted for real)*
+      *(Two S1-only checkpoint runs 2026-08-10: fixing an epsilon/total_steps mismatch let
+      training genuinely converge, but the converged policy still ties — doesn't beat — the
+      tuned threshold on `p99_latency`, and now never rekeys proactively at all. Likely a
+      reward-weighting/metric-choice question, not a training-budget one — see Next task.
+      S3 still doesn't exist as a scenario, so the gate can't be attempted for real yet either.)*
 - [ ] Soft-reward baseline agent reproducing Noetzold (`agents/soft_reward_baseline.py`)
 - [ ] Scenario dispatch S2-S4 wired into `environment.py` (`config["scenario"]`
       is currently read but not acted on)
@@ -106,7 +133,7 @@ behavioral tests, part of the green `pytest` run).
 | File | Status | Notes |
 |---|---|---|
 | `experiments/harness.py` | implemented+tested | `run_scenario` (one policy x scenario x seed episode → `ScenarioResult`, truncated via `max_steps`, default 250) + `run_grid` (every combination). Recomputes per-decision latency/hybrid-draw resolution from public `StateDict` fields (mirrors `env.environment`'s private cost tables/`REKEY_NOW` resolution, since `step()` doesn't surface them directly). 7 tests (`test_harness.py`), incl. the S1 x four-baselines zero-floor-violations check and a `run_grid` combination-count check. Only S1 exercised this session (S2-S6 dispatch not wired in `environment.py` yet). |
-| `experiments/train.py` | implemented+tested | `train()` (one continuous S1 episode, `total_steps` from `configs/default.yaml`'s new `training:` block, periodic greedy-mode eval snapshots via the harness, final `DQNAgent.save` checkpoint), `GreedyDQNPolicy` (wraps a trained agent's `q_network` directly for deterministic epsilon=0 evaluation without touching `agents/dqn.py` or the agent's training epsilon-decay counter), `evaluate_against_baseline()` (trained agent vs. grid-searched `StaticThresholdPolicy`, same fixed eval seed). 6 tests (`test_train.py`), incl. a smoke run (100 steps) and a determinism check contrasting `GreedyDQNPolicy` against `DQNAgent.act()`'s genuine epsilon=1 stochasticity. **Real 25,000-step run executed 2026-08-10** (~45s): training reward trended clearly upward (real learning), but the final S1 comparison against the tuned threshold baseline tied exactly on `p99_latency` (1.5000 both) — not yet a clear DQN win; see SESSION_LOG.md for full numbers and discussion. |
+| `experiments/train.py` | implemented+tested | `train()` (one continuous S1 episode, `total_steps` from `configs/default.yaml`'s new `training:` block, periodic greedy-mode eval snapshots via the harness, final `DQNAgent.save` checkpoint), `GreedyDQNPolicy` (wraps a trained agent's `q_network` directly for deterministic epsilon=0 evaluation without touching `agents/dqn.py` or the agent's training epsilon-decay counter), `evaluate_against_baseline()` (trained agent vs. grid-searched `StaticThresholdPolicy`, same fixed eval seed). 6 tests (`test_train.py`), incl. a smoke run (100 steps) and a determinism check contrasting `GreedyDQNPolicy` against `DQNAgent.act()`'s genuine epsilon=1 stochasticity. **Two real 25,000-step runs executed 2026-08-10** (~45s / ~41s): the first (`dqn.epsilon_decay_steps=50_000`, double `training.total_steps`) tied the tuned threshold on `p99_latency` with real-but-incomplete learning; a same-day config fix (`epsilon_decay_steps` → `12_500`) let training genuinely converge (reward plateaus near -3 to -5) but still ties on `p99_latency`, and the converged policy's `forced_rekey_ratio` moved to `1.000` (never proactive) — see SESSION_LOG.md for the full numbers and the reward-weighting-based explanation. |
 
 ### attack/
 
@@ -152,5 +179,5 @@ behavioral tests, part of the green `pytest` run).
 ## Last verified
 
 - **Date:** 2026-08-10
-- **Commit:** `ae4440a` ("log: [solo] fix flatten_state mode inference — 2026-08-08") — the commit this session started from; see SESSION_LOG.md for this session's own commit
+- **Commit:** `3207eca` ("log: [solo] experiments/train.py + tests — 2026-08-10") — the commit this session started from; see SESSION_LOG.md for this session's own commit
 - **`pytest` pass count:** 390 passed, 0 failed

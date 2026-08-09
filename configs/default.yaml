@@ -45,7 +45,12 @@ dqn:
   target_update_every: 1000
   epsilon_start: 1.0
   epsilon_end: 0.05
-  epsilon_decay_steps: 50_000
+  epsilon_decay_steps: 12_500  # == half of training.total_steps (25_000) -- was 50_000 until 2026-08-10,
+                                 # which left epsilon at 0.525 (52% random actions) at the *end* of a full
+                                 # 25_000-step training run: the agent never got a real "mostly exploiting
+                                 # what I've learned" phase. Now the back half of training runs at
+                                 # epsilon_end, so refinement behavior (e.g. proactive vs. forced rekeying)
+                                 # actually gets a chance to show up. See SESSION_LOG.md 2026-08-10.
 
 # --- experiments/harness.py, agents/baselines.py ---
 baselines:
