@@ -58,3 +58,22 @@ steering_attack:
 
 # --- env/environment.py S6 migration wave (Hard Rule 3, 8 -- scripted, exogenous, held-out eval only) ---
 migration_schedule: []  # list of {step: int, tenant_cohort: str, new_floor: str} entries
+
+# --- experiments/train.py ---
+# S1-only overfit-on-purpose training campaign (PLAN.md §10 step 5).
+# `total_steps` is sized for a real "genuine test of overfitting" run
+# (roughly 1-2 minutes on the pace observed training agents/dqn.py's own
+# integration test, ~7s/3000 steps -- see SESSION_LOG.md 2026-08-08);
+# tests override `total_steps`/`eval_every`/`eval_max_steps` down to a
+# CI-fast smoke run via train()'s `training_overrides` param, they don't
+# edit this block.
+training:
+  total_steps: 25_000  # env steps (== act+observe+learn calls) for one continuous S1 training run
+  seed: 0               # training episode seed (SmartKeyNetEnv.reset(seed=...))
+  eval_every: 2_500      # steps between periodic greedy-mode eval snapshots (10 snapshots over the run)
+  eval_seed: 999         # fixed seed for every eval episode -- distinct from the training seed, and
+                          # held constant across snapshots so they're comparable to each other and to
+                          # the final baseline comparison
+  eval_max_steps: 250    # episode length per eval snapshot -- mirrors experiments/harness.py's own
+                          # _DEFAULT_MAX_STEPS convention
+  checkpoint_path: checkpoints/dqn_s1.pt  # *.pt is gitignored (see .gitignore "Model checkpoints")
