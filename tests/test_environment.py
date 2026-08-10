@@ -357,3 +357,75 @@ def test_gate_regret_events_logged_and_deferred_request_eventually_served():
     peak_queue_len = max(queue_len_history)
     assert peak_queue_len > 0  # something actually got queued
     assert queue_len_history[-1] < peak_queue_len  # and later drained -- i.e., served
+
+
+# ---------------------------------------------------------------------------
+# load_spike diagnostic wiring (2026-08-10 -- see request_generator.py's
+# docstring: a diagnostic stand-in for temporary load surges, NOT real S4)
+# ---------------------------------------------------------------------------
+
+_LOAD_SPIKE_CFG = {
+    "enabled": True,
+    "period_steps": 500,
+    "spike_duration_steps": 20,
+    "spike_rate_multiplier": 3.0,
+    "low_rate_multiplier": 0.3,
+}
+
+
+def test_load_spike_disabled_by_default_matches_flat_stream():
+    """`configs/default.yaml`'s real default (`load_spike.enabled: false`)
+    must reproduce the exact same request stream as before this
+    feature existed -- backward compatible, opt-in only."""
+    config = load_test_config()
+    assert config["load_spike"]["enabled"] is False
+
+    env = SmartKeyNetEnv(config)
+    assert env._load_spike_cfg is None
+
+
+def test_load_spike_enabled_raises_observed_load_during_the_window():
+    """With the spike active, average `state["load"]` inside the
+    spike window should be measurably higher than outside it -- this
+    is the actual mechanism `experiments/train.py`'s diagnostic run
+    depends on (env/environment.py's `load` feeds `c_rekey(load)`
+    directly)."""
+    config = load_test_config(overrides={"load_spike": _LOAD_SPIKE_CFG})
+    env = SmartKeyNetEnv(config)
+    assert env._load_spike_cfg == {
+        "period_steps": 500,
+        "spike_duration_steps": 20,
+        "spike_rate_multiplier": 3.0,
+        "low_rate_multiplier": 0.3,
+    }
+
+    state, info = env.reset(seed=5)
+    rng = np.random.default_rng(5)
+
+    # 3 full periods -- long enough for the low phase to actually drain
+    # the backlog built up during the spike (see configs/default.yaml's
+    # comment on why low_rate_multiplier must be < 1, empirically tuned
+    # this session; a too-short sample window would catch the queue
+    # mid-drain and understate the contrast).
+    in_window_loads: list[float] = []
+    out_window_loads: list[float] = []
+    for _ in range(1500):
+        step_now = env._step_count
+        in_window = (step_now % _LOAD_SPIKE_CFG["period_steps"]) < _LOAD_SPIKE_CFG["spike_duration_steps"]
+        (in_window_loads if in_window else out_window_loads).append(state["load"])
+
+        _action, (state, reward, terminated, truncated, info) = take_random_valid_step(env, rng, info)
+
+    assert in_window_loads and out_window_loads
+    assert sum(in_window_loads) / len(in_window_loads) > sum(out_window_loads) / len(out_window_loads)
+    # the mechanism this diagnostic exists to test: `load` should
+    # genuinely recede during cooldown, not just be permanently pinned
+    # at its cap once the first spike hits.
+    assert min(out_window_loads) < 0.5
+
+
+def test_load_spike_absent_key_behaves_same_as_disabled():
+    config = load_test_config()
+    del config["load_spike"]
+    env = SmartKeyNetEnv(config)
+    assert env._load_spike_cfg is None

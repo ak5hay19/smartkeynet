@@ -37,6 +37,36 @@ reward:
 tenant_graph:
   n_nodes: 10  # start small (PLAN.md §10 step 4); scale toward ~50 later
 
+# --- env/request_generator.py random_request_generator's optional load-spike diagnostic ---
+# NOT real S4 (PLAN.md §5): S4 is a specific low-sensitivity tenant flooding the system,
+# which needs the real tenant graph (tenant_graph above is still just n_nodes -- no graph
+# sampler exists yet) to target genuinely. This is a cruder, tenant-blind stand-in --
+# a periodically-recurring arrival-rate multiplier -- used only to test the narrower
+# question of whether proactive rekeying emerges once load varies over time at all, before
+# real S4 is worth building. See SESSION_LOG.md 2026-08-10 for the result this produced.
+# `enabled: false` (default) reproduces the exact stationary S1 stream, unchanged.
+load_spike:
+  enabled: false
+  period_steps: 500        # == key_lifetime.max_key_age_steps -- one spike/cooldown cycle
+                            # per key lifetime, so a policy that only ever reacts to forced
+                            # rekeys will sometimes land inside the expensive window and
+                            # sometimes not, purely by chance of when its clock started.
+  spike_duration_steps: 20       # first 20 of every 500 steps run at the elevated rate (4% duty cycle)
+  spike_rate_multiplier: 3.0     # arrival rate is 3x baseline during the spike
+  low_rate_multiplier: 0.3       # and 0.3x baseline (BELOW 1x, not "back to normal") the rest of the
+                                  # period -- env/environment.py's decision loop renders at most one
+                                  # decision per tick, so the undecorated stream (rate == 1 decision/tick)
+                                  # already sits at the queue's critical point with no slack to drain a
+                                  # spike-built backlog. Empirically tuned this session (see
+                                  # SESSION_LOG.md 2026-08-10): a "1x outside the window" version, and
+                                  # several milder duty-cycle/multiplier combinations, all permanently
+                                  # saturated `load` at its cap after the first cycle or two instead of
+                                  # oscillating -- these values were the first swept that genuinely
+                                  # oscillate over a full 25,000-step run (mean load ~0.35, ~29% of
+                                  # steps at the cap during spikes, ~51% under 0.1 during cooldown, no
+                                  # drift between the run's first and last quarter) -- see
+                                  # random_request_generator's docstring for the mechanism.
+
 # --- agents/dqn.py ---
 dqn:
   gamma: 0.99

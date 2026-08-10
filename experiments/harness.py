@@ -44,6 +44,15 @@ class ScenarioResult:
     p99_latency: float
     pool_exhaustion_events: int
     floor_violations: int  # must be 0 for any masked policy, by construction
+    total_reward: float
+    """Raw summed `env.step()` reward across the whole episode -- not
+    weighted or normalized by anything (that's already baked into the
+    reward formula's own `w_*` coefficients, see env/environment.py).
+    Flagged as worth having in the 2026-08-10 epsilon-fix session:
+    `p99_latency` is coarse (4 discrete values, floor-driven moments
+    are environment- not policy-determined) and doesn't discriminate
+    well between policies that behave very differently on rekey
+    timing -- this is a less coarse per-policy comparison number."""
 
 
 def _resolved_cost_action(action: Action, key_type_onehot: Any, floor: Action) -> Action:
@@ -105,6 +114,7 @@ def run_scenario(
     total_rekeys = 0
     total_requests = 0
     discretionary_hybrid_serves = 0
+    total_reward = 0.0
 
     truncated = False
     while not truncated:
@@ -133,6 +143,7 @@ def run_scenario(
         total_requests += 1
 
         state, reward, terminated, truncated, info = env.step(action)
+        total_reward += reward
 
         regret_events.extend(info["regret_events"])
         deferred_steps.extend(info["deferred_critical_steps"])
@@ -156,6 +167,7 @@ def run_scenario(
         p99_latency=p99_latency,
         pool_exhaustion_events=len(regret_events),
         floor_violations=floor_violations,
+        total_reward=total_reward,
     )
 
 

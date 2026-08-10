@@ -71,7 +71,10 @@ _PQC_CAPABLE_PROB: float = 0.9  # most endpoints support PQC; the rest are legac
 _HYBRID_MANDATORY_PROB: float = 0.2
 
 
-def random_request_generator(seed: int | None = None) -> Iterator[Request]:
+def random_request_generator(
+    seed: int | None = None,
+    load_spike: dict[str, float] | None = None,
+) -> Iterator[Request]:
     """Dummy stub stream (no graph) -- unblocks B/C on day 1-2 (split.md
     §1, Person A "ships a stub first").
 
@@ -89,6 +92,48 @@ def random_request_generator(seed: int | None = None) -> Iterator[Request]:
     independently per request from a seeded `numpy` generator, so the
     same `seed` reproduces the exact same stream and different seeds
     diverge.
+
+    `load_spike`, if given, is a **diagnostic stand-in for a temporary
+    load surge -- explicitly NOT real S4 semantics** (PLAN.md §5's S4
+    is a specific low-sensitivity tenant flooding the system, which
+    needs the real tenant graph to target genuinely -- that graph
+    doesn't exist yet, see `build_tenant_graph` above). This is a
+    cruder, tenant-blind stand-in used only to test whether the
+    arrival rate itself moving over time changes rekey behavior at
+    all -- a prerequisite question before real S4 is worth building.
+
+    Expected shape: `{"period_steps": int, "spike_duration_steps": int,
+    "spike_rate_multiplier": float, "low_rate_multiplier": float}`. The
+    rate is `_ARRIVAL_RATE_PER_STEP * spike_rate_multiplier` whenever
+    `step % period_steps < spike_duration_steps`, and
+    `_ARRIVAL_RATE_PER_STEP * low_rate_multiplier` otherwise -- a
+    *periodic* window (recurs, not a one-off): `env/environment.py`
+    resets this stream's internal step counter to 0 on every `reset()`,
+    and `experiments/train.py` trains on one long continuous episode
+    (tens of thousands of ticks) while `experiments/harness.py`'s eval
+    episodes are short (`max_steps`, typically 250) and freshly reset --
+    a single absolute-step window could satisfy one of those and be
+    invisible to the other, while a periodic window is observable by
+    both (many repetitions during training; at least one full cycle
+    inside a short eval episode).
+
+    `low_rate_multiplier` genuinely needs to be **below 1.0**, not just
+    "back to baseline" -- `env/environment.py`'s decision loop renders
+    at most one decision per external `step()` call regardless of how
+    many requests arrived that tick (see that module's
+    `_advance_to_next_decision`), so the undecorated stationary stream
+    (`_ARRIVAL_RATE_PER_STEP == 1.0`, one decision/tick) already sits at
+    the queue's critical point (arrival rate == service rate) -- there
+    is no slack to drain a backlog built up during the spike unless the
+    "low" phase actually runs under that critical point. A window that
+    reads "elevated in-window, unchanged baseline out-of-window" was
+    tried and found to permanently saturate `load` at its cap after the
+    first cycle instead of oscillating (verified empirically this
+    session -- see SESSION_LOG.md 2026-08-10) -- this is why the shape
+    has two multipliers, not one. Outside this diagnostic (`load_spike`
+    is `None`), the stream is byte-for-byte identical to the
+    undecorated stationary process (same `rng` draw sequence) -- this
+    keeps the feature additive and backward-compatible.
     """
     rng = np.random.default_rng(seed)
     n_sensitivity_classes = len(SensitivityClass)
@@ -96,7 +141,14 @@ def random_request_generator(seed: int | None = None) -> Iterator[Request]:
     step = 0
     request_index = 0
     while True:
-        n_arrivals = int(rng.poisson(_ARRIVAL_RATE_PER_STEP))
+        rate = _ARRIVAL_RATE_PER_STEP
+        if load_spike is not None:
+            period = load_spike["period_steps"]
+            duration = load_spike["spike_duration_steps"]
+            in_spike = (step % period) < duration
+            multiplier = load_spike["spike_rate_multiplier"] if in_spike else load_spike["low_rate_multiplier"]
+            rate = _ARRIVAL_RATE_PER_STEP * multiplier
+        n_arrivals = int(rng.poisson(rate))
         for _ in range(n_arrivals):
             request_index += 1
             yield Request(

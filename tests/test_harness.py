@@ -78,6 +78,34 @@ def test_run_scenario_s1_completes_with_zero_floor_violations(name):
     assert result.floor_violations == 0
     assert result.p99_latency >= 0.0
     assert result.pool_exhaustion_events >= 0
+    assert isinstance(result.total_reward, float)
+
+
+def test_run_scenario_total_reward_matches_manually_summed_env_rewards():
+    """`ScenarioResult.total_reward` (added 2026-08-10 -- see
+    SESSION_LOG.md, flagged as worth having since `p99_latency` is a
+    coarse comparison metric) must be exactly the sum of `env.step()`'s
+    own reward across the episode, not a re-derived or reshaped value
+    -- re-run the same policy/config/seed driving the env directly and
+    compare."""
+    from env.environment import SmartKeyNetEnv
+
+    config = load_test_config(overrides={"max_steps": 100})
+    policy = AlwaysPQCPolicy()
+
+    result = run_scenario(policy, "S1", config, seed=9)
+
+    env_config = {**config, "scenario": "S1", "seed": 9, "max_steps": 100}
+    env = SmartKeyNetEnv(env_config)
+    state, info = env.reset(seed=9)
+    manual_total = 0.0
+    truncated = False
+    while not truncated:
+        action = policy.act(state, info["action_mask"])
+        state, reward, terminated, truncated, info = env.step(action)
+        manual_total += reward
+
+    assert result.total_reward == pytest.approx(manual_total)
 
 
 def test_run_scenario_respects_explicit_max_steps_override():

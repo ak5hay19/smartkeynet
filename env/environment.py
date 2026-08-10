@@ -85,6 +85,19 @@ summarized here for anyone reading the code cold):
    after that many *decisions* (`step()` calls), defaulting to `None`
    (never auto-truncates -- the caller manages episode length, as the
    gate test does).
+9. **`config["load_spike"]` (diagnostic stub, NOT real S4)**: an
+   optional block read here and threaded straight into
+   `random_request_generator`'s `load_spike` kwarg (see that
+   function's docstring for the exact shape and why it's periodic, not
+   a one-off window). This exists to test a narrower question than S4
+   itself -- does proactive rekeying emerge at all once arrival load
+   genuinely varies over time -- without needing the real tenant graph
+   that a genuine S4 (a specific low-sensitivity tenant flooding the
+   system) requires. `config["load_spike"]` absent, `None`, or
+   `{"enabled": False, ...}` all mean "no spike" -- byte-identical to
+   this key not existing at all. Nothing else about `scenario`
+   dispatch changes because of this: it is orthogonal to S1-S6 and
+   layers on top of whichever scenario is active (today, only S1).
 ---------------------------------------------------------------------
 """
 
@@ -230,6 +243,7 @@ class SmartKeyNetEnv(gym.Env):
         self._use_foresight = config.get("use_foresight", "off")
         self._seed = config.get("seed")
         self._max_steps = config.get("max_steps")
+        self._load_spike_cfg = self._build_load_spike_cfg(config.get("load_spike"))
 
         # Populated fresh by reset(); typed here for clarity.
         self._pool_sim: PoolSim | None = None
@@ -286,7 +300,7 @@ class SmartKeyNetEnv(gym.Env):
         self._deferral_queue = DeferralQueue()
         self._policy_table = PolicyTable()  # fresh every episode -- sticky ratchet must not carry over
         self._forecaster = self._build_forecaster()
-        self._request_stream = random_request_generator(seed=episode_seed)
+        self._request_stream = random_request_generator(seed=episode_seed, load_spike=self._load_spike_cfg)
         self._peeked_arrival = None
 
         self._sessions = {}
@@ -371,6 +385,22 @@ class SmartKeyNetEnv(gym.Env):
     # -----------------------------------------------------------------
     # Internal wiring
     # -----------------------------------------------------------------
+
+    @staticmethod
+    def _build_load_spike_cfg(raw: dict[str, Any] | None) -> dict[str, float] | None:
+        """Normalize `config["load_spike"]` into the shape
+        `random_request_generator` expects, or `None` for "no spike"
+        (design decision 9 -- diagnostic stub, not real S4). Absent,
+        `None`, or `enabled: False` all collapse to `None` here so
+        `reset()` doesn't need to re-check `enabled` on every episode."""
+        if not raw or not raw.get("enabled", False):
+            return None
+        return {
+            "period_steps": raw["period_steps"],
+            "spike_duration_steps": raw["spike_duration_steps"],
+            "spike_rate_multiplier": raw["spike_rate_multiplier"],
+            "low_rate_multiplier": raw["low_rate_multiplier"],
+        }
 
     def _build_forecaster(self) -> ForecastProvider | None:
         if self._use_foresight == "off":

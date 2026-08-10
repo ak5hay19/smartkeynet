@@ -214,6 +214,7 @@ def _format_result(label: str, result: ScenarioResult) -> str:
     m = result.episode_metrics
     return (
         f"{label}: p99_latency={result.p99_latency:.4f}  "
+        f"total_reward={result.total_reward:.2f}  "
         f"regret_events={m.regret_events}  "
         f"pool_exhaustion_events={result.pool_exhaustion_events}  "
         f"deferred_critical_steps={m.deferred_critical_steps}  "
