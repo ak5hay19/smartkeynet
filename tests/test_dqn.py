@@ -11,6 +11,7 @@ That's `experiments/train.py`, deliberately a separate future session.
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from typing import Any
 
@@ -301,6 +302,57 @@ def test_act_uses_28_dim_flattening_when_agent_constructed_with_has_forecast_tru
     state = _make_state(forecast=True)
     action = agent.act(state, _full_mask())
     assert action in set(Action)
+
+
+# ---------------------------------------------------------------------------
+# seed -- the 2026-08-10 gap: weight init, exploration, and replay
+# sampling were never seedable at all (see DQNAgent.__init__'s
+# docstring and SESSION_LOG.md). This is the test that would have
+# caught it before it needed a whole diagnosis-and-fix cycle.
+# ---------------------------------------------------------------------------
+
+
+def _mixed_epsilon_config() -> DQNConfig:
+    """epsilon held at a constant 0.5 (equal start/end) so a run
+    genuinely exercises both `act()` branches -- the random-explore
+    draw *and* the greedy network forward pass -- rather than pinning
+    to one, so a seeding gap in either path would show up."""
+    return DQNConfig(epsilon_start=0.5, epsilon_end=0.5, epsilon_decay_steps=1, batch_size=4)
+
+
+def _run_action_sequence(seed: int, n_steps: int = 50) -> list[int]:
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_mixed_epsilon_config(), seed=seed)
+    state = _make_state(forecast=False)
+    mask = _full_mask()
+    return [int(agent.act(state, mask)) for _ in range(n_steps)]
+
+
+def test_same_seed_produces_identical_action_sequence():
+    assert _run_action_sequence(seed=42) == _run_action_sequence(seed=42)
+
+
+def test_different_seeds_produce_different_action_sequences():
+    assert _run_action_sequence(seed=42) != _run_action_sequence(seed=43)
+
+
+def test_seed_none_leaves_ambient_random_state_untouched():
+    """The default (`seed=None`) must not call `random.seed`/
+    `torch.manual_seed` at all -- confirmed by seeding the ambient
+    state ourselves right before construction and checking two
+    unrelated `seed=None` agents built back-to-back diverge, the same
+    as the pre-2026-08-10 (no seeding at all) behavior did."""
+    random.seed(1)
+    torch.manual_seed(1)
+    state = _make_state(forecast=False)
+    mask = _full_mask()
+
+    agent_a = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_mixed_epsilon_config(), seed=None)
+    seq_a = [int(agent_a.act(state, mask)) for _ in range(50)]
+
+    agent_b = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_mixed_epsilon_config(), seed=None)
+    seq_b = [int(agent_b.act(state, mask)) for _ in range(50)]
+
+    assert seq_a != seq_b
 
 
 # ---------------------------------------------------------------------------

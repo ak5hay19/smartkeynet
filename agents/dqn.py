@@ -238,7 +238,13 @@ class DQNAgent:
     own (Hard Rule 1: no security term in the reward, ever).
     """
 
-    def __init__(self, state_dim: int, has_forecast: bool, config: DQNConfig | None = None) -> None:
+    def __init__(
+        self,
+        state_dim: int,
+        has_forecast: bool,
+        config: DQNConfig | None = None,
+        seed: int | None = None,
+    ) -> None:
         """`has_forecast` must match whatever `use_foresight` mode the
         environment this agent will run against was built with (True
         for `ewma`/`lstm`, False for `off`) -- a given training run is
@@ -247,10 +253,46 @@ class DQNAgent:
         way to derive it: `config["use_foresight"] != "off"`, using
         the same `config` dict passed to `SmartKeyNetEnv`. Every
         internal `flatten_state` call uses this value; nothing in this
-        class infers the mode from a `StateDict`'s contents."""
+        class infers the mode from a `StateDict`'s contents.
+
+        `seed`, if given, makes this agent's own randomness --
+        `QNetwork` weight init, epsilon-greedy exploration (`act`'s
+        `random.random()`/`random.choice()`), and replay-buffer
+        sampling (`random.sample()`) -- reproducible: it reseeds
+        Python's global `random` module and PyTorch's global RNG
+        immediately below, *before* `QNetwork` is constructed, so
+        initialization itself is covered, not just what happens
+        afterward. Found and flagged, not fixed, in the 2026-08-10
+        10-seed load-spike sweep session (see SESSION_LOG.md): none of
+        this randomness was seedable before, so `experiments/train.py`'s
+        `training.seed` only ever reached the environment's request
+        stream (`SmartKeyNetEnv`/`random_request_generator` use their
+        own local `np.random.default_rng(seed)` instances, genuinely
+        independent of this agent's RNGs -- see env/pool_sim.py,
+        env/request_generator.py -- so reusing the same integer for
+        both is safe, not a collision). `seed=None` (the default)
+        leaves both RNGs at whatever ambient state the process already
+        has -- unseeded, exactly the pre-existing behavior -- so no
+        existing caller changes behavior by omission.
+
+        Caveat: this reseeds *global* RNG state, not a private
+        per-instance generator (mirrors this module's own test suite's
+        pre-existing `torch.manual_seed(0)`-before-construction
+        convention in `test_dqn_agent_loss_trends_down_training_against_
+        real_env_s1`) -- constructing a second seeded agent, or any
+        other global `random`/`torch` call, between this agent's
+        construction and the calls you want reproduced will perturb
+        the shared stream. Fine for this repo's actual use (one agent
+        per training run); documented so it's not a surprise later.
+        """
         self.state_dim = state_dim
         self.has_forecast = has_forecast
         self.config = config if config is not None else DQNConfig()
+        self.seed = seed
+
+        if seed is not None:
+            random.seed(seed)
+            torch.manual_seed(seed)
 
         self.q_network = QNetwork(state_dim)
         self.target_network = QNetwork(state_dim)

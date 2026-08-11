@@ -134,7 +134,17 @@ def train(
 
     state_dim = flatten_state(state, has_forecast).shape[0]  # derived from the real state, not assumed
     dqn_config = load_dqn_config()
-    agent = DQNAgent(state_dim=state_dim, has_forecast=has_forecast, config=dqn_config)
+    # Same integer as env_config["seed"]/env.reset(seed=...) above --
+    # safe to reuse: DQNAgent's seed only touches Python's/torch's
+    # global RNG, while SmartKeyNetEnv/random_request_generator use
+    # their own local np.random.default_rng(seed) instances (see
+    # env/pool_sim.py, env/request_generator.py). Genuinely
+    # independent RNG systems, not a collision. Before this, only the
+    # environment side was seeded -- see agents/dqn.py's DQNAgent.__init__
+    # docstring and SESSION_LOG.md 2026-08-10 for why that mattered.
+    agent = DQNAgent(
+        state_dim=state_dim, has_forecast=has_forecast, config=dqn_config, seed=training_cfg["seed"]
+    )
 
     total_steps = training_cfg["total_steps"]
     eval_every = training_cfg["eval_every"]
