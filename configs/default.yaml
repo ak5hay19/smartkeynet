@@ -13,11 +13,104 @@ seed: 0
 use_foresight: ewma  # off | ewma | lstm
 
 # --- env/pool_sim.py ---
+#
+# SCARCITY CALIBRATION (recalibrated 2026-08-15 -- read before touching
+# `capacity_bits` or `qkd.mean_skr_kbps`).
+#
+# SMARTKEYNET_BUILD_SPEC.md §S1 test 11 and §11.2 require the pool to
+# actually bind, measured by the dimensionless scarcity ratio
+#
+#     rho = keys demanded per step / keys refilled per step
+#
+# with `0.8 <= rho <= 1.3` on S1/S2 and `rho > 1.3` on S3. Before this
+# recalibration the values here gave **rho = 0.0013**: refill was 781
+# keys/step against a structural demand ceiling of 1 key/step, the pool
+# sat pinned at 100% full for 1999 of 2000 steps, and no episode ever
+# recorded a single regret event. That is the spec's own failure mode
+# verbatim -- "the pool never binds, no policy can differ from any
+# other, and your DQN will tie the threshold baseline in week 3" --
+# and it is why the six 25,000-step campaigns of 2026-08-10 could not
+# separate the DQN from the tuned threshold baseline. Every result
+# recorded before 2026-08-15 was produced under the uncalibrated
+# physics and does not carry over.
+#
+# Worked arithmetic for THIS environment (see SESSION_LOG.md 2026-08-15):
+#
+#   DEMAND MUST BE MEASURED AGAINST A SENSIBLE POLICY, NOT THE VILLAIN.
+#   The first pass at this calibration sized refill against the
+#   always-hybrid baseline (~0.98 keys/step, one draw per decision) and
+#   landed rho = 1.14, apparently in band. That number was misleading.
+#   Once `REUSE` was fixed to respect the floor (spec §S4 rule 4), the
+#   realistic demand model became visible, and it is completely
+#   different: a policy that reuses its keys draws roughly
+#
+#       sessions / key_lifetime  =  20 / 500  =  0.04 keys/step
+#
+#   not one key per decision. Measured directly under the tuned
+#   threshold baseline: **0.043 keys/step** (random source, 20
+#   sessions) and 0.014 (graph source, 10 sessions). Against the old
+#   0.859 keys/step of refill that is rho = 0.05 -- the pool was still
+#   over-provisioned by a factor of twenty for any policy anyone would
+#   actually deploy, and the tuned threshold consequently scored
+#   *identically* on S1 and S3 (-744.4, std 8.2). Degradation could not
+#   touch it.
+#
+#   Always-hybrid is a useful villain but a terrible calibration
+#   reference: it rekeys ~500x more often than necessary, so sizing the
+#   link to make *it* struggle leaves the link enormously
+#   over-provisioned for everyone else.
+#
+#   Current values, sized against measured sensible demand:
+#
+#     refill = mean_skr_kbps * 1000 / bits_per_hybrid_draw
+#            = 0.025 * 1000 / 256 = 0.098 keys/step
+#     demand, tuned threshold (measured)   = 0.043 keys/step
+#     demand, always-hybrid (the villain)  = 0.98  keys/step
+#
+#     rho_sensible      = 0.043 / 0.098 = 0.44  -> binds, with headroom to misuse
+#     rho_always_hybrid = 0.98  / 0.098 = 10.0  -> drains the pool immediately
+#
+#   The gap between those two is the budgeting problem: there is enough
+#   key material for a policy that spends it deliberately, and nowhere
+#   near enough for one that spends it freely. Measured separation on
+#   S1 at these values (mean of 3 seeds, 2000 decisions):
+#     conservative threshold (tau=0.7, c_min=2)  -793
+#     greedy recommender (myopic)               -1359
+#     aggressive threshold (tau=0.1, c_min=0)   -2520
+#     always-PQC (never reuses, rekeys always)  -1944341
+#
+# Guarded by tests/test_pool_sim.py::test_scarcity_ratio_in_target_band.
 pool:
-  capacity_bits: 1_000_000
+  capacity_bits: 3_072  # == 12 ETSI keys of 256 bits. Was 1_000_000 (3906 keys) until
+                          # 2026-08-15 -- a buffer that large absorbed every burst, so the
+                          # pool level carried no information and no policy could misbudget.
+                          # SMARTKEYNET_BUILD_SPEC.md §7.1 fix A ranks lowering pool capacity
+                          # as "the most defensible knob": real key stores are small relative
+                          # to demand. At 0.859 keys/step refill this empties/refills in ~116
+                          # steps, so a 2500-step episode spans ~21 refill times (the spec asks
+                          # for >= 20x, so a bad spend has visible consequences in-episode).
   initial_fill_frac: 0.5
   bits_per_hybrid_draw: 256  # ETSI GS QKD 014 key size (256-bit); PLAN.md §4 Datasets & Provenance:
                               # "ETSI GS QKD 014 gives key sizes (256-bit)" -- Hard Rule 4, no invented number
+
+# --- env/pool_sim.py SyntheticSKRQBERTrace (documented synthetic fallback;
+#     no real CV-QKD trace was sourced -- PLAN.md "Datasets & Provenance"
+#     explicitly permits this "if the generation procedure is stated +
+#     rate ranges cited"). ---
+qkd:
+  mean_skr_kbps: 0.025  # CALIBRATED, not looked up -- see the arithmetic above. Published CV-QKD
+                        # secret-key rates span Mbps (short metro) down to O(bps) at 200+ km, so no
+                        # single published figure constrains this; what is defensible is the
+                        # calibration target (rho ~ 1.1), which is stated, reproducible, and guarded
+                        # by a test. Was 200.0 until 2026-08-15, giving rho = 0.0013.
+  skr_noise_frac: 0.1
+  baseline_qber: 0.02
+  qber_noise_std: 0.005
+  qber_abort: 0.11   # reconciliation abort threshold: above this no secret key is distilled at all.
+                      # Matches SMARTKEYNET_BUILD_SPEC.md §3.2's `qber_abort: 0.11`.
+  gate_kappa: 1.5    # exponent of the reconciliation gate, spec §S1: "kappa in [1,2]".
+  s3_peak_qber_frac: 0.9   # S3 ramps QBER to 0.9 * qber_abort, per spec §S1.
+  s3_residual_frac: 0.25   # ...then partially recovers, retaining 25% of the excess.
 
 # --- env/masking.py (Hard Rule 2, 4, 5) ---
 key_lifetime:
@@ -69,7 +162,23 @@ load_spike:
 
 # --- agents/dqn.py ---
 dqn:
-  gamma: 0.99
+  # gamma is DERIVED, not guessed (SMARTKEYNET_BUILD_SPEC.md §11.3). The agent has to
+  # connect a hybrid serve now to a deferral later, so the relevant timescale is how long
+  # the pool takes to recover the keys one discretionary serve costs:
+  #     T_recover        = pool_capacity_keys / refill_keys_per_step = 100 / 0.859 = 116 steps
+  #     effective horizon ~ 2 * T_recover                            = 232 steps
+  #     gamma            ~ 1 - 1/232                                 = 0.9957
+  # 0.995 gives a ~200-step horizon, which spans the pool's recovery time. The previous
+  # 0.99 gives ~100 steps -- shorter than a single refill cycle, so the agent literally
+  # could not see far enough ahead to learn budgeting.
+  gamma: 0.995
+  # Upgrade-ladder switches (spec §8), enabled 2026-08-15 after the first honest Gate W3
+  # run had the tuned threshold beating a vanilla DQN with high seed variance -- spec
+  # §7.1's "Fix B: the agent is underfitting". See agents/dqn.py for what each buys.
+  double: true       # rung 2 -- "always worth it"
+  n_step: 3          # rung 4 -- "the highest-value rung for this problem"
+  huber_delta: 1.0   # r_starve dwarfs the other terms; MSE turns one starvation step into a gradient spike
+  grad_clip_norm: 10.0
   lr: 0.001
   batch_size: 64
   target_update_every: 1000
@@ -84,7 +193,15 @@ dqn:
 
 # --- experiments/harness.py, agents/baselines.py ---
 baselines:
-  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  # SMARTKEYNET_BUILD_SPEC.md §S7 defines the threshold baseline as a THREE-parameter
+  # rule and insists it be grid-searched over all three: "Reporting a lazily-tuned
+  # threshold is the fastest way for a reviewer to dismiss the paper." The `c_min`
+  # and `rho` grids were added 2026-08-15 along with the missing REUSE/rekey half of
+  # the rule -- until then this baseline re-keyed on every single decision, which made
+  # it a strawman the DQN beat by an order of magnitude for entirely the wrong reason.
+  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]  # tau: pool-fill threshold
+  static_threshold_class_grid: [0, 1, 2, 3]        # c_min: minimum sensitivity class allowed to spend the pool
+  static_threshold_rekey_frac_grid: [0.5, 0.7, 0.9]  # rho: rekey once key_age >= rho * L
 
 # --- attack/steering_trace.py (PLAN.md §5 S5) ---
 steering_attack:

@@ -16,6 +16,7 @@ tech stack).
 from __future__ import annotations
 
 import random
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -145,13 +146,38 @@ class DQNConfig:
     """Hyperparameters for `DQNAgent` (values live in
     `configs/default.yaml`)."""
 
-    gamma: float = 0.99
+    gamma: float = 0.995
     lr: float = 1e-3
     batch_size: int = 64
     target_update_every: int = 1000
     epsilon_start: float = 1.0
     epsilon_end: float = 0.05
     epsilon_decay_steps: int = 50_000
+
+    # --- upgrade-ladder switches (SMARTKEYNET_BUILD_SPEC.md §8) ---
+    double: bool = True
+    """Double DQN: select the bootstrap action with the online network,
+    evaluate it with the target network. Spec §8 ranks this second on
+    the ladder and calls it "always worth it" -- a plain `max` over a
+    noisy target network systematically overestimates, and action
+    masking makes that worse rather than better, since the max is taken
+    over a legal set whose size varies step to step."""
+
+    n_step: int = 3
+    """n-step returns. Spec §8 calls this "the highest-value rung for
+    this problem", because credit has to travel through the pool's slow
+    dynamics: a discretionary hybrid serve and the deferral it
+    eventually causes can be a hundred steps apart, and 1-step backups
+    move that signal only one transition per gradient update."""
+
+    huber_delta: float = 1.0
+    """Huber (smooth L1) loss instead of MSE. With `r_starve` an order of
+    magnitude larger than the other reward terms, a single starvation
+    step produces a large TD error that MSE squares into a gradient
+    spike."""
+
+    grad_clip_norm: float = 10.0
+    """Global gradient-norm clip. 0 disables clipping."""
 
 
 def load_dqn_config(path: str | Path | None = None) -> DQNConfig:
@@ -181,6 +207,10 @@ class _Transition:
     next_state: torch.Tensor
     next_mask: np.ndarray
     done: bool
+    n_steps: int = 1
+    """How many environment steps of reward `reward` accumulates, and
+    therefore the power gamma is raised to when bootstrapping. 1 for a
+    plain one-step transition; see `DQNAgent._collapse_n_step_window`."""
 
 
 @dataclass
@@ -219,6 +249,70 @@ hardcode" -- there's nothing in config to load it from."""
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
+
+
+class RunningMeanStd:
+    """Welford running mean/variance per state feature.
+
+    WHY THIS EXISTS. `flatten_state` emits raw environment units, and
+    they are not remotely on the same scale: `key_age` runs to 500 (the
+    SP 800-57 lifetime cap) while every other feature sits at or below
+    3. Measured over 600 real states, feature 12 had max |x| = 500.0
+    against a next-largest of 3.0 -- a 150x disparity feeding an
+    unnormalised MLP.
+
+    The consequence was not subtle. The first layer was dominated by
+    key age, so pool level, policy floor and threat score were
+    effectively noise, and the learned policy was degenerate: it chose
+    `REKEY_NOW` on 900 of 1,000 decisions and chose `REUSE` **never**,
+    despite REUSE being legal on 836 of them and strictly cheaper on
+    every one (0.2 vs 1.0+ latency, and no rekey cost). A policy that
+    systematically avoids a strictly dominant action does not have a
+    hard exploration problem; it has broken inputs.
+
+    SMARTKEYNET_BUILD_SPEC.md §3.2 specifies exactly this component --
+    `obs_norm: running_mean_std  # frozen at eval` -- and it had simply
+    never been implemented.
+
+    **Frozen at eval** is load-bearing and not a detail: if the
+    statistics kept updating during evaluation, two policies would see
+    differently-normalised inputs depending on the states they happened
+    to visit, and the comparison would not be like-for-like.
+    """
+
+    def __init__(self, n_features: int, epsilon: float = 1e-4) -> None:
+        self.mean = np.zeros(n_features, dtype=np.float64)
+        self.var = np.ones(n_features, dtype=np.float64)
+        self.count = epsilon
+
+    def update(self, x: np.ndarray) -> None:
+        batch_mean = x.mean(axis=0)
+        batch_var = x.var(axis=0)
+        batch_count = x.shape[0]
+
+        delta = batch_mean - self.mean
+        total = self.count + batch_count
+
+        self.mean = self.mean + delta * batch_count / total
+        m_a = self.var * self.count
+        m_b = batch_var * batch_count
+        self.var = (m_a + m_b + delta**2 * self.count * batch_count / total) / total
+        self.count = total
+
+    def normalize(self, x: np.ndarray) -> np.ndarray:
+        """Standardise, then clip. Clipping bounds the damage a single
+        outlier state can do to a gradient step -- standard practice,
+        and cheap insurance given how skewed these features are."""
+        normalized = (x - self.mean) / np.sqrt(self.var + 1e-8)
+        return np.clip(normalized, -10.0, 10.0)
+
+    def state_dict(self) -> dict[str, Any]:
+        return {"mean": self.mean, "var": self.var, "count": self.count}
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        self.mean = np.asarray(state["mean"], dtype=np.float64)
+        self.var = np.asarray(state["var"], dtype=np.float64)
+        self.count = float(state["count"])
 
 
 class DQNAgent:
@@ -301,6 +395,11 @@ class DQNAgent:
 
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.config.lr)
         self._replay_buffer = _ReplayBuffer(capacity=_REPLAY_BUFFER_CAPACITY)
+        # observation normalisation (spec §3.2 `obs_norm: running_mean_std`)
+        self.obs_rms = RunningMeanStd(state_dim)
+        self.normalizer_frozen = False
+        # pending n-step accumulation window (see `observe`)
+        self._n_step_window: deque[_Transition] = deque(maxlen=max(1, self.config.n_step))
 
         self._act_calls = 0
         self._learn_calls = 0
@@ -333,12 +432,28 @@ class DQNAgent:
             return Action(random.choice(legal_indices))
 
         with torch.no_grad():
-            q_values = self.q_network(flatten_state(state, self.has_forecast).unsqueeze(0)).squeeze(0)
+            q_values = self.q_network(self.normalized_state(state).unsqueeze(0)).squeeze(0)
         masked_q_values = q_values.clone()
         illegal = ~torch.as_tensor(np.asarray(mask, dtype=bool))
         masked_q_values[illegal] = float("-inf")
         best_action = int(torch.argmax(masked_q_values).item())
         return Action(best_action)
+
+    def normalized_state(self, state: StateDict, update: bool = False) -> torch.Tensor:
+        """Flatten and normalise one state.
+
+        `update` is True only on the training path. Evaluation must not
+        move the statistics, or two policies scored on the same seeds
+        would see different input distributions.
+        """
+        flat = flatten_state(state, self.has_forecast).numpy().astype(np.float64)
+        if update and not self.normalizer_frozen:
+            self.obs_rms.update(flat.reshape(1, -1))
+        return torch.tensor(self.obs_rms.normalize(flat), dtype=torch.float32)
+
+    def freeze_normalizer(self) -> None:
+        """Stop updating observation statistics -- call before evaluation."""
+        self.normalizer_frozen = True
 
     def observe(
         self,
@@ -349,17 +464,80 @@ class DQNAgent:
         next_mask: ActionMask,
         done: bool,
     ) -> None:
-        """Push a transition to the replay buffer."""
-        self._replay_buffer.push(
+        """Accumulate an n-step return, then push to the replay buffer.
+
+        With `config.n_step == 1` this is exactly the old behaviour: the
+        transition goes straight in. For `n > 1` the transition is held
+        in a short FIFO window and only emitted once `n` steps of reward
+        have accumulated behind it, so the stored transition carries
+
+            R = sum_{k=0}^{n-1} gamma^k * r_{t+k}
+
+        and bootstraps from `s_{t+n}` instead of `s_{t+1}` (with
+        `discount = gamma^n` applied in `learn`). Spec §8: this is the
+        highest-value rung of the upgrade ladder here, because the pool's
+        dynamics are slow -- a discretionary hybrid serve and the
+        deferral it causes can be a hundred steps apart.
+
+        On `done` the window is flushed, emitting every partially
+        accumulated transition, so no experience is silently dropped at
+        an episode boundary.
+        """
+        self._n_step_window.append(
             _Transition(
-                state=flatten_state(state, self.has_forecast),
+                state=self.normalized_state(state, update=True),
                 action=int(action),
                 reward=float(reward),
-                next_state=flatten_state(next_state, self.has_forecast),
+                next_state=self.normalized_state(next_state, update=False),
                 next_mask=np.asarray(next_mask, dtype=bool).copy(),
                 done=bool(done),
             )
         )
+
+        if len(self._n_step_window) >= self.config.n_step:
+            self._replay_buffer.push(self._collapse_n_step_window())
+
+        if done:
+            while self._n_step_window:
+                self._replay_buffer.push(self._collapse_n_step_window())
+
+    def _collapse_n_step_window(self) -> _Transition:
+        """Fold the pending window into one n-step transition and drop
+        its oldest entry.
+
+        The emitted transition keeps the *first* entry's state and
+        action (that is the decision being credited), accumulates the
+        discounted reward across the window, and takes its bootstrap
+        state/mask from the *last* entry. `n_steps` records how many
+        rewards were actually accumulated, which is what `learn` raises
+        gamma to -- it is shorter than `config.n_step` only for the
+        tail transitions flushed at an episode boundary.
+        """
+        first = self._n_step_window[0]
+
+        accumulated_reward = 0.0
+        discount = 1.0
+        last = first
+        for n_accumulated, transition in enumerate(self._n_step_window, start=1):
+            accumulated_reward += discount * transition.reward
+            discount *= self.config.gamma
+            last = transition
+            if transition.done:
+                break
+        else:
+            n_accumulated = len(self._n_step_window)
+
+        collapsed = _Transition(
+            state=first.state,
+            action=first.action,
+            reward=accumulated_reward,
+            next_state=last.next_state,
+            next_mask=last.next_mask,
+            done=last.done,
+            n_steps=n_accumulated,
+        )
+        self._n_step_window.popleft()
+        return collapsed
 
     def learn(self) -> dict[str, float]:
         """One gradient step on a sampled batch. Returns a loss/metrics dict.
@@ -379,30 +557,49 @@ class DQNAgent:
         next_states = torch.stack([t.next_state for t in batch])
         dones = torch.tensor([t.done for t in batch], dtype=torch.float32)
         next_masks = torch.as_tensor(np.stack([t.next_mask for t in batch]), dtype=torch.bool)
+        n_steps = torch.tensor([t.n_steps for t in batch], dtype=torch.float32)
 
         q_values = self.q_network(states)
         q_selected = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
         with torch.no_grad():
-            next_q_values = self.target_network(next_states)
             # Hard Rule 2 applies at bootstrap time too: an action the
             # mask would have forbidden next step must never contribute
             # to the target, or the network would be implicitly taught
             # that an illegal action was a good future to bootstrap
-            # from.
-            next_q_values = next_q_values.masked_fill(~next_masks, float("-inf"))
-            next_q_max = next_q_values.max(dim=1).values
+            # from. Under Double DQN the mask has to be applied to BOTH
+            # networks -- the online net that selects the action and the
+            # target net that evaluates it -- or the selection step
+            # reintroduces exactly the illegal-action leak the masking
+            # is there to prevent.
+            target_q_values = self.target_network(next_states)
+            if self.config.double:
+                online_next_q = self.q_network(next_states)
+                online_next_q = online_next_q.masked_fill(~next_masks, float("-inf"))
+                best_actions = online_next_q.argmax(dim=1, keepdim=True)
+                next_q_max = target_q_values.gather(1, best_actions).squeeze(1)
+            else:
+                masked_target_q = target_q_values.masked_fill(~next_masks, float("-inf"))
+                next_q_max = masked_target_q.max(dim=1).values
+
             # Defensive only: env/masking.py guarantees at least one
             # legal action always exists, so this should never actually
             # fire -- but a mask with nothing legal would otherwise
             # poison the whole batch's loss with -inf.
             next_q_max = torch.nan_to_num(next_q_max, neginf=0.0, posinf=0.0)
-            targets = rewards + self.config.gamma * next_q_max * (1.0 - dones)
+            # gamma^n, because `rewards` already accumulates n steps of
+            # discounted reward (see `_collapse_n_step_window`).
+            discounts = torch.pow(
+                torch.tensor(self.config.gamma, dtype=torch.float32), n_steps.float()
+            )
+            targets = rewards + discounts * next_q_max * (1.0 - dones)
 
-        loss = nn.functional.mse_loss(q_selected, targets)
+        loss = nn.functional.smooth_l1_loss(q_selected, targets, beta=self.config.huber_delta)
 
         self.optimizer.zero_grad()
         loss.backward()
+        if self.config.grad_clip_norm > 0:
+            nn.utils.clip_grad_norm_(self.q_network.parameters(), self.config.grad_clip_norm)
         self.optimizer.step()
 
         self._learn_calls += 1
@@ -415,6 +612,7 @@ class DQNAgent:
         torch.save(
             {
                 "state_dim": self.state_dim,
+                "obs_rms": self.obs_rms.state_dict(),
                 "q_network": self.q_network.state_dict(),
                 "target_network": self.target_network.state_dict(),
                 "optimizer": self.optimizer.state_dict(),
@@ -425,9 +623,16 @@ class DQNAgent:
         )
 
     def load(self, path: str) -> None:
-        checkpoint = torch.load(path, map_location="cpu")
+        # weights_only=False: the checkpoint also carries the observation
+        # normaliser's numpy statistics, which are not tensors.
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
         self.q_network.load_state_dict(checkpoint["q_network"])
         self.target_network.load_state_dict(checkpoint["target_network"])
         self.optimizer.load_state_dict(checkpoint["optimizer"])
         self._act_calls = checkpoint["act_calls"]
         self._learn_calls = checkpoint["learn_calls"]
+        if "obs_rms" in checkpoint:
+            # Restoring the observation statistics is not optional: a
+            # checkpoint evaluated against different normalisation than
+            # it was trained under is a different function.
+            self.obs_rms.load_state_dict(checkpoint["obs_rms"])

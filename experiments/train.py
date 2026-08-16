@@ -49,9 +49,17 @@ from agents.baselines import StaticThresholdPolicy
 from agents.dqn import DQNAgent, flatten_state, load_dqn_config
 from env.contracts import Action, ActionMask, StateDict
 from env.environment import SmartKeyNetEnv
+from env.scenarios import build_scenario, require_trainable
 from experiments.harness import ScenarioResult, run_scenario
 
 _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
+
+_DEFAULT_EPISODE_LENGTH = 1500
+"""Steps between training resets. Roughly 13 pool refill-from-empty
+times, so an episode is long enough for a bad spend to have visible
+consequences, and short enough that one early mistake cannot poison the
+whole run. Set `training.episode_length: 0` to restore the old
+single-continuous-episode behaviour."""
 
 
 def load_full_config(path: str | Path | None = None) -> dict[str, Any]:
@@ -73,10 +81,16 @@ class GreedyDQNPolicy:
 
     agent: DQNAgent
 
+    def __post_init__(self) -> None:
+        self.agent.freeze_normalizer()
+
     def act(self, state: StateDict, mask: ActionMask) -> Action:
         with torch.no_grad():
+            # The agent's own normaliser, with statistics frozen -- raw
+            # `flatten_state` here would feed the network a completely
+            # different input distribution than it trained on.
             q_values = self.agent.q_network(
-                flatten_state(state, self.agent.has_forecast).unsqueeze(0)
+                self.agent.normalized_state(state).unsqueeze(0)
             ).squeeze(0)
         masked_q_values = q_values.clone()
         illegal = ~torch.as_tensor(np.asarray(mask, dtype=bool))
@@ -105,8 +119,9 @@ class TrainingRecord:
 def train(
     full_config: dict[str, Any] | None = None,
     training_overrides: dict[str, Any] | None = None,
+    scenario: str = "S1",
 ) -> tuple[DQNAgent, TrainingRecord]:
-    """Run one continuous S1 training episode (the env has no natural
+    """Run one continuous training episode (the env has no natural
     terminal state -- see env/environment.py -- so training never
     needs to reset mid-run) for `training.total_steps` steps,
     `observe()`+`learn()` every step, with a periodic greedy-mode
@@ -118,16 +133,33 @@ def train(
     tests use this to shrink `total_steps`/`eval_every`/`eval_max_steps`
     down to a CI-fast smoke run without touching this file's real
     defaults.
+
+    `scenario` selects which scenario to train on (added 2026-08-15,
+    when scenario dispatch became real; it was hardcoded to S1 before
+    that because no other scenario existed). It is routed through
+    `env.scenarios.require_trainable`, so an eval-only scenario (S5,
+    S6) raises rather than being trained on -- Hard Rule 8, enforced at
+    the training entry point exactly as
+    SMARTKEYNET_BUILD_SPEC.md §2.4 asks.
     """
     full_config = full_config if full_config is not None else load_full_config()
     training_cfg = {**full_config["training"], **(training_overrides or {})}
+
+    # Hard Rule 8 gate: refuse to train on a held-out scenario.
+    require_trainable(
+        build_scenario(
+            scenario,
+            full_config,
+            int(full_config.get("scenario_steps", training_cfg["total_steps"])),
+        )
+    )
 
     # The one place has_forecast is derived from -- config-time, never
     # inferred from a StateDict's contents (2026-08-08 fix; see
     # agents/dqn.py's flatten_state docstring).
     has_forecast = full_config.get("use_foresight", "off") != "off"
 
-    env_config = {**full_config, "scenario": "S1", "seed": training_cfg["seed"]}
+    env_config = {**full_config, "scenario": scenario, "seed": training_cfg["seed"]}
     env = SmartKeyNetEnv(env_config)
     state, info = env.reset(seed=training_cfg["seed"])
     mask = info["action_mask"]
@@ -154,7 +186,37 @@ def train(
     record = TrainingRecord()
     reward_window: list[float] = []
 
+    # Periodic episode resets. The environment has no natural terminal
+    # state, so this loop used to run as ONE continuous episode -- and
+    # that turned out to be why the agent could not learn.
+    #
+    # With epsilon starting at 1.0, early exploration drains the QKD
+    # pool within a few hundred steps. The deferral queue then saturates
+    # and, because a drained pool refills at ~0.098 keys/step against a
+    # queue that keeps growing, the run never recovers: measured
+    # training reward degraded monotonically across a 15,000-step run
+    # (-1,396 -> -12,916 per window) while the greedy policy chose
+    # REKEY_NOW on 896 of 1,000 decisions and REUSE on 5. The agent was
+    # not unlearning; it was spending ~95% of training inside an
+    # absorbing failure state, so almost none of its experience came
+    # from the healthy regime a good policy actually operates in.
+    #
+    # SMARTKEYNET_BUILD_SPEC.md §7.1 fix B flags the mirror-image
+    # problem ("if the agent never visits low-pool states during
+    # training, it never learns to fear them") and calls episode-start
+    # randomisation "a legitimate and standard fix". This is that fix
+    # applied to the opposite failure: resetting periodically, on a
+    # rotating seed, so training experience spans both regimes instead
+    # of being dominated by whichever one it fell into first.
+    episode_length = training_cfg.get("episode_length", _DEFAULT_EPISODE_LENGTH)
+    episode_index = 0
+
     for step in range(1, total_steps + 1):
+        if episode_length and step > 1 and (step - 1) % episode_length == 0:
+            episode_index += 1
+            state, info = env.reset(seed=training_cfg["seed"] + 1000 * episode_index)
+            mask = info["action_mask"]
+
         action = agent.act(state, mask)
         next_state, reward, terminated, truncated, info = env.step(action)
         next_mask = info["action_mask"]
@@ -174,7 +236,7 @@ def train(
             reward_window = []
 
             eval_config = {**full_config, "max_steps": eval_max_steps}
-            eval_result = run_scenario(GreedyDQNPolicy(agent), "S1", eval_config, seed=eval_seed)
+            eval_result = run_scenario(GreedyDQNPolicy(agent), scenario, eval_config, seed=eval_seed)
             record.eval_snapshots.append((step, eval_result))
 
     checkpoint_path = training_cfg["checkpoint_path"]

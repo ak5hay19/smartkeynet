@@ -77,6 +77,19 @@ def _resolved_cost_action(action: Action, key_type_onehot: Any, floor: Action) -
     return floor  # cold-start REKEY_NOW adopts the floor's tier (design decision 4)
 
 
+def _active_key_tier(key_type_onehot: Any) -> Action | None:
+    """Tier of the session's existing key, or `None` on a cold start.
+
+    Reads the same public `StateDict["key_type_onehot"]` the mask is
+    built from, so the violation check below sees exactly what the
+    policy saw.
+    """
+    for key_type in KeyType:
+        if key_type_onehot[int(key_type)] == 1.0:
+            return _KEY_TYPE_TO_SERVE_ACTION[key_type]
+    return None
+
+
 def run_scenario(
     policy: Policy, scenario: str, config: dict[str, Any], seed: int
 ) -> ScenarioResult:
@@ -131,6 +144,19 @@ def run_scenario(
 
         if action in _TIER_ACTIONS and int(action) < int(floor):
             floor_violations += 1  # should never fire -- the mask already forbids this
+
+        # REUSE is a floor violation too, when the key being reused no
+        # longer clears the floor. Counting only `_TIER_ACTIONS` is how
+        # this metric reported a clean 0 right through 2026-08-15 while
+        # `REUSE` was in fact bypassing floors 1,090 times in a
+        # 3,000-step S2 episode -- the headline claim "floor violations:
+        # 0, structurally guaranteed" was being satisfied by not
+        # looking. `compute_mask` now forbids it (spec §S4 rule 4); this
+        # measures the guarantee instead of assuming it.
+        if action is Action.REUSE:
+            active_tier = _active_key_tier(key_type_onehot)
+            if active_tier is None or int(active_tier) < int(floor):
+                floor_violations += 1
 
         cost_action = _resolved_cost_action(action, key_type_onehot, floor)
         latencies.append(_LATENCY_UNITS[cost_action])

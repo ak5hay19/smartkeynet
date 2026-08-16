@@ -1,0 +1,135 @@
+{
+  "train_seeds": [
+    0,
+    1,
+    2
+  ],
+  "eval_seeds": [
+    1000,
+    1001,
+    1002
+  ],
+  "total_steps": 30000,
+  "eval_max_steps": 1500,
+  "scenarios": {
+    "S1": {
+      "tuned_threshold": 0.8,
+      "dqn_per_train_seed_mean": [
+        -1052449.2103333296,
+        -1092558.088399995,
+        -994311.9504666642
+      ],
+      "beats_threshold": false,
+      "policies": {
+        "always_pqc": {
+          "mean_reward": -1024388.0133333262,
+          "std_reward": 127672.19701851568,
+          "median_reward": -1059962.799999993,
+          "mean_exhaustion_events": 276.6666666666667,
+          "total_floor_violations": 0,
+          "mean_p99_latency": 1.5
+        },
+        "always_hybrid": {
+          "mean_reward": -1116806.3133333311,
+          "std_reward": 139764.6243497353,
+          "median_reward": -1131371.4699999979,
+          "mean_exhaustion_events": 289.0,
+          "total_floor_violations": 0,
+          "mean_p99_latency": 1.5
+        },
+        "static_threshold_tuned": {
+          "mean_reward": -580.7050666666665,
+          "std_reward": 8.610392514991528,
+          "median_reward": -577.8320000000001,
+          "mean_exhaustion_events": 0.0,
+          "total_floor_violations": 0,
+          "mean_p99_latency": 1.5
+        },
+        "random": {
+          "mean_reward": -1044540.0950666638,
+          "std_reward": 138083.52456201665,
+          "median_reward": -1078146.3879999968,
+          "mean_exhaustion_events": 284.3333333333333,
+          "total_floor_violations": 0,
+          "mean_p99_latency": 1.5
+        },
+        "greedy_recommender": {
+          "mean_reward": -623.9934666666664,
+          "std_reward": 8.487682630468184,
+          "median_reward": -623.1092000000004,
+          "mean_exhaustion_events": 0.0,
+          "total_floor_violations": 0,
+          "mean_p99_latency": 1.3
+        },
+        "dqn": {
+          "mean_reward": -1046439.7497333296,
+          "std_reward": 142764.34625918523,
+          "median_reward": -1059404.3815999948,
+          "mean_exhaustion_events": 280.6666666666667,
+          "total_floor_violations": 0,
+          "mean_p99_latency": 1.5
+        }
+      }
+    },
+    "S3": {
+      "tuned_threshold": 0.7,
+      "dqn_per_train_seed_mean": [
+        -1647136.6059999887,
+        -1699203.056933326,
+        -1681203.7844666627
+      ],
+      "beats_threshold": false,
+      "policies": {
+        "always_pqc": {
+          "mean_reward": -1614419.7999999905,
+          "std_reward": 142277.11614023006,
+          "median_reward": -1683534.2799999912,
+          "mean_exhaustion_events": 294.3333333333333,
+          "total_floor_violations": 0,
+          "mean_p99_latency": 1.5
+        },
+        "always_hybrid": {
+          "mean_reward": -1719587.4399999958,
+          "std_reward": 157223.1444500178,
+          "median_reward": -1761375.8699999964,
+          "mean_exhaustion_events": 306.6666666666667,
+          "total_floor_violations": 0,
+          "mean_p99_latency": 1.5
+        },
+        "static_threshold_tuned": {
+          "mean_reward": -132835.23939999987,
+          "std_reward": 55855.71873529602,
+          "median_reward": -114001.8115999999,
+          "mean_exhaustion_events": 82.0,
+          "total_floor_violations": 0,
+          "mean_p99_latency": 1.5
+        },
+        "random": {
+          "mean_reward": -1617123.5013999946,
+          "std_reward": 151655.3029807339,
+          "median_reward": -1634448.6547999948,
+          "mean_exhaustion_events": 302.3333333333333,
+          "total_floor_violations": 0,
+          "mean_p99_latency": 1.5
+        },
+        "greedy_recommender": {
+          "mean_reward": -258025.33866666662,
+          "std_reward": 86636.94712665076,
+          "median_reward": -290798.2851999999,
+          "mean_exhaustion_events": 103.33333333333333,
+          "total_floor_violations": 0,
+          "mean_p99_latency": 1.200999999999999
+        },
+        "dqn": {
+          "mean_reward": -1675847.8157999925,
+          "std_reward": 162053.71414170283,
+          "median_reward": -1722217.1481999964,
+          "mean_exhaustion_events": 302.0,
+          "total_floor_violations": 0,
+          "mean_p99_latency": 1.5
+        }
+      }
+    }
+  },
+  "gate_passed": false
+}

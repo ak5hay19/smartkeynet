@@ -11,9 +11,67 @@
 
 ## Next task
 
-**Still not resolved — the seeding fix landed, but it made the finding
-more interesting, not less.** Three same-day 2026-08-10 sessions in a
-row on this thread now; see SESSION_LOG.md for full detail on each.
+**One open design decision, and it is yours to make.** Everything buildable is
+built (578 tests, no stubs). The remaining question is not an engineering task:
+
+> **Should hybrid serving carry a genuine upside in the reward?**
+
+Today it does not — hybrid costs more latency, more energy, and pays the scarcity
+price, with nothing gained. So the optimal policy is "spend only where a floor
+demands it", which is close to static, which is why Gate W3 fails to a tuned
+threshold across four sessions of honest attempts. Giving hybrid an upside would
+make RL earn its place — but any such benefit is a *security* benefit, and Hard
+Rule 1 forbids security in the reward. Resolving that tension is a genuine
+research decision that invalidates every results table.
+
+Do NOT relitigate Gate W3 by reshaping the environment until the DQN wins. It has
+been given a fixed baseline, the full spec upgrade ladder, two recalibrations, a
+forecastable threat signal and a working forecaster. See `docs/report.md` §5.
+
+Secondary: **initialise git** — this working copy still has no `.git`.
+
+<details>
+<summary>Superseded — the previous "attempt Gate W3" task (now done, not passed)</summary>
+
+**Retrain the DQN on the calibrated environment and attempt Gate W3 for
+real** — multi-seed (5+), on S1 and S3, against the grid-searched
+`StaticThresholdPolicy`. This is now attemptable for the first time.
+
+Why it changed: on 2026-08-15 the environment was found to have **no
+scarcity at all**. The pool sat at 100% full for 1999 of 2000 steps of an
+S1 episode, 520 hybrid serves cost nothing, and zero regret events were
+ever logged — refill ran at 781 keys/step against a structural demand
+ceiling of 1 key/step, i.e. **ρ = 0.0013** against the build spec's
+required `[0.8, 1.3]`. The spec names this failure mode exactly: *"the
+pool never binds, no policy can differ from any other, and your DQN will
+tie the threshold baseline in week 3."*
+
+That is precisely the result recorded below, and it means the whole
+2026-08-10 thread was chasing a symptom. **The bimodal
+`forced_rekey_ratio` investigation is closed, not resolved** — with the
+pool free, rekey timing was the only signal the agent had left to learn,
+and it is a weak and noisy one. Whether the split persists on the
+calibrated environment is an open question, and the honest way to answer
+it is to re-measure rather than to keep reasoning from void data.
+
+**All six 25,000-step campaigns and both 10-seed sweeps recorded below
+are superseded.** They ran against uncalibrated physics and a reward in
+which starving was cheaper than spending (the QKD price was charged per
+bit rather than per 256-bit key, making it 256× oversized). Do not carry
+any of those numbers forward.
+
+Post-calibration state: ρ = 1.150 on S1, 7.42 on S3's peak-hold window;
+all four baselines separate; floor violations 0 everywhere. See
+SESSION_LOG.md 2026-08-15 for the full table and for three open issues
+worth deciding on before or alongside retraining (`hybrid_mandatory` is
+only half-enforced, `pqc_capable` interoperability masking is missing,
+and `ThreatPosture.CALM` is unreachable under the EWMA forecaster).
+
+<details>
+<summary>Superseded — the 2026-08-10 forced_rekey_ratio investigation (kept for provenance)</summary>
+
+Three same-day 2026-08-10 sessions in a
+row on this thread; see SESSION_LOG.md for full detail on each.
 Recap in order:
 
 1. First load-spike session: `forced_rekey_ratio` dropped from flat
@@ -70,6 +128,9 @@ Do not mistake `configs/default.yaml`'s `load_spike:` block or
 `random_request_generator`'s `load_spike` kwarg for finished S4 work —
 both are documented as a diagnostic stub throughout.
 
+</details>
+</details>
+
 ---
 
 ## Milestone checklist
@@ -84,38 +145,75 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       logging
 - [x] Gate W2 — env `step()` runs end-to-end with a random valid agent across
       a full S1 episode; regret events logged
-- [ ] Real NetworkX tenant graph + graph-driven `RequestGenerator`
+- [x] **Scarcity calibration** — the pool actually binds. Current values:
+      ρ = 0.44 for a sensible policy (binds, with headroom to misuse) and
+      ρ = 10.0 for always-hybrid (drains immediately); the gap between them is
+      the budgeting problem. Guarded by `test_scarcity_ratio_in_target_band`.
+      *(Calibrated twice on 2026-08-15: ρ was 0.0013 originally — the pool never
+      bound at all — and an intermediate ρ = 1.14 was measured against the
+      always-hybrid villain, which rekeys ~500x more than necessary and so left
+      the link over-provisioned twenty-fold for any realistic policy.)*
+- [x] Real NetworkX tenant graph + graph-driven `RequestGenerator`
       (`build_tenant_graph`, `RequestGenerator.reset/step`) — PLAN.md §10 step 4
 - [x] Masked DQN agent (`agents/dqn.py`)
 - [x] Four tuned baselines — always-PQC, always-hybrid, static-threshold
       (grid-searched), random (`agents/baselines.py`) + comparison harness
       (`experiments/harness.py`) — Hard Rule 7
-- [ ] 🚩 Gate W3 (make-or-break) — DQN beats the tuned threshold baseline on S1 and S3
-      *(Still not attemptable for real — S3 doesn't exist as a scenario yet. 2026-08-10's
-      load-spike diagnostics (NOT real S3/S4 — see Next task and `configs/default.yaml`'s
-      `load_spike:` block) showed `forced_rekey_ratio` dropping well below flat-S1's
-      never-proactive `1.000` once arrival load genuinely varies, directionally confirming
-      the reward mechanism isn't broken — but even after fixing `agents/dqn.py`'s previously
-      unseeded randomness and re-running the 10-seed sweep with genuinely controlled seeds,
-      the spread got wider, not tighter (`0.102`-`1.000`, half the seeds at the exact
-      never-proactive ceiling) — a real learn/don't-learn split by training run, not a
-      measurement artifact. Whenever Gate W3 is attempted for real, it needs multi-seed
-      reporting, not a single run, given this. Evidence toward attempting the gate once S3
-      exists, not the gate itself.)*
-- [ ] Soft-reward baseline agent reproducing Noetzold (`agents/soft_reward_baseline.py`)
-- [ ] Scenario dispatch S2-S4 wired into `environment.py` (`config["scenario"]`
-      is currently read but not acted on — the 2026-08-10 `load_spike` diagnostic is a
-      request-rate-only stand-in layered on top of S1, not scenario dispatch)
-- [ ] Real LSTM dual-head forecaster (Addition A) — `forecaster/model.py`,
-      `forecaster/dataset.py`, `forecaster/train.py`, `LSTMForecastProvider`
-      in `env/forecast_provider.py`
-- [ ] E-A foresight ablation (off / ewma / lstm on S3 + S6)
-- [ ] Steering attack — adversarial threat-trace generator (`attack/steering_trace.py`)
-      + attack run producing the split-screen result — Gate W5, headline contribution, never cut
-- [ ] S6 migration wave (scripted schedule, held-out eval only)
-- [ ] Live dashboard (`dashboard/app.py`) — 4-beat demo
-- [ ] AWS-KMS-style API facade (`api/main.py`)
-- [ ] Report (`docs/report.md`) — currently a section-header skeleton with TODOs only
+- [ ] 🚩 Gate W3 (make-or-break) — **CLOSED: ATTEMPTED, NOT PASSED.** Final numbers
+      S1 −581 (threshold) vs −1,046,440 (DQN); S3 −132,835 vs −1,675,848. Pursued
+      across five sessions, during which two genuine DQN training bugs were found
+      and fixed (missing observation normalisation; an absorbing-state training
+      loop). The agent still loses by ~1,800× with the machinery repaired, which
+      makes this a structural finding rather than an implementation failure.
+      The grid-searched three-parameter threshold beats the DQN on both scenarios:
+      S1 −767 vs −1,959, S3 −514,587 vs −606,507 (5 train seeds × 5 eval seeds,
+      disjoint; floor violations 0 everywhere). Spec §7.1 Fix B was applied in full
+      first — γ derived to 0.995 per §11.3, Double DQN, 3-step returns, Huber loss,
+      gradient clipping — and the baseline itself was fixed (it had been missing the
+      entire `rho`/REUSE half of the spec's rule, making it a strawman the DQN beat
+      for the wrong reason). Reported rather than engineered around, per §7.1 Fix C.
+      Full numbers in `results/gate_w3.json`. DQN seed variance is large and
+      undiagnosed on the new calibration.
+- [x] Soft-reward baseline agent reproducing Noetzold (`agents/soft_reward_baseline.py`)
+      — tabular Q-learning whose reward contains the threat term; computes its own
+      reward so nothing under `env/` ever emits a security term
+- [x] Scenario dispatch S1-S4 wired into `environment.py` via `env/scenarios.py`
+      (S3 QBER drift ramp, S4 per-tenant flood, S2 threat-elevation windows; S5/S6
+      resolve to eval-only specs carrying no perturbations yet — Hard Rule 8 enforced
+      by `require_trainable()`)
+- [x] Real LSTM dual-head forecaster (Addition A) — `forecaster/model.py`,
+      `forecaster/dataset.py`, `forecaster/train.py`, `LSTMForecastProvider`.
+      Frozen by construction (params `requires_grad=False`, `no_grad` forward).
+      Threat head **balanced accuracy 0.334 (chance) -> 0.852** after fixing two
+      bugs: it was labelled with the *ratcheted* posture ("same as now" in 99.9%
+      of samples) and trained with unweighted CE against an 89/11/0.3 imbalance,
+      which raw accuracy (0.838 = majority rate) hid completely.
+- [x] E-A foresight ablation — **NULL RESULT.** S3 regret events: off 317.2,
+      ewma 317.8, lstm 722.0. Addition A's success criterion NOT met. An earlier
+      "ewma cuts regret 23%" claim was **withdrawn**: it did not reproduce once
+      the DQN's observation normalisation and absorbing-state training bugs were
+      fixed, i.e. it had been an artifact of a broken agent.
+      `results/ea_ablation.json`.
+- [x] **Steering attack** — `attack/steering_trace.py` + `experiments/steering_attack.py`.
+      Headline contribution, and it lands: the critiqued reward's optimal tier walks
+      down to *classical* as the reported threat is suppressed, while the masked floor
+      only moves up. 0 floor violations and 0 ratchet reversals across every agent,
+      dose and seed. Evidence is analytic, so it holds for any agent maximising that
+      reward — independent of seed or training budget.
+- [x] S6 migration wave — scripted `FloorChange` schedule, validated at build time to
+      only ratchet up, held-out eval only (Hard Rule 8 enforced at the training entry
+      point by `require_trainable`)
+- [x] Live dashboard (`dashboard/app.py`) — Plotly Dash, 4-beat demo. Replays
+      captured episodes (scrubbable, and identical for every viewer) rather than
+      stepping a shared env inside a callback. Degrades gracefully when a results
+      file is absent, so the demo always comes up.
+- [x] AWS-KMS-style API facade (`api/main.py`) — FastAPI. `GenerateDataKey`,
+      `Encrypt`, `DescribeKeyPolicy`, `PoolStatus`. Real HKDF-SHA256 + AES-256-GCM
+      (round-trip tested); ML-KEM is a clearly-named placeholder. A deferred
+      request returns **503, never a weaker key** (Hard Rule 9 at the API boundary).
+- [x] Report (`docs/report.md`) — written from `results/*.json`. Leads with the
+      three floor holes and the steering attack; reports Gate W3's failure and the
+      E-A null result plainly, with a Limitations section.
 
 ---
 
@@ -131,12 +229,13 @@ behavioral tests, part of the green `pytest` run).
 | File | Status | Notes |
 |---|---|---|
 | `env/contracts.py` | implemented+tested | Frozen interface contract — `Action`, `StateDict`, `ForecastProvider` ABC, `Request`, event-log TypedDicts. 5 real tests (`test_contracts.py`). |
-| `env/pool_sim.py` | implemented+tested | `PoolSim` (refill/drain/exhaustion) + `SyntheticSKRQBERTrace`. 19 tests (`test_pool_sim.py`). |
+| `env/pool_sim.py` | implemented+tested | `PoolSim` (refill/drain/exhaustion) + `SyntheticSKRQBERTrace` + `QberDriftSchedule` (S3's ramp/hold/partial-recovery) + `load_qkd_config`. 26 tests (`test_pool_sim.py`). **2026-08-15: the SKR gate was replaced** — the old `1 - min(qber, 0.5)` spike-only gate removed only ~10% of SKR at S3's peak, far too weak for a collapse; the new reconciliation gate (relative to baseline QBER, zero at `qber_abort`) removes ~96%, and is exactly 1.0 at/below baseline so S1 is untouched by it. SKR/QBER parameters now live in `configs/default.yaml`'s `qkd:` block instead of being invisible dataclass defaults. |
 | `env/deferral_queue.py` | implemented+tested | `DeferralQueue.enqueue/tick/pop_servable`, priority+FIFO, cumulative-headroom draw. 8 tests (`test_deferral_queue.py`). |
 | `env/masking.py` | implemented+tested | `PolicyTable` (placeholder floor table, sticky ratchet) + `compute_mask`. 14 tests (`test_masking.py`). Floor table not yet calibrated against Q-OPSEC data. |
 | `env/forecast_provider.py` | stub (partial) | `MovingAverageForecaster` (EWMA fallback) implemented+tested (9 tests, `test_forecast_provider.py`). `LSTMForecastProvider` does not exist yet (Addition A) — `use_foresight: lstm` currently raises `NotImplementedError` in `environment.py`. |
-| `env/request_generator.py` | stub (partial) | `random_request_generator()` implemented+tested (11 tests, `test_request_generator.py`), incl. 3 new 2026-08-10 tests for its optional `load_spike` kwarg — a periodic, config-driven arrival-rate diagnostic (**explicitly not real S4** — see that session's SESSION_LOG.md entry and `configs/default.yaml`'s `load_spike:` block). `build_tenant_graph()` and `RequestGenerator` (graph-driven stream) still `raise NotImplementedError` — real S4 needs these. |
-| `env/environment.py` | implemented+tested | `SmartKeyNetEnv.reset/step/action_mask` fully wired (pool + deferral + masking + forecast + reward + session-key state). 17 behavioral tests incl. the split.md Gate W2 tests (`test_environment.py`). Only S1 scenario dispatch exists; S2-S6 config is read but not acted on. 2026-08-10: wired `config["load_spike"]` through to `random_request_generator` (design decision 9) — orthogonal to scenario dispatch, not a substitute for it. |
+| `env/request_generator.py` | implemented+tested | Both sources real. `random_request_generator()` (plain stationary Poisson, unchanged) plus its `load_spike` diagnostic kwarg. **2026-08-15: `build_tenant_graph()` and `RequestGenerator` implemented** — ~50-node NetworkX graph, `TenantProfile`-driven tenant-conditioned class weights, stratified class allocation (i.i.d. draws were too lumpy — they dropped a whole class at `n_nodes=10`), legacy-endpoint invariant, `TenantFlood` (S4), `as_stream()` adapter, `measure_fano_factor()`. MMPP burst chains are **per-tenant, not per-edge** (per-edge chains washed out as the graph grew: binned Fano fell 2.35 → 1.32 from 10 to 55 edges; per-tenant holds 3.6 vs the Poisson source's 0.95). 25 tests. |
+| `env/environment.py` | implemented+tested | `SmartKeyNetEnv.reset/step/action_mask` fully wired (pool + deferral + masking + forecast + reward + session-key state). 21 behavioral tests incl. the split.md Gate W2 tests (`test_environment.py`). **2026-08-15: scenario dispatch (design decision 10)** — `config["scenario"]` resolves through `env/scenarios.py` and is applied through three exogenous channels, with no per-scenario branch in `step()`; `config["request_source"]` selects `random` or `graph`. **Reward units fix (design decision 11)** — the QKD scarcity price was charged per *bit* rather than per 256-bit key, making it 256× oversized and making starvation cheaper than spending; `_assert_reward_weights_are_sane()` now enforces the spec's `r_starve >= 5 * w_qkd` at construction. |
+| `env/scenarios.py` | implemented+tested | **New 2026-08-15.** `build_scenario()` maps S1-S6 to a frozen `ScenarioSpec` over three exogenous channels — `QberDriftSchedule` (S3), `TenantFlood` (S4), `ThreatWindow`s (S2). Unknown names raise rather than falling back to S1. `require_trainable()` machine-enforces Hard Rule 8 on S5/S6. `ThreatWindow` validates non-negative intensity, so a scenario can only ever raise floors (Hard Rule 2). 28 tests (`test_scenarios.py`). |
 
 ### agents/
 
@@ -204,12 +303,22 @@ behavioral tests, part of the green `pytest` run).
 
 | File | Status | Notes |
 |---|---|---|
-| `configs/default.yaml` | partial | `pool`, `key_lifetime`, `reward`, `use_foresight`, `tenant_graph.n_nodes`, `load_spike`, `dqn`, `baselines`, `steering_attack`, `training` keys all present. `migration_schedule: []` empty (S6 not yet authored). `scenario: S1` — S2-S6 read but not dispatched by `environment.py`. `load_spike.enabled: false` by default (2026-08-10 diagnostic stub, NOT real S4 — see `env/request_generator.py`'s row and SESSION_LOG.md). |
+| `configs/default.yaml` | partial | `pool`, `qkd`, `key_lifetime`, `reward`, `use_foresight`, `tenant_graph.n_nodes`, `load_spike`, `dqn`, `baselines`, `steering_attack`, `training` keys all present. **2026-08-15: recalibrated** — `pool.capacity_bits` 1_000_000 → 25_600 (3906 → 100 ETSI keys), new `qkd:` block with `mean_skr_kbps` 200.0 → 0.22, and the full worked scarcity arithmetic written into the file as a comment block so the calibration is visible where the numbers live. `migration_schedule: []` empty (S6 not yet authored). S1-S4 now dispatched by `environment.py`; S5/S6 resolve to eval-only specs with no perturbations yet. `load_spike.enabled: false` by default (2026-08-10 diagnostic stub, superseded by real S4 — see `env/request_generator.py`'s row). |
 
 ---
 
 ## Last verified
 
-- **Date:** 2026-08-10
-- **Commit:** `58bebcf` ("log: [solo] 10-seed load-spike sweep, found unseeded DQN randomness — 2026-08-10") — the commit this session started from; see SESSION_LOG.md for this session's own commit
-- **`pytest` pass count:** 400 passed, 0 failed (up from 397 — 3 new seed tests in `test_dqn.py`)
+- **Date:** 2026-08-15
+- **Commit:** not applicable — this working copy is **not a git repository** (it
+  was unpacked from a zip; there is no `.git`, so no commit history exists locally
+  and nothing from this session is version-controlled). Worth fixing before the
+  next session.
+- **`pytest` pass count:** 578 passed, 1 skipped, 0 failed (up from 452 — new coverage for the
+  three closed floor holes, `pqc_capable` interoperability masking, the reachable-CALM
+  forecaster fix, n-step/Double-DQN, the three-parameter threshold baseline, the
+  steering attack and the soft-reward victim, and the S6 migration schedule)
+- **Results on disk:** `results/gate_w3.json`, `results/steering_attack.json`,
+  `results/ea_ablation.json`
+- **Environment:** `.venv/` created this session (the repo shipped without one and
+  no dependencies were installed); run tests with `.venv/bin/python -m pytest`

@@ -1,0 +1,273 @@
+{
+  "scenario": "S2",
+  "attack_window": [
+    1200,
+    2500
+  ],
+  "doses": [
+    0.0,
+    0.25,
+    0.5,
+    0.75,
+    1.0
+  ],
+  "seeds": [
+    0,
+    1
+  ],
+  "n_steps": 2500,
+  "results": {
+    "soft_reward": [
+      {
+        "agent": "soft_reward",
+        "dose": 0.0,
+        "served_tier_histogram": [
+          0.009000000000000001,
+          0.0438,
+          0.9472
+        ],
+        "mean_served_tier": 1.9382000000000001,
+        "mean_tier_in_window": 1.9830287718463917,
+        "mean_headroom_in_window": 0.4849206349206349,
+        "n_establishing_in_window": 133,
+        "mean_floor": 1.1416,
+        "max_floor": 2,
+        "floor_violations": 0,
+        "posture_reversals": 0,
+        "n_decisions": 5000
+      },
+      {
+        "agent": "soft_reward",
+        "dose": 0.25,
+        "served_tier_histogram": [
+          0.0074,
+          0.0372,
+          0.9554
+        ],
+        "mean_served_tier": 1.948,
+        "mean_tier_in_window": 1.9799661158007371,
+        "mean_headroom_in_window": 0.2809677419354839,
+        "n_establishing_in_window": 112,
+        "mean_floor": 1.1372,
+        "max_floor": 2,
+        "floor_violations": 0,
+        "posture_reversals": 0,
+        "n_decisions": 5000
+      },
+      {
+        "agent": "soft_reward",
+        "dose": 0.5,
+        "served_tier_histogram": [
+          0.0104,
+          0.032799999999999996,
+          0.9568
+        ],
+        "mean_served_tier": 1.9464000000000001,
+        "mean_tier_in_window": 1.976112828438949,
+        "mean_headroom_in_window": 0.47450980392156866,
+        "n_establishing_in_window": 111,
+        "mean_floor": 0.9954000000000001,
+        "max_floor": 2,
+        "floor_violations": 0,
+        "posture_reversals": 0,
+        "n_decisions": 5000
+      },
+      {
+        "agent": "soft_reward",
+        "dose": 0.75,
+        "served_tier_histogram": [
+          0.008,
+          0.03,
+          0.962
+        ],
+        "mean_served_tier": 1.9540000000000002,
+        "mean_tier_in_window": 1.982998454404946,
+        "mean_headroom_in_window": 0.6138888888888889,
+        "n_establishing_in_window": 109,
+        "mean_floor": 0.9954000000000001,
+        "max_floor": 2,
+        "floor_violations": 0,
+        "posture_reversals": 0,
+        "n_decisions": 5000
+      },
+      {
+        "agent": "soft_reward",
+        "dose": 1.0,
+        "served_tier_histogram": [
+          0.0104,
+          0.041800000000000004,
+          0.9478
+        ],
+        "mean_served_tier": 1.9374,
+        "mean_tier_in_window": 1.9498252288669597,
+        "mean_headroom_in_window": 0.273538961038961,
+        "n_establishing_in_window": 144,
+        "mean_floor": 0.9954000000000001,
+        "max_floor": 2,
+        "floor_violations": 0,
+        "posture_reversals": 0,
+        "n_decisions": 5000
+      }
+    ],
+    "masked": [
+      {
+        "agent": "masked",
+        "dose": 0.0,
+        "served_tier_histogram": [
+          0.0812,
+          0.7262,
+          0.1926
+        ],
+        "mean_served_tier": 1.1114000000000002,
+        "mean_tier_in_window": 1.1731246928000254,
+        "mean_headroom_in_window": 0.1829921640753719,
+        "n_establishing_in_window": 1596,
+        "mean_floor": 0.893,
+        "max_floor": 2,
+        "floor_violations": 0,
+        "posture_reversals": 0,
+        "n_decisions": 5000
+      },
+      {
+        "agent": "masked",
+        "dose": 0.25,
+        "served_tier_histogram": [
+          0.07819999999999999,
+          0.7302,
+          0.1916
+        ],
+        "mean_served_tier": 1.1134,
+        "mean_tier_in_window": 1.1808455483810154,
+        "mean_headroom_in_window": 0.20105117192407737,
+        "n_establishing_in_window": 1606,
+        "mean_floor": 0.8896,
+        "max_floor": 2,
+        "floor_violations": 0,
+        "posture_reversals": 0,
+        "n_decisions": 5000
+      },
+      {
+        "agent": "masked",
+        "dose": 0.5,
+        "served_tier_histogram": [
+          0.1008,
+          0.7534000000000001,
+          0.14579999999999999
+        ],
+        "mean_served_tier": 1.045,
+        "mean_tier_in_window": 1.073410135246867,
+        "mean_headroom_in_window": 0.3132060217481488,
+        "n_establishing_in_window": 1942,
+        "mean_floor": 0.7434000000000001,
+        "max_floor": 2,
+        "floor_violations": 0,
+        "posture_reversals": 0,
+        "n_decisions": 5000
+      },
+      {
+        "agent": "masked",
+        "dose": 0.75,
+        "served_tier_histogram": [
+          0.1436,
+          0.712,
+          0.1444
+        ],
+        "mean_served_tier": 1.0008,
+        "mean_tier_in_window": 0.9630233362230095,
+        "mean_headroom_in_window": 0.20618153859116953,
+        "n_establishing_in_window": 1949,
+        "mean_floor": 0.7434000000000001,
+        "max_floor": 2,
+        "floor_violations": 0,
+        "posture_reversals": 0,
+        "n_decisions": 5000
+      },
+      {
+        "agent": "masked",
+        "dose": 1.0,
+        "served_tier_histogram": [
+          0.1032,
+          0.7524,
+          0.1444
+        ],
+        "mean_served_tier": 1.0412,
+        "mean_tier_in_window": 1.0636532188152996,
+        "mean_headroom_in_window": 0.30931285810583076,
+        "n_establishing_in_window": 1949,
+        "mean_floor": 0.7434000000000001,
+        "max_floor": 2,
+        "floor_violations": 0,
+        "posture_reversals": 0,
+        "n_decisions": 5000
+      }
+    ]
+  },
+  "detectability": {
+    "0.0": {
+      "duty_cycle": 0.0,
+      "max_first_difference": 0.0,
+      "mean_suppression": 0.0
+    },
+    "0.25": {
+      "duty_cycle": 0.5196,
+      "max_first_difference": 0.0050000000000001155,
+      "mean_suppression": 0.125
+    },
+    "0.5": {
+      "duty_cycle": 0.5196,
+      "max_first_difference": 0.010000000000000009,
+      "mean_suppression": 0.25
+    },
+    "0.75": {
+      "duty_cycle": 0.5196,
+      "max_first_difference": 0.015000000000000124,
+      "mean_suppression": 0.375
+    },
+    "1.0": {
+      "duty_cycle": 0.5196,
+      "max_first_difference": 0.020000000000000018,
+      "mean_suppression": 0.5
+    }
+  },
+  "soft_reward_tier_drop": 0.2113816738816739,
+  "masked_tier_drop": -0.12632069403045887,
+  "soft_reward_optimal_tier_by_threat": [
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    2
+  ],
+  "soft_reward_learned_tier_by_threat": [
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "masked_floor_by_threat": [
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+  ],
+  "soft_reward_tier_slide": 2,
+  "total_floor_violations": 0,
+  "total_posture_reversals": 0
+}

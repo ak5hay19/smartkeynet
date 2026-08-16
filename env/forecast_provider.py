@@ -22,6 +22,35 @@ from env.contracts import (
 )
 
 
+def _squash_non_negative(raw_signal: float) -> float:
+    """Map a non-negative raw threat signal onto `[0, 1)` with 0 -> 0.
+
+        squash(x) = 2 * sigmoid(x) - 1
+
+    WHY NOT A PLAIN SIGMOID (fixed 2026-08-15). The threat features
+    this forecaster is fed are all non-negative quantities (QBER, a
+    normalised load, a scenario threat boost), so a plain
+    `sigmoid(mean(features))` can never return less than 0.5. With
+    posture anchors at {0.0, 0.5, 1.0}, that put the nearest anchor at
+    ELEVATED or above *always*: `ThreatPosture.CALM` was unreachable,
+    and a benign S1 episode sat at ELEVATED from its very first step.
+
+    That is not a cosmetic problem. It silently raised every floor in
+    the baseline scenario, it left S2 demonstrating ELEVATED -> HIGH
+    rather than the intended CALM -> ELEVATED -> HIGH progression, and
+    it meant the "posture" input to the policy table carried almost no
+    information -- one of its three values was dead.
+
+    `2 * sigmoid(x) - 1` is the same monotone squashing with the
+    half-line `[0, inf)` mapped onto `[0, 1)` instead of `[0.5, 1)`. It
+    is 0 at 0, so a quiet link with no load reads as genuinely calm,
+    and it is strictly increasing, so the Hard Rule 2 property that a
+    larger raw signal can only produce a higher posture is preserved
+    exactly.
+    """
+    return float(2.0 / (1.0 + np.exp(-raw_signal)) - 1.0)
+
+
 class MovingAverageForecaster(ForecastProvider):
     """EWMA-of-SKR-and-arrivals fallback forecaster (Addition A).
 
@@ -92,7 +121,7 @@ class MovingAverageForecaster(ForecastProvider):
     def update(self, observation: ForecastObservation) -> None:
         threat_features = observation["threat_features"]
         raw_signal = float(np.mean(threat_features)) if len(threat_features) > 0 else 0.0
-        squashed_signal = float(1.0 / (1.0 + np.exp(-raw_signal)))
+        squashed_signal = _squash_non_negative(raw_signal)
 
         self._threat_score = self._ewma(self._threat_score, squashed_signal)
         self._pool_fill = self._ewma(self._pool_fill, float(observation["pool_fill"]))

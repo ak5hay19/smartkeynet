@@ -1,0 +1,71 @@
+{
+  "train_seeds": [
+    0,
+    1
+  ],
+  "eval_seeds": [
+    2000,
+    2001,
+    2002
+  ],
+  "total_steps": 15000,
+  "modes": {
+    "off": {
+      "S3": {
+        "mean_reward": -1835846.4305999896,
+        "std_reward": 91046.84963103573,
+        "mean_regret_events": 317.1666666666667,
+        "mean_p99_latency": 1.5,
+        "total_floor_violations": 0
+      },
+      "S6": {
+        "mean_reward": -3071828.6588666663,
+        "std_reward": 1230588.2708399699,
+        "mean_regret_events": 554.6666666666666,
+        "mean_p99_latency": 1.5,
+        "total_floor_violations": 0
+      }
+    },
+    "ewma": {
+      "S3": {
+        "mean_reward": -1838534.2418999898,
+        "std_reward": 77136.72738036879,
+        "mean_regret_events": 317.8333333333333,
+        "mean_p99_latency": 1.5,
+        "total_floor_violations": 0
+      },
+      "S6": {
+        "mean_reward": -3035539.9746333347,
+        "std_reward": 1241547.4687206428,
+        "mean_regret_events": 552.3333333333334,
+        "mean_p99_latency": 1.5,
+        "total_floor_violations": 0
+      }
+    },
+    "lstm": {
+      "S3": {
+        "mean_reward": -6281331.311200082,
+        "std_reward": 241018.4310014597,
+        "mean_regret_events": 722.0,
+        "mean_p99_latency": 1.5,
+        "total_floor_violations": 0
+      },
+      "S6": {
+        "mean_reward": -3064731.839999996,
+        "std_reward": 1229804.978671014,
+        "mean_regret_events": 554.0,
+        "mean_p99_latency": 1.5,
+        "total_floor_violations": 0
+      }
+    }
+  },
+  "s3_regret_by_mode": {
+    "off": 317.1666666666667,
+    "ewma": 317.8333333333333,
+    "lstm": 722.0
+  },
+  "lstm_beats_off_on_s3_regret": false,
+  "lstm_beats_ewma_on_s3_regret": false,
+  "best_mode_on_s3_regret": "off",
+  "ewma_beats_off_on_s3_regret": false
+}

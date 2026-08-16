@@ -97,13 +97,44 @@ summarized here for anyone reading the code cold):
    `{"enabled": False, ...}` all mean "no spike" -- byte-identical to
    this key not existing at all. Nothing else about `scenario`
    dispatch changes because of this: it is orthogonal to S1-S6 and
-   layers on top of whichever scenario is active (today, only S1).
+   layers on top of whichever scenario is active.
+10. **Scenario dispatch (2026-08-15)**: `config["scenario"]` is now
+   resolved through `env/scenarios.py` into a frozen `ScenarioSpec`
+   and applied through exactly three exogenous channels -- the SKR/QBER
+   trace (S3's QBER drift), the request stream (S4's tenant flood), and
+   the forecaster's threat-feature input (S2's elevation windows). No
+   scenario adds a branch to `step()`, and none of them is visible to
+   the agent as anything other than different numbers in the same
+   state vector (Hard Rule 3). `config["request_source"]` selects the
+   plain Poisson stream (`"random"`, the default and previous
+   behaviour) or the NetworkX tenant graph (`"graph"`).
+11. **The QKD scarcity price is per KEY, not per bit (2026-08-15 fix)**.
+   PLAN.md §4's reward formula reads "- w_qkd*(pool bits consumed)"
+   and this module took that literally, multiplying `w_qkd` by the raw
+   256-bit draw. But `configs/default.yaml` documents `w_qkd` as a
+   price per key, and SMARTKEYNET_BUILD_SPEC.md §3.2 states it
+   outright: "w_qkd: 1.5  # per 256-bit key consumed". Charging per bit
+   made the term 256x its intended size and produced a reward in which
+   **starving was cheaper than spending**: one hybrid serve cost 256
+   while deferring a critical request for ten steps cost only
+   `r_starve * 10 = 100`. Spec §S5 test 5 names this exact inversion --
+   "If this inequality fails, the agent learns to starve instead of
+   spend, and your headline result inverts."
+
+   The bug was unobservable before the same day's scarcity
+   recalibration: with the pool pinned at 100% full, no policy ever had
+   to trade a key against a deferral, so the relative size of the two
+   terms never influenced a decision. Both fixes are needed for either
+   to matter. `_assert_reward_weights_are_sane()` now enforces the
+   spec's `r_starve >= 5 * w_qkd` inequality at construction so this
+   cannot silently regress.
 ---------------------------------------------------------------------
 """
 
 from __future__ import annotations
 
 from collections import deque
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Iterator
 
@@ -126,9 +157,14 @@ from env.contracts import (
 )
 from env.deferral_queue import DeferralQueue
 from env.forecast_provider import MovingAverageForecaster
-from env.masking import PolicyTable, compute_mask
+from env.masking import PolicyTable, compute_mask, effective_floor_for
 from env.pool_sim import PoolSim, SyntheticSKRQBERTrace
-from env.request_generator import random_request_generator
+from env.request_generator import (
+    RequestGenerator,
+    build_tenant_graph,
+    random_request_generator,
+)
+from env.scenarios import ScenarioSpec, build_scenario
 
 
 class IllegalActionError(Exception):
@@ -205,11 +241,10 @@ class SmartKeyNetEnv(gym.Env):
     `ForecastProvider` is constructed and how long the flattened state
     vector is.
 
-    Only S1 (benign baseline) scenario dispatch is implemented this
-    session -- `SyntheticSKRQBERTrace` is always constructed without
-    spike parameters, and `migration_schedule`/other scenario-specific
-    wiring is future work. `config["scenario"]` is read but not yet
-    acted on beyond that.
+    Scenario dispatch covers S1-S4 (see design decision 10). S5 and S6
+    resolve to eval-only specs that currently carry no perturbations:
+    S5's adversarial trace lives in `attack/` and S6's migration
+    schedule wiring are both future sessions' work.
     """
 
     _TRACE_N_STEPS = 200_000
@@ -233,6 +268,18 @@ class SmartKeyNetEnv(gym.Env):
     hit in practice since `random_request_generator`'s arrival rate is
     fixed and nonzero."""
 
+    _SCENARIO_REFERENCE_STEPS = 2_500
+    """Default episode length that step-indexed scenario schedules are
+    written against, overridable via `config["scenario_steps"]`.
+
+    S3's QBER drift ramp occupies the middle third of *this* many
+    steps, so it must not be confused with `config["max_steps"]` (which
+    counts agent decisions and is often much shorter during evaluation).
+    2500 steps is ~21 pool refill-from-empty times under the calibrated
+    physics -- SMARTKEYNET_BUILD_SPEC.md §7.1 fix A asks for at least
+    20x, "so a bad spend has visible consequences within the episode".
+    """
+
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config
         self._pool_capacity = float(config["pool"]["capacity_bits"])
@@ -240,10 +287,23 @@ class SmartKeyNetEnv(gym.Env):
         self._bits_per_hybrid_draw = float(config["pool"]["bits_per_hybrid_draw"])
         self._max_key_age = float(config["key_lifetime"]["max_key_age_steps"])
         self._reward_cfg = config["reward"]
+        self._assert_reward_weights_are_sane()
         self._use_foresight = config.get("use_foresight", "off")
         self._seed = config.get("seed")
         self._max_steps = config.get("max_steps")
         self._load_spike_cfg = self._build_load_spike_cfg(config.get("load_spike"))
+
+        # --- scenario dispatch (design decision 10) ---
+        self._qkd_cfg = config.get("qkd", {})
+        self._request_source = config.get("request_source", "random")
+        self._scenario_steps = int(config.get("scenario_steps", self._SCENARIO_REFERENCE_STEPS))
+        self._scenario: ScenarioSpec = build_scenario(
+            config.get("scenario", "S1"), config, self._scenario_steps
+        )
+        # S5 only. Injected by the attack experiment rather than read
+        # from YAML, because it is a per-run adversary parameter, not a
+        # deployment setting. `None` in every other scenario.
+        self._steering_trace = config.get("steering_trace")
 
         # Populated fresh by reset(); typed here for clarity.
         self._pool_sim: PoolSim | None = None
@@ -271,6 +331,7 @@ class SmartKeyNetEnv(gym.Env):
         self._last_pool_state = None
 
         self._current_request: Request | None = None
+        self._current_posture: ThreatPosture = ThreatPosture.CALM
         self._current_floor: Action | None = None
         self._current_reuse_masked_due_to_age = False
         self._current_mask: ActionMask | None = None
@@ -287,10 +348,7 @@ class SmartKeyNetEnv(gym.Env):
         provider's window."""
         episode_seed = seed if seed is not None else self._seed
 
-        trace = SyntheticSKRQBERTrace(
-            n_steps=self._TRACE_N_STEPS,
-            seed=episode_seed if episode_seed is not None else 0,
-        )
+        trace = self._build_trace(episode_seed if episode_seed is not None else 0)
         self._pool_sim = PoolSim(
             capacity=self._pool_capacity,
             trace=trace,
@@ -300,7 +358,7 @@ class SmartKeyNetEnv(gym.Env):
         self._deferral_queue = DeferralQueue()
         self._policy_table = PolicyTable()  # fresh every episode -- sticky ratchet must not carry over
         self._forecaster = self._build_forecaster()
-        self._request_stream = random_request_generator(seed=episode_seed, load_spike=self._load_spike_cfg)
+        self._request_stream = self._build_request_stream(episode_seed)
         self._peeked_arrival = None
 
         self._sessions = {}
@@ -386,6 +444,32 @@ class SmartKeyNetEnv(gym.Env):
     # Internal wiring
     # -----------------------------------------------------------------
 
+    def _assert_reward_weights_are_sane(self) -> None:
+        """Load-time guard on the reward's internal balance.
+
+        SMARTKEYNET_BUILD_SPEC.md §S5 test 5: "the reward of 'defer one
+        critical request for 10 steps' must be worse than 'spend 1 key'
+        for any config satisfying `r_starve >= 5 * w_qkd`. Assert the
+        config satisfies it at load time. **If this inequality fails,
+        the agent learns to starve instead of spend, and your headline
+        result inverts.**"
+
+        This is not a security constraint and does not touch Hard Rule
+        1 -- it is an ordering constraint between two purely
+        operational costs (a resource price and an availability
+        penalty). See design decision 11 for the units bug that made
+        this guard necessary.
+        """
+        r_starve = float(self._reward_cfg["r_starve"])
+        w_qkd = float(self._reward_cfg["w_qkd"])
+        if r_starve < 5.0 * w_qkd:
+            raise ValueError(
+                f"reward.r_starve ({r_starve}) must be at least 5 x reward.w_qkd "
+                f"({w_qkd}) -- otherwise deferring a critical request is cheaper than "
+                "spending a key, and the agent learns to starve instead of spend "
+                "(SMARTKEYNET_BUILD_SPEC.md §S5 test 5)"
+            )
+
     @staticmethod
     def _build_load_spike_cfg(raw: dict[str, Any] | None) -> dict[str, float] | None:
         """Normalize `config["load_spike"]` into the shape
@@ -402,16 +486,96 @@ class SmartKeyNetEnv(gym.Env):
             "low_rate_multiplier": raw["low_rate_multiplier"],
         }
 
+    def _build_trace(self, episode_seed: int) -> SyntheticSKRQBERTrace:
+        """Construct the SKR/QBER trace for this episode, applying the
+        scenario's QBER drift schedule if it has one (S3).
+
+        SKR/QBER process parameters come from `config["qkd"]` -- see
+        that block in `configs/default.yaml` for the scarcity
+        calibration they encode. Missing keys fall back to
+        `SyntheticSKRQBERTrace`'s own defaults, which are the same
+        calibrated values, so a slimmed-down test config still runs.
+        """
+        defaults = SyntheticSKRQBERTrace(n_steps=1)
+        return SyntheticSKRQBERTrace(
+            n_steps=self._TRACE_N_STEPS,
+            mean_skr_kbps=float(self._qkd_cfg.get("mean_skr_kbps", defaults.mean_skr_kbps)),
+            skr_noise_frac=float(self._qkd_cfg.get("skr_noise_frac", defaults.skr_noise_frac)),
+            baseline_qber=float(self._qkd_cfg.get("baseline_qber", defaults.baseline_qber)),
+            qber_noise_std=float(self._qkd_cfg.get("qber_noise_std", defaults.qber_noise_std)),
+            qber_abort=float(self._qkd_cfg.get("qber_abort", defaults.qber_abort)),
+            gate_kappa=float(self._qkd_cfg.get("gate_kappa", defaults.gate_kappa)),
+            drift=self._scenario.qber_drift,
+            seed=episode_seed,
+        )
+
+    def _build_request_stream(self, episode_seed: int | None) -> Iterator[Request]:
+        """Construct this episode's request stream.
+
+        Two interchangeable sources, selected by
+        `config["request_source"]`:
+
+          - `"random"` (default): `random_request_generator`, the plain
+            stationary Poisson process. Unchanged behaviour.
+          - `"graph"`: the NetworkX tenant graph sampled by
+            `RequestGenerator`, with tenant-level MMPP bursts and
+            tenant-conditioned sensitivity classes.
+
+        The two are drop-in substitutes behind the same
+        `Iterator[Request]` contract -- that substitutability *is* the
+        Hard Rule 3 test ("deleting the NetworkX graph and replacing it
+        with a plain arrival process must not change one line of agent
+        code"). Note the direction: the plain process is the
+        substitute, the graph is the real source.
+
+        S4's tenant flood is only meaningful on the graph source, since
+        the plain process has no tenant structure to target; requesting
+        S4 with `request_source: random` therefore raises rather than
+        silently running an unflooded episode.
+        """
+        if self._request_source == "random":
+            if self._scenario.tenant_flood is not None:
+                raise ValueError(
+                    f"scenario {self._scenario.name} needs a per-tenant flood, which "
+                    "request_source='random' cannot express (it has no tenant structure). "
+                    "Set request_source: graph."
+                )
+            return random_request_generator(seed=episode_seed, load_spike=self._load_spike_cfg)
+
+        if self._request_source == "graph":
+            graph = build_tenant_graph(
+                n_nodes=int(self._config.get("tenant_graph", {}).get("n_nodes", 50)),
+                seed=episode_seed,
+            )
+            generator = RequestGenerator(
+                graph, seed=episode_seed, tenant_flood=self._scenario.tenant_flood
+            )
+            return generator.as_stream()
+
+        raise ValueError(
+            f"unknown request_source {self._request_source!r} -- expected 'random' or 'graph'"
+        )
+
     def _build_forecaster(self) -> ForecastProvider | None:
         if self._use_foresight == "off":
             return None
         if self._use_foresight == "ewma":
             return MovingAverageForecaster()
         if self._use_foresight == "lstm":
-            raise NotImplementedError(
-                "use_foresight='lstm' requires forecaster.model.LSTMForecastProvider, "
-                "which doesn't exist yet (a future session's work)"
-            )
+            # Imported lazily: `forecaster/` pulls in the agents package
+            # for rollout collection, and importing it at module scope
+            # would make `env/` depend on `agents/` -- the wrong
+            # direction, and one the Hard Rule 3 graph-agnosticism test
+            # would rightly object to.
+            from forecaster.model import LSTMForecastProvider
+
+            checkpoint = self._config.get("forecaster_checkpoint", "checkpoints/forecaster.pt")
+            if not Path(checkpoint).exists():
+                raise FileNotFoundError(
+                    f"use_foresight='lstm' needs a trained forecaster at {checkpoint}. "
+                    "Train one with:  .venv/bin/python -m forecaster.train"
+                )
+            return LSTMForecastProvider.from_checkpoint(checkpoint)
         raise ValueError(f"unknown use_foresight value: {self._use_foresight!r}")
 
     def _advance_to_next_decision(self) -> tuple[StateDict, ActionMask, dict[str, Any]]:
@@ -514,8 +678,29 @@ class SmartKeyNetEnv(gym.Env):
     def _threat_features_placeholder(self) -> list[float]:
         """No real RT-IoT2022 threat-feature source is wired yet
         (Person A's future dataset-ingestion session) -- see module
-        docstring point 6. Not a real threat signal."""
-        return [self._last_pool_state.qber, self._current_load()]
+        docstring point 6. Not a real threat signal.
+
+        The scenario's threat boost (S2's elevation windows) is
+        appended as a third feature rather than added into the existing
+        two, so the exogenous signal stays separable from the
+        environment's own observations. It is non-negative by
+        construction (`env/scenarios.py` validates this), so it can
+        only ever raise the derived posture -- Hard Rule 2.
+        """
+        features = [
+            self._last_pool_state.qber,
+            self._current_load(),
+            self._scenario.threat_boost_at(self._step_count),
+        ]
+        if self._steering_trace is not None:
+            # S5: the adversary's influence enters HERE and nowhere else
+            # -- on the telemetry the forecaster reads. It never touches
+            # the policy table, the mask, or the pool. That containment
+            # is the whole experiment: the attack gets exactly the
+            # access a real adversary would plausibly have, and the
+            # question is what it can do with it.
+            features = self._steering_trace.apply(features, self._step_count)
+        return features
 
     def _current_load(self) -> float:
         backlog = len(self._pending_requests) + len(self._deferral_queue)
@@ -551,9 +736,34 @@ class SmartKeyNetEnv(gym.Env):
             hybrid_demand_hat = list(pool_forecast.hybrid_demand_hat)
             current_posture = ThreatPosture(int(np.argmax(threat_forecast.posture_probs)))
 
+        # Instantaneous (pre-ratchet) posture, exposed for the
+        # forecaster's supervised targets. The *ratcheted* posture is
+        # monotone and sticky, so labelling it produces a target that is
+        # "the same as now" 99.9% of the time and teaches a forecaster
+        # nothing; the raw reading is the quantity with something to
+        # predict. See forecaster/dataset.py.
+        self._current_posture = current_posture
+
         # design decision 7: exercise the sticky ratchet every decision
         self._policy_table.ratchet_up(current_posture)
-        floor = self._policy_table.floor(SensitivityClass(request["sensitivity_class"]), current_posture)
+        floor = self._policy_table.floor(
+            SensitivityClass(request["sensitivity_class"]),
+            current_posture,
+            pqc_capable=request["pqc_capable"],
+        )
+        # S6: the scripted migration schedule ratchets a tenant cohort's
+        # floor at a fixed step. Exogenous config, never agent-chosen
+        # (Hard Rule 3), and validated at build time to only ever raise
+        # a floor (Hard Rule 2), so `max` here is belt-and-braces rather
+        # than the guarantee itself.
+        cohort_floor = self._scenario.floor_overrides_at(self._step_count).get(request["tenant"])
+        if cohort_floor is not None:
+            floor = Action(max(int(floor), int(cohort_floor)))
+
+        # `REKEY_NOW` on a cold-start session adopts the floor's tier, and
+        # masking-gap-1 below gates it on the pool -- both must use the
+        # floor that is actually enforced, not the raw table value.
+        floor = effective_floor_for(request, floor)
 
         pool_can_draw_hybrid = self._pool_sim.can_draw(self._bits_per_hybrid_draw)
         reuse_masked_due_to_age = session.key_age >= self._max_key_age
@@ -563,6 +773,9 @@ class SmartKeyNetEnv(gym.Env):
             key_age=session.key_age,
             max_key_age=self._max_key_age,
             pool_can_draw=pool_can_draw_hybrid,
+            active_key_tier=(
+                _KEY_TYPE_TO_SERVE_ACTION[session.key_type] if session.key_type is not None else None
+            ),
         )
 
         # Masking gap #1 (discovered via testing, not anticipated by
@@ -580,7 +793,7 @@ class SmartKeyNetEnv(gym.Env):
         # environment-level augmentation on top of compute_mask's
         # output, not a change to masking.py's three rules.
         if bool(mask[Action.REKEY_NOW]):
-            prospective_tier = session.key_type if session.key_type is not None else _ACTION_TO_KEY_TYPE[floor]
+            prospective_tier = _ACTION_TO_KEY_TYPE[self._rekey_tier(session, floor)]
             if prospective_tier is KeyType.HYBRID and not pool_can_draw_hybrid:
                 mask[Action.REKEY_NOW] = False
 
@@ -648,10 +861,41 @@ class SmartKeyNetEnv(gym.Env):
         if action in _ACTION_TO_KEY_TYPE:
             return _ACTION_TO_KEY_TYPE[action]
         if action is Action.REKEY_NOW:
-            if session.key_type is not None:
-                return session.key_type
-            return _ACTION_TO_KEY_TYPE[floor]  # cold start: adopt the floor's tier (design decision 4)
+            return _ACTION_TO_KEY_TYPE[self._rekey_tier(session, floor)]
         return session.key_type  # REUSE
+
+    @staticmethod
+    def _rekey_tier(session: _SessionKeyState, floor: Action) -> Action:
+        """Tier `REKEY_NOW` re-establishes at: the session's current
+        tier, but never below the floor.
+
+        FIXED 2026-08-15 -- this was a Hard Rule 2 violation. The
+        original semantics (design decision 4) were "refresh the
+        session's *current* tier without changing it", which is wrong
+        whenever the floor has ratcheted up since that key was
+        established: a session holding a PQC key under a hybrid floor
+        would re-establish at PQC, one tier below the floor the mask had
+        just enforced. Measured on an S2 episode, 461 of 1,500
+        decisions did exactly this.
+
+        SMARTKEYNET_BUILD_SPEC.md §4.1 specifies the correct behaviour
+        outright: "REKEY_NOW is a *meta* action: it re-establishes at
+        the **lowest legal tier >= floor**".
+
+        This is the third floor hole found in the same session, all of
+        them in actions whose tier is state-dependent rather than named
+        by the action itself -- `hybrid_mandatory` not reaching the
+        mask, `REUSE` ignoring the active key's tier, and now this. That
+        is not a coincidence, and the spec flags exactly why:
+        "`REUSE`/`REKEY_NOW` are the only actions whose tier is
+        state-dependent, which is why masking must be recomputed from
+        the *current* key's tier every step". Any future action with a
+        state-dependent tier needs the same scrutiny.
+        """
+        if session.key_type is None:
+            return floor  # cold start: adopt the floor's tier
+        current_tier = _KEY_TYPE_TO_SERVE_ACTION[session.key_type]
+        return Action(max(int(current_tier), int(floor)))
 
     def _apply_action(self, action: Action) -> tuple[float, dict[str, Any]]:
         request = self._current_request
@@ -674,6 +918,10 @@ class SmartKeyNetEnv(gym.Env):
             self._pool_sim.draw(bits_consumed)
             self._hybrid_serves_accum += 1
 
+        # The scarcity price is charged per 256-bit ETSI KEY, not per bit
+        # (design decision 11).
+        keys_consumed = bits_consumed / self._bits_per_hybrid_draw
+
         cost_action = _KEY_TYPE_TO_SERVE_ACTION[new_key_type] if action is Action.REKEY_NOW else action
         latency = _LATENCY_UNITS[cost_action]
         energy = _ENERGY_UNITS[cost_action]
@@ -691,7 +939,7 @@ class SmartKeyNetEnv(gym.Env):
             -self._reward_cfg["w_lat"] * latency
             - self._reward_cfg["w_en"] * energy
             + self._reward_cfg["w_fr"] * freshness
-            - self._reward_cfg["w_qkd"] * bits_consumed
+            - self._reward_cfg["w_qkd"] * keys_consumed
             - rekey_cost
         )
         # -R_starve*deferred_critical_steps is added by the caller

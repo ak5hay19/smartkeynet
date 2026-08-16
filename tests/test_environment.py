@@ -33,6 +33,42 @@ from env.environment import (
 
 _TIER_ACTIONS = (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID)
 
+_SCARCE_OVERRIDES = {
+    "pool": {
+        "capacity_bits": 2_560.0,  # 10 ETSI keys
+        "initial_fill_frac": 0.0,
+        "bits_per_hybrid_draw": 256.0,  # the real ETSI draw, not an inflated one
+    },
+    "qkd": {"mean_skr_kbps": 0.02},  # ~0.078 keys/step: a link that cannot keep up
+}
+"""Config override that makes the pool genuinely bind, for the
+deferral/regret tests below.
+
+Two things changed here on 2026-08-15, for two different reasons.
+
+**Why the draw size went back to 256 bits.** These tests previously
+forced scarcity with `capacity_bits=500_000,
+bits_per_hybrid_draw=300_000` -- a single draw consuming 60% of the
+pool. That contrivance existed because the *real* physics had no
+scarcity at all: refill ran at 781 keys/step against a ceiling of 1
+key/step of demand, so no realistic draw could ever empty the pool
+(see `configs/default.yaml`'s scarcity calibration block). It also
+breaks outright against calibrated physics, for a mundane reason:
+accumulating 300,000 bits at 220 bits/step takes ~1,364 steps, so
+nothing drains inside a 300-step test.
+
+**Why refill is throttled rather than the draw inflated.** The tests
+below drive the env with a *random valid* policy, which serves hybrid
+on roughly one decision in five -- about 0.2 keys/step against the
+calibrated 0.859 keys/step of refill. That is a scarcity ratio near
+0.23, and at that ratio a random policy correctly *never* exhausts the
+pool: under the calibration, only always-hybrid (rho 1.14) runs a
+deficit. So provoking a deferral needs a link that cannot keep up with
+even modest demand, which is what `mean_skr_kbps: 0.02` expresses.
+That is the same knob scenario S3 turns, just held constant instead of
+ramped.
+"""
+
 
 def load_test_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     """Load the real `configs/default.yaml` (nothing hardcoded here)
@@ -159,9 +195,7 @@ def test_hybrid_mandatory_request_with_uncoverable_pool_never_reaches_agent():
     the agent (`env._current_request`) must never be hybrid-mandatory
     while the pool can't cover its draw -- if it were, it should have
     been diverted to the deferral queue instead (Hard Rule 9)."""
-    config = load_test_config(
-        overrides={"pool": {"capacity_bits": 500_000.0, "initial_fill_frac": 0.0, "bits_per_hybrid_draw": 300_000.0}}
-    )
+    config = load_test_config(overrides=_SCARCE_OVERRIDES)
     env = SmartKeyNetEnv(config)
     state, info = env.reset(seed=0)
     rng = np.random.default_rng(0)
@@ -222,7 +256,7 @@ def test_reward_matches_documented_formula_for_known_action():
     reward_cfg = config["reward"]
 
     resulting_key_type = _ACTION_TO_KEY_TYPE[floor]
-    bits_consumed = env._bits_per_hybrid_draw if resulting_key_type.name == "HYBRID" else 0.0
+    keys_consumed = 1.0 if resulting_key_type.name == "HYBRID" else 0.0
     cost_action = _KEY_TYPE_TO_SERVE_ACTION[resulting_key_type]
     latency = _LATENCY_UNITS[cost_action]
     energy = _ENERGY_UNITS[cost_action]
@@ -234,7 +268,7 @@ def test_reward_matches_documented_formula_for_known_action():
         -reward_cfg["w_lat"] * latency
         - reward_cfg["w_en"] * energy
         + reward_cfg["w_fr"] * freshness
-        - reward_cfg["w_qkd"] * bits_consumed
+        - reward_cfg["w_qkd"] * keys_consumed
         - rekey_cost
     )
 
@@ -242,6 +276,72 @@ def test_reward_matches_documented_formula_for_known_action():
 
     assert len(info["deferred_critical_steps"]) == 0  # nothing was queued to age
     assert reward == pytest.approx(expected_reward)
+
+
+def test_qkd_scarcity_price_is_charged_per_key_not_per_bit():
+    """Regression test for the 2026-08-15 units bug (design decision
+    11). `w_qkd` is documented as a price per 256-bit ETSI key, but was
+    multiplied by the raw bit count -- making the term 256x its
+    intended size.
+
+    The bug survived undetected because
+    `test_reward_matches_documented_formula_for_known_action` happens
+    to land on a non-hybrid floor at seed 0, so `bits_consumed` was
+    zero there and the term was never actually exercised. This test
+    forces a hybrid serve and pins the magnitude.
+    """
+    config = load_test_config()
+    env = SmartKeyNetEnv(config)
+    state, info = env.reset(seed=0)
+
+    # walk to a decision where SERVE_HYBRID is legal
+    for _ in range(200):
+        if info["action_mask"][Action.SERVE_HYBRID]:
+            break
+        action = next(a for a in Action if info["action_mask"][int(a)])
+        state, reward, terminated, truncated, info = env.step(action)
+    else:
+        pytest.fail("no SERVE_HYBRID-legal decision appeared within the search window")
+
+    fill_before = env._pool_sim.fill
+    state, reward, terminated, truncated, info = env.step(Action.SERVE_HYBRID)
+
+    # exactly one key's worth of bits left the pool...
+    drawn_bits = fill_before - env._pool_sim.fill
+    assert drawn_bits > 0
+
+    # ...and the scarcity price charged is w_qkd * 1 key, not w_qkd * 256 bits.
+    # Bound the whole reward below by the per-key charge plus the other
+    # (small, bounded) terms; a per-bit charge would be 256x larger and
+    # blow straight through this.
+    reward_cfg = config["reward"]
+    worst_case_other_terms = (
+        reward_cfg["w_lat"] * max(_LATENCY_UNITS.values())
+        + reward_cfg["w_en"] * max(_ENERGY_UNITS.values())
+        + reward_cfg["c_rekey_base"] * (1.0 + reward_cfg["c_rekey_load_beta"])
+        + reward_cfg["r_starve"] * len(info["deferred_critical_steps"])
+    )
+    assert reward >= -(reward_cfg["w_qkd"] * 1.0 + worst_case_other_terms)
+
+
+def test_starve_term_dominates_qkd_saving():
+    """SMARTKEYNET_BUILD_SPEC.md §S5 test 5: deferring one critical
+    request for ten steps must cost more than spending one key.
+    Otherwise the agent learns to starve rather than spend, and the
+    headline result inverts."""
+    reward_cfg = load_test_config()["reward"]
+    cost_of_deferring_ten_steps = reward_cfg["r_starve"] * 10
+    cost_of_spending_one_key = reward_cfg["w_qkd"] * 1.0
+    assert cost_of_deferring_ten_steps > cost_of_spending_one_key
+    assert reward_cfg["r_starve"] >= 5.0 * reward_cfg["w_qkd"]
+
+
+def test_env_rejects_a_config_where_starving_is_cheaper_than_spending():
+    """The same inequality, enforced at construction so it cannot
+    silently regress via a config edit."""
+    config = load_test_config(overrides={"reward": {"w_qkd": 100.0, "r_starve": 10.0}})
+    with pytest.raises(ValueError, match="r_starve"):
+        SmartKeyNetEnv(config)
 
 
 def test_reuse_reward_has_no_rekey_cost_or_pool_draw():
@@ -264,7 +364,16 @@ def test_reuse_reward_has_no_rekey_cost_or_pool_draw():
 
     fill_before = env._pool_sim.fill
     state, reward, terminated, truncated, info = env.step(Action.REUSE)
-    assert env._pool_sim.fill == pytest.approx(fill_before)  # REUSE never draws
+
+    # REUSE never draws. Asserting `fill == fill_before` would be wrong:
+    # the pool also *refills* during the step, so the level legitimately
+    # rises. (That assertion passed before the 2026-08-15 recalibration
+    # only because the pool was permanently pinned at capacity, where
+    # refill is clipped to zero -- it was testing pool saturation, not
+    # REUSE.) A draw costs 256 bits against ~220 bits/step of refill, so
+    # any draw would show up as a net *decrease*: a non-decreasing level
+    # is a genuine discriminator here.
+    assert env._pool_sim.fill >= fill_before
     assert "forced_rekey" not in info
 
 
@@ -297,10 +406,35 @@ def test_foresight_fields_populated_under_ewma():
     assert state["skr_mean_hat"][0] > 0.0
 
 
-def test_lstm_foresight_raises_not_implemented():
+def test_lstm_foresight_loads_a_trained_checkpoint():
+    """`use_foresight: lstm` used to raise `NotImplementedError`; as of
+    2026-08-15 it loads `forecaster.model.LSTMForecastProvider` from a
+    checkpoint. Skipped rather than failed when no checkpoint has been
+    trained yet, so a fresh clone still gets a green suite -- training
+    one takes minutes and is not a unit-test concern."""
+    from pathlib import Path
+
+    checkpoint = Path("checkpoints/forecaster.pt")
+    if not checkpoint.exists():
+        pytest.skip("no trained forecaster checkpoint -- run `python -m forecaster.train`")
+
     config = load_test_config(overrides={"use_foresight": "lstm"})
     env = SmartKeyNetEnv(config)
-    with pytest.raises(NotImplementedError):
+    state, info = env.reset(seed=0)
+
+    assert len(state["pool_level_hat"]) == 3
+    assert len(state["threat_forecast"]) == 5
+    assert info["action_mask"].any()
+
+
+def test_lstm_foresight_without_a_checkpoint_fails_loudly():
+    """A missing checkpoint must not silently fall back to EWMA -- that
+    would make an E-A ablation row secretly a duplicate of another."""
+    config = load_test_config(
+        overrides={"use_foresight": "lstm", "forecaster_checkpoint": "checkpoints/_absent.pt"}
+    )
+    env = SmartKeyNetEnv(config)
+    with pytest.raises(FileNotFoundError, match="forecaster.train"):
         env.reset(seed=0)
 
 
@@ -330,9 +464,7 @@ def test_gate_full_s1_episode_random_valid_policy_zero_floor_violations():
 
 
 def test_gate_regret_events_logged_and_deferred_request_eventually_served():
-    config = load_test_config(
-        overrides={"pool": {"capacity_bits": 500_000.0, "initial_fill_frac": 0.0, "bits_per_hybrid_draw": 300_000.0}}
-    )
+    config = load_test_config(overrides=_SCARCE_OVERRIDES)
     env = SmartKeyNetEnv(config)
     state, info = env.reset(seed=7)
     rng = np.random.default_rng(7)
@@ -341,7 +473,12 @@ def test_gate_regret_events_logged_and_deferred_request_eventually_served():
     floor_violations = 0
     queue_len_history = [len(env._deferral_queue)]
 
-    for _ in range(250):
+    # 900 rather than 250 decisions: at the scarce override's refill rate
+    # (~0.078 keys/step) draining a queue that has built to ~30 deep
+    # takes on the order of 400 steps, so a 250-step run could observe
+    # the queue filling but never emptying and would fail on a scenario
+    # that is in fact behaving correctly.
+    for _ in range(900):
         floor = env._current_floor
         action, (state, reward, terminated, truncated, info) = take_random_valid_step(env, rng, info)
 

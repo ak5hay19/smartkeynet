@@ -17,6 +17,7 @@ import pytest
 from agents.baselines import (
     AlwaysHybridPolicy,
     AlwaysPQCPolicy,
+    GreedyRecommenderPolicy,
     RandomPolicy,
     StaticThresholdPolicy,
 )
@@ -45,11 +46,33 @@ def _all_nonempty_masks() -> list[np.ndarray]:
 ALL_MASKS = _all_nonempty_masks()
 
 
-def _dummy_state(pool_fill: float = 0.5) -> dict:
-    """Minimal `StateDict` stand-in -- only `pool_fill` is ever read by
-    any policy in this module (`StaticThresholdPolicy`); the others
-    ignore `state` entirely."""
-    return {"pool_fill": pool_fill}
+MAX_KEY_AGE = 500.0
+"""Key-lifetime cap `L` for the dummy states below. Fixed here rather
+than read from config so these unit tests stay independent of config
+edits; policies that read it are constructed with a matching explicit
+`max_key_age`."""
+
+
+def _dummy_state(
+    pool_fill: float = 0.5,
+    key_age: float = MAX_KEY_AGE,
+    sensitivity_class: int = 3,
+) -> dict:
+    """Minimal `StateDict` stand-in covering the fields the policies read.
+
+    `key_age` defaults to the cap -- i.e. "the existing key is stale, so
+    `StaticThresholdPolicy`'s key-lifetime rule does not fire" -- which
+    keeps these tests aimed at the *tier* half of that policy, exactly
+    as they were written before the `rho`/REUSE rule was added on
+    2026-08-15. `sensitivity_class` defaults to the highest class for
+    the same reason: it clears any `min_hybrid_class` gate so the tier
+    rule is what is under test.
+    """
+    return {
+        "pool_fill": pool_fill,
+        "key_age": key_age,
+        "sensitivity_class": sensitivity_class,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +161,13 @@ def test_static_threshold_flips_at_boundary():
     mask = _mask(*list(Action))  # nothing else constrains the choice
 
     assert policy.act(_dummy_state(0.5 + 1e-9), mask) == Action.SERVE_HYBRID
-    assert policy.act(_dummy_state(0.5), mask) == Action.SERVE_PQC  # exactly at threshold: not "exceeds"
+    # Inclusive at the threshold: SMARTKEYNET_BUILD_SPEC.md §S7 defines
+    # the rule as "serve hybrid iff pool_fill >= tau". This was a strict
+    # ">" until 2026-08-15; the boundary itself is not load-bearing (the
+    # threshold is grid-searched over a coarse grid either way), but
+    # matching the spec exactly keeps the baseline defensible.
+    assert policy.act(_dummy_state(0.5), mask) == Action.SERVE_HYBRID
+    assert policy.act(_dummy_state(0.5 - 1e-9), mask) == Action.SERVE_PQC
     assert policy.act(_dummy_state(0.5 - 1e-9), mask) == Action.SERVE_PQC
 
 
@@ -205,3 +234,87 @@ def test_random_policy_single_legal_action_always_returned():
     policy = RandomPolicy(seed=3)
     for _ in range(20):
         assert policy.act(_dummy_state(), mask) == Action.REKEY_NOW
+
+
+# ---------------------------------------------------------------------------
+# StaticThresholdPolicy's key-lifetime rule (added 2026-08-15)
+#
+# Regression coverage for the strawman-baseline bug: without the
+# `rho`/REUSE half of the spec's rule, this policy re-established key
+# material on every single decision and the DQN beat it by an order of
+# magnitude purely by discovering REUSE.
+# ---------------------------------------------------------------------------
+
+
+def test_reuses_a_fresh_key_instead_of_rekeying():
+    policy = StaticThresholdPolicy(pool_fill_threshold=0.5, rekey_age_frac=0.9, max_key_age=MAX_KEY_AGE)
+    mask = _mask(*list(Action))
+    state = _dummy_state(pool_fill=1.0, key_age=0.1 * MAX_KEY_AGE)
+    assert policy.act(state, mask) == Action.REUSE
+
+
+def test_rekeys_once_the_key_passes_the_age_fraction():
+    policy = StaticThresholdPolicy(pool_fill_threshold=0.5, rekey_age_frac=0.9, max_key_age=MAX_KEY_AGE)
+    mask = _mask(*list(Action))
+
+    just_under = _dummy_state(pool_fill=1.0, key_age=0.9 * MAX_KEY_AGE - 1)
+    just_over = _dummy_state(pool_fill=1.0, key_age=0.9 * MAX_KEY_AGE)
+
+    assert policy.act(just_under, mask) == Action.REUSE
+    assert policy.act(just_over, mask) != Action.REUSE
+
+
+def test_never_reuses_when_reuse_is_masked_however_fresh_the_key():
+    """The mask always wins over the policy's own preference."""
+    policy = StaticThresholdPolicy(pool_fill_threshold=0.5, rekey_age_frac=0.9, max_key_age=MAX_KEY_AGE)
+    mask = _mask(Action.SERVE_PQC, Action.SERVE_HYBRID, Action.REKEY_NOW)
+    state = _dummy_state(pool_fill=1.0, key_age=0.0)
+    assert policy.act(state, mask) != Action.REUSE
+
+
+def test_min_hybrid_class_gates_pool_spending():
+    """`c_min`: a class below the gate must not spend the pool even
+    with a full pool and hybrid legal."""
+    policy = StaticThresholdPolicy(
+        pool_fill_threshold=0.0, min_hybrid_class=2, rekey_age_frac=0.0, max_key_age=MAX_KEY_AGE
+    )
+    mask = _mask(*list(Action))
+
+    below_gate = _dummy_state(pool_fill=1.0, key_age=MAX_KEY_AGE, sensitivity_class=1)
+    at_gate = _dummy_state(pool_fill=1.0, key_age=MAX_KEY_AGE, sensitivity_class=2)
+
+    assert policy.act(below_gate, mask) == Action.SERVE_PQC
+    assert policy.act(at_gate, mask) == Action.SERVE_HYBRID
+
+
+@pytest.mark.parametrize("mask", ALL_MASKS)
+def test_static_threshold_with_all_three_params_never_illegal(mask):
+    policy = StaticThresholdPolicy(
+        pool_fill_threshold=0.5, min_hybrid_class=2, rekey_age_frac=0.5, max_key_age=MAX_KEY_AGE
+    )
+    for key_age in (0.0, 0.4 * MAX_KEY_AGE, MAX_KEY_AGE):
+        for sensitivity_class in range(4):
+            action = policy.act(_dummy_state(0.7, key_age, sensitivity_class), mask)
+            assert mask[int(action)]
+
+
+# ---------------------------------------------------------------------------
+# GreedyRecommenderPolicy (spec §S7 diagnostic 6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mask", ALL_MASKS)
+def test_greedy_recommender_never_illegal(mask):
+    action = GreedyRecommenderPolicy().act(_dummy_state(), mask)
+    assert mask[int(action)]
+
+
+def test_greedy_recommender_prefers_reuse_then_cheapest_tier():
+    policy = GreedyRecommenderPolicy()
+    state = _dummy_state()
+
+    assert policy.act(state, _mask(*list(Action))) == Action.REUSE
+    assert policy.act(state, _mask(Action.SERVE_CLASSICAL, Action.SERVE_HYBRID)) == Action.SERVE_CLASSICAL
+    assert policy.act(state, _mask(Action.SERVE_PQC, Action.SERVE_HYBRID)) == Action.SERVE_PQC
+    # hybrid is the last resort: it is the only action that pays w_qkd
+    assert policy.act(state, _mask(Action.SERVE_HYBRID)) == Action.SERVE_HYBRID
