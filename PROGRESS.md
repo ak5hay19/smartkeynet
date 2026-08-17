@@ -11,12 +11,16 @@
 
 ## Next task
 
-**Still not resolved, and the 2026-08-17 budget probe made it more
-specific, not simpler.** The stuck-seed question is not "needs more
-training steps" — it's a mid-training regression that needs its own
-investigation before real S4 or any further DQN numbers are generated.
-See SESSION_LOG.md 2026-08-17 for the full probe. Four sessions on this
-thread now (three same-day 2026-08-10, one 2026-08-17); recap in order:
+**The 2026-08-18 dense re-probe overturned the 2026-08-17 "mid-training
+regression" framing itself.** There is no localized regression event —
+`forced_rekey_ratio` oscillates continuously (swings of 0.5+ between
+adjacent 1,000-step snapshots, about 1 in 3 of the time) across the
+*entire* 1,000-75,000 step range, for every seed tested, including the
+one previously read as "flat, never found a good policy." The earlier
+3-point sample (25k/50k/75k) was undersampling this noise, not
+observing a real found-then-lost event. See SESSION_LOG.md 2026-08-18
+for the full data. Five sessions on this thread now (three same-day
+2026-08-10, one 2026-08-17, one 2026-08-18); recap in order:
 
 1. First load-spike session: `forced_rekey_ratio` dropped from flat
    S1's `1.000` to `0.256`/`0.872` across two training seeds —
@@ -73,24 +77,51 @@ thread now (three same-day 2026-08-10, one 2026-08-17); recap in order:
    convergence-speed question. See SESSION_LOG.md 2026-08-17 for all
    six data points.
 
-**Concretely next: a dedicated training-stability investigation, not
-real S4, and not more budget probing.** The regression pattern found
-2026-08-17 needs characterizing before any further DQN numbers
-(S4 or otherwise) are worth trusting: same-seed runs with much more
-frequent eval snapshots (not three points at 25k/50k/75k) to see
-whether the regression from a good intermediate policy is gradual or
-sudden, whether it correlates with `dqn.target_update_every` (currently
-`1000`) or with the epsilon schedule reaching its floor
-(`epsilon_decay_steps=12_500`, well before 50k or 75k — worth checking
-whether more exploration late in a longer run would help, which the
-current schedule doesn't test), and ideally per-step Q-value/loss
-inspection around the transition. Real S4 still needs the tenant graph
-(`build_tenant_graph`/`RequestGenerator`, still `NotImplementedError`)
-for genuine per-tenant flooding regardless of this thread — the
-load-spike diagnostic remains a cruder, tenant-blind stand-in, not real
-S4 itself. Do not mistake `configs/default.yaml`'s `load_spike:` block
-or `random_request_generator`'s `load_spike` kwarg for finished S4
-work — both are documented as a diagnostic stub throughout.
+5. **2026-08-18 dense diagnostic** re-ran seeds `1`, `4`, `7` to
+   75,000 steps with `eval_every=1000` (~75 snapshots instead of 3) to
+   localize the 2026-08-17 regression's onset. Found none — max
+   single-window swings of `0.90`-`0.92` occur throughout the entire
+   run for every seed, not just around the buffer-capacity crossing at
+   step `50,000`. **Buffer-capacity hypothesis: ruled out** — loss is
+   unremarkable around step 50,000 (matches its neighbors, no spike),
+   and swing amplitude doesn't shrink or shift near that step. There
+   *is* a real, separate, noisy long-run trend — the fraction of
+   snapshots sitting exactly at the `1.000` ceiling roughly doubles
+   each third of a run (seed 1: `8% -> 48% -> 64%`) — but it's a
+   smooth drift across the whole run, not a step-change tied to
+   `12,500` (epsilon-decay-complete) or `50,000` (buffer-capacity)
+   specifically, and the swings persist at full amplitude even in the
+   run's final third.
+
+**Concretely next (pick one — a real decision, not more solo
+running): either (a) check whether the swings are a single-eval-episode
+measurement artifact, or (b) accept the noise and move on to S4
+reporting averaged, not point-estimate, numbers.** Two candidate
+next diagnostics were identified 2026-08-18, neither run yet:
+(a) evaluate the same training checkpoints against multiple eval seeds
+(or a longer `eval_max_steps`) to check whether `forced_rekey_ratio`
+swings shrink when averaged over several episodes instead of one fixed
+250-step trajectory — plausible mechanism: one early Q-value flip in a
+single deterministic eval episode can cascade into a very different
+key-age trajectory for the rest of that episode, without the
+*underlying* policy having changed nearly as much as a single-episode
+metric suggests; (b) 2026-08-18's own probe used `eval_every=1000`,
+identical to `dqn.target_update_every=1000`, so every eval snapshot sat
+at a fixed phase relative to a target-network sync and nothing is known
+about behavior *between* snapshots — an eval cadence that isn't a
+multiple of `target_update_every` (e.g. `750`) would rule this in or
+out. Either way, until one of these lands, **any future
+`forced_rekey_ratio` number for this config should be reported as a
+distribution across eval seeds, not a single fixed-episode point
+estimate** — a single-episode number is now known to be unreliable to
+within +/-0.5 of the "true" value at almost any training step. Real S4
+still needs the tenant graph (`build_tenant_graph`/`RequestGenerator`,
+still `NotImplementedError`) for genuine per-tenant flooding regardless
+of this thread — the load-spike diagnostic remains a cruder,
+tenant-blind stand-in, not real S4 itself. Do not mistake
+`configs/default.yaml`'s `load_spike:` block or
+`random_request_generator`'s `load_spike` kwarg for finished S4 work —
+both are documented as a diagnostic stub throughout.
 
 ---
 
@@ -124,9 +155,14 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       measurement artifact. **2026-08-17: a budget probe on 3 stuck seeds at 50k/75k steps
       found this isn't a training-budget question either** — two of the three reached good
       intermediate values at 50k then regressed back to the exact ceiling by 75k, a
-      mid-training instability, not slow convergence. Whenever Gate W3 is attempted for
-      real, it needs multi-seed reporting AND a resolved training-stability story, not a
-      single run. Evidence toward attempting the gate once S3 exists, not the gate itself.)*
+      mid-training instability, not slow convergence. **2026-08-18: a denser (every-1000-step)
+      re-probe overturned even that framing** — there's no localized regression at all;
+      `forced_rekey_ratio` swings 0.5+ between adjacent 1,000-step snapshots roughly 1 in 3
+      of the time, continuously across an entire 75,000-step run, for every seed tested
+      (including one previously read as "flat"). This single-episode metric is not a
+      reliable point estimate at any training step — future Gate W3 attempts need results
+      averaged across eval seeds, not a single fixed episode, on top of multi-seed training
+      reporting. Evidence toward attempting the gate once S3 exists, not the gate itself.)*
 - [ ] Soft-reward baseline agent reproducing Noetzold (`agents/soft_reward_baseline.py`)
 - [ ] Scenario dispatch S2-S4 wired into `environment.py` (`config["scenario"]`
       is currently read but not acted on — the 2026-08-10 `load_spike` diagnostic is a
@@ -190,7 +226,7 @@ behavioral tests, part of the green `pytest` run).
 | File | Status | Notes |
 |---|---|---|
 | `experiments/harness.py` | implemented+tested | `run_scenario` (one policy x scenario x seed episode → `ScenarioResult`, truncated via `max_steps`, default 250) + `run_grid` (every combination). Recomputes per-decision latency/hybrid-draw resolution from public `StateDict` fields (mirrors `env.environment`'s private cost tables/`REKEY_NOW` resolution, since `step()` doesn't surface them directly). `ScenarioResult` gained `total_reward: float` 2026-08-10 (raw summed episode reward — a sharper policy discriminator than `p99_latency`, see that session's log entry). 8 tests (`test_harness.py`), incl. the S1 x four-baselines zero-floor-violations check, a `run_grid` combination-count check, and a `total_reward` check against a manually-summed reference. Only S1 exercised this session (S2-S6 dispatch not wired in `environment.py` yet). |
-| `experiments/train.py` | implemented+tested | `train()` (one continuous S1 episode, `total_steps` from `configs/default.yaml`'s new `training:` block, periodic greedy-mode eval snapshots via the harness, final `DQNAgent.save` checkpoint), `GreedyDQNPolicy` (wraps a trained agent's `q_network` directly for deterministic epsilon=0 evaluation without touching `agents/dqn.py` or the agent's training epsilon-decay counter), `evaluate_against_baseline()` (trained agent vs. grid-searched `StaticThresholdPolicy`, same fixed eval seed). **2026-08-10: `train()` now passes `training_cfg["seed"]` to `DQNAgent(..., seed=...)` too**, not just `env.reset(seed=...)` — see `agents/dqn.py`'s row. 6 tests (`test_train.py`), incl. a smoke run (100 steps) and a determinism check contrasting `GreedyDQNPolicy` against `DQNAgent.act()`'s genuine epsilon=1 stochasticity. **Six real 25,000-step campaigns executed 2026-08-10 across four sessions** (~40-46s/run): an epsilon-schedule fix (`epsilon_decay_steps` 50k→12.5k) let training genuinely converge but the converged flat-S1 policy still tied the tuned threshold on `p99_latency` and never rekeyed proactively (`forced_rekey_ratio=1.000`); a load-spike diagnostic (see `env/request_generator.py`'s row) re-ran under it and got `0.256`/`0.872` across two seeds; a 10-seed sweep sized that spread properly (`0.190`-`1.000`, mean `0.735`, stdev `0.275`) and found `agents/dqn.py`'s randomness was never seeded — training seed only reached the environment; a same-day fix session seeded it and re-ran the same 10-seed sweep — the spread got *wider*, not tighter (`0.102`-`1.000`, mean `0.700`, stdev `0.345`), with exactly half the seeds landing at the exact never-proactive ceiling. **2026-08-17: a budget probe (6 more real campaigns, 50k/75k steps, 3 of the 5 stuck seeds) found the stuck seeds don't respond to more training budget** — 2 of 3 reached good intermediate `forced_rekey_ratio` values at 50k steps (`0.102`, `0.659`) and then regressed back to the exact `1.000` ceiling by 75k, a mid-training instability rather than a convergence-speed problem — see SESSION_LOG.md 2026-08-17 for all six data points, and PROGRESS.md's "Next task" for what this implies. |
+| `experiments/train.py` | implemented+tested | `train()` (one continuous S1 episode, `total_steps` from `configs/default.yaml`'s new `training:` block, periodic greedy-mode eval snapshots via the harness, final `DQNAgent.save` checkpoint), `GreedyDQNPolicy` (wraps a trained agent's `q_network` directly for deterministic epsilon=0 evaluation without touching `agents/dqn.py` or the agent's training epsilon-decay counter), `evaluate_against_baseline()` (trained agent vs. grid-searched `StaticThresholdPolicy`, same fixed eval seed). **2026-08-10: `train()` now passes `training_cfg["seed"]` to `DQNAgent(..., seed=...)` too**, not just `env.reset(seed=...)` — see `agents/dqn.py`'s row. 6 tests (`test_train.py`), incl. a smoke run (100 steps) and a determinism check contrasting `GreedyDQNPolicy` against `DQNAgent.act()`'s genuine epsilon=1 stochasticity. **Six real 25,000-step campaigns executed 2026-08-10 across four sessions** (~40-46s/run): an epsilon-schedule fix (`epsilon_decay_steps` 50k→12.5k) let training genuinely converge but the converged flat-S1 policy still tied the tuned threshold on `p99_latency` and never rekeyed proactively (`forced_rekey_ratio=1.000`); a load-spike diagnostic (see `env/request_generator.py`'s row) re-ran under it and got `0.256`/`0.872` across two seeds; a 10-seed sweep sized that spread properly (`0.190`-`1.000`, mean `0.735`, stdev `0.275`) and found `agents/dqn.py`'s randomness was never seeded — training seed only reached the environment; a same-day fix session seeded it and re-ran the same 10-seed sweep — the spread got *wider*, not tighter (`0.102`-`1.000`, mean `0.700`, stdev `0.345`), with exactly half the seeds landing at the exact never-proactive ceiling. **2026-08-17: a budget probe (6 more real campaigns, 50k/75k steps, 3 of the 5 stuck seeds) found the stuck seeds don't respond to more training budget** — 2 of 3 reached good intermediate `forced_rekey_ratio` values at 50k steps (`0.102`, `0.659`) and then regressed back to the exact `1.000` ceiling by 75k, read at the time as a mid-training instability. **2026-08-18: a denser re-probe (3 more real 75,000-step campaigns, `eval_every=1000` — ~75 snapshots each instead of 3) overturned that framing** — there is no localized regression: `forced_rekey_ratio` swings 0.5+ between adjacent 1,000-step snapshots roughly 1 in 3 of the time, continuously across the entire run, for every seed including one previously read as "flat, never found a good policy." Buffer-capacity crossing at step 50,000 (`agents/dqn.py`'s `_REPLAY_BUFFER_CAPACITY`) is ruled out as the cause — no loss anomaly or swing-amplitude change near that step. A real but separate long-run drift toward the ceiling exists (noisy, not step-changed at any specific step) layered on top of the noise. See SESSION_LOG.md 2026-08-18 for the full data, and PROGRESS.md's "Next task" for the two candidate follow-ups identified but not yet run. |
 
 ### attack/
 
@@ -235,6 +271,6 @@ behavioral tests, part of the green `pytest` run).
 
 ## Last verified
 
-- **Date:** 2026-08-17
-- **Commit:** `9304338` ("fix: [solo] seed DQNAgent's own randomness, re-run 10-seed sweep — 2026-08-10") — the commit this session started from; see SESSION_LOG.md for this session's own commit
+- **Date:** 2026-08-18
+- **Commit:** `b6f6104` ("log: [solo] budget probe on stuck seeds, S4 build deferred — 2026-08-17") — the commit this session started from; see SESSION_LOG.md for this session's own commit
 - **`pytest` pass count:** 400 passed, 0 failed (unchanged — no repo source file touched this session, only a non-committed scratchpad probe script)
