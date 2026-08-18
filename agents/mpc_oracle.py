@@ -211,9 +211,12 @@ class MPCOracle:
         #    the oracle scored *below* the threshold on S3 (-288,535 vs
         #    -179,936) -- an upper bound that loses to a causal policy is not
         #    an upper bound.
-        key_age = float(state.get("key_age", 0.0))
+        # `key_age` is normalised by the lifetime cap (spec §4.2), so the
+        # horizon has to be normalised the same way to compare against it.
+        key_age_fraction = float(state.get("key_age", 0.0))
         lifetime_cap = self._lifetime_cap()
-        expires_within_horizon = key_age + self.horizon >= lifetime_cap
+        horizon_fraction = self.horizon / max(1e-9, lifetime_cap)
+        expires_within_horizon = key_age_fraction + horizon_fraction >= 1.0
         pool_can_fund_now = surplus > 1.0
 
         if mask[int(Action.REUSE)] and not (expires_within_horizon and pool_can_fund_now):

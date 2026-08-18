@@ -68,21 +68,34 @@ def _make_state(
         hybrid_demand_hat = [0.0] * 3
         resolved_threat_score = 0.0 if threat_score is None else threat_score
 
+    request_class_onehot = [0.0] * 4
+    request_class_onehot[sensitivity_class] = 1.0
+    floor_onehot = [0.0] * 4
+    floor_onehot[min(3, policy_floor)] = 1.0
+
     return {
         "threat_score": resolved_threat_score,
         "threat_forecast": threat_forecast,
+        "posture_probs": [0.7, 0.2, 0.1, 0.0],
         "qber": 0.01,
-        "skr": 500.0,
+        "skr": 1.0,
         "pool_fill": pool_fill,
         "arrival_rate": 1.0,
         "load": 0.2,
-        "avg_latency": 1.0,
-        "key_age": key_age,
-        "key_type_onehot": list(key_type_onehot),
+        "avg_latency": 0.01,
+        "key_age": key_age / 500.0,
+        "key_type_onehot": [0.0, *key_type_onehot],
+        "request_class_onehot": request_class_onehot,
+        "floor_onehot": floor_onehot,
+        "pqc_capable": 1.0,
+        "queue_len_norm": 0.0,
+        "queue_head_wait_norm": 0.0,
+        "steps_since_rekey_norm": key_age / 500.0,
         "sensitivity_class": sensitivity_class,
         "policy_floor": policy_floor,
         "pool_level_hat": pool_level_hat,
         "skr_mean_hat": skr_mean_hat,
+        "skr_trend": 0.1,
         "hybrid_demand_hat": hybrid_demand_hat,
         "regret_event_recent": regret_event_recent,
     }
@@ -108,14 +121,14 @@ def test_flatten_state_off_mode_excludes_forecast_fields():
     state = _make_state(forecast=False)
     tensor = flatten_state(state, has_forecast=False)
     assert tensor.shape == (_OFF_STATE_DIM,)
-    assert tensor.shape == (13,)
+    assert tensor.shape == (29,)  # spec §4.2: 13 scalars + 4*4 one-hots
 
 
 def test_flatten_state_forecast_mode_includes_forecast_fields():
     state = _make_state(forecast=True)
     tensor = flatten_state(state, has_forecast=True)
     assert tensor.shape == (_FORECAST_STATE_DIM,)
-    assert tensor.shape == (28,)
+    assert tensor.shape == (36,)  # spec §4.2: 29 base + 7 foresight
 
 
 def test_flatten_state_forecast_values_actually_present_not_just_longer():
@@ -127,6 +140,7 @@ def test_flatten_state_forecast_values_actually_present_not_just_longer():
     values = tensor.tolist()
     assert any(abs(v - 0.42) < 1e-6 for v in values)  # threat_score
     assert any(abs(v - 4.0) < 1e-6 for v in values)  # hybrid_demand_hat[-1]
+    assert any(abs(v - 0.1) < 1e-6 for v in values)  # skr_trend
 
 
 def test_flatten_state_forecast_mode_with_zero_threat_score_still_28_dim():
@@ -141,7 +155,7 @@ def test_flatten_state_forecast_mode_with_zero_threat_score_still_28_dim():
     state = _make_state(forecast=True, threat_score=0.0)
     tensor = flatten_state(state, has_forecast=True)
     assert tensor.shape == (_FORECAST_STATE_DIM,)
-    assert tensor.shape == (28,)
+    assert tensor.shape == (36,)  # spec §4.2: 29 base + 7 foresight
     values = tensor.tolist()
     assert any(abs(v - 4.0) < 1e-6 for v in values)  # hybrid_demand_hat[-1] still present
 
@@ -154,7 +168,7 @@ def test_flatten_state_off_mode_ignores_a_stray_nonzero_threat_score():
     state = _make_state(forecast=False, threat_score=0.99)
     tensor = flatten_state(state, has_forecast=False)
     assert tensor.shape == (_OFF_STATE_DIM,)
-    assert tensor.shape == (13,)
+    assert tensor.shape == (29,)  # spec §4.2: 13 scalars + 4*4 one-hots
 
 
 # ---------------------------------------------------------------------------

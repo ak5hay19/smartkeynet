@@ -58,6 +58,8 @@ def _dummy_state(
     key_age: float = MAX_KEY_AGE,
     sensitivity_class: int = 3,
 ) -> dict:
+    # `key_age` is passed in raw steps for readability and normalised here,
+    # matching what the environment now emits (spec §4.2).
     """Minimal `StateDict` stand-in covering the fields the policies read.
 
     `key_age` defaults to the cap -- i.e. "the existing key is stale, so
@@ -70,7 +72,7 @@ def _dummy_state(
     """
     return {
         "pool_fill": pool_fill,
-        "key_age": key_age,
+        "key_age": key_age / MAX_KEY_AGE,
         "sensitivity_class": sensitivity_class,
     }
 

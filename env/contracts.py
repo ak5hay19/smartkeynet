@@ -158,6 +158,7 @@ class StateDict(TypedDict):
     # --- threat (PLAN.md §4 state spec) ---
     threat_score: float
     threat_forecast: Sequence[float]  # length k=5: next-k-step threat signal (Addition A threat head)
+    posture_probs: Sequence[float]  # length 4: {normal, elevated, high, critical}
 
     # --- QKD pool physics (env/pool_sim.py) ---
     qber: float
@@ -170,17 +171,24 @@ class StateDict(TypedDict):
     avg_latency: float  # rolling average latency (env accounting)
 
     # --- current session key (per request) ---
-    key_age: float  # steps/seconds since last rekey, vs SP 800-57 cap L
-    key_type_onehot: Sequence[float]  # length 3, order = KeyType
+    key_age: float  # normalised by the SP 800-57 cap L
+    key_type_onehot: Sequence[float]  # length 4: {none, classical, pqc, hybrid}
 
     # --- request context ---
-    sensitivity_class: int  # SensitivityClass value
+    request_class_onehot: Sequence[float]  # length 4, order = SensitivityClass
+    floor_onehot: Sequence[float]  # length 4: {T0, T1, T2, T3}
+    pqc_capable: float  # 0/1
+    queue_len_norm: float  # deferral queue length / queue_ref
+    queue_head_wait_norm: float  # head-of-line wait / 100 steps
+    steps_since_rekey_norm: float  # / lifetime cap L
+    sensitivity_class: int  # SensitivityClass value (kept for baselines/harness)
     policy_floor: int  # Action value: minimum tier this request must clear
 
     # --- foresight features (Addition A; DQN state ONLY -- never the
     #     policy table, Hard Rule 2) ---
     pool_level_hat: Sequence[float]  # length 3, H in {10, 25, 50}
     skr_mean_hat: Sequence[float]  # length 3, H in {10, 25, 50}
+    skr_trend: float  # signed normalised slope of the SKR forecast
     hybrid_demand_hat: Sequence[float]  # length 3, H in {10, 25, 50}
     regret_event_recent: bool  # Addition C: recent-regret-event flag
 

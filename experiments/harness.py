@@ -71,9 +71,9 @@ def _resolved_cost_action(action: Action, key_type_onehot: Any, floor: Action) -
     """
     if action is not Action.REKEY_NOW:
         return action
-    for key_type in KeyType:
-        if key_type_onehot[int(key_type)] == 1.0:
-            return _KEY_TYPE_TO_SERVE_ACTION[key_type]
+    active = _active_key_tier(key_type_onehot)
+    if active is not None:
+        return active
     return floor  # cold-start REKEY_NOW adopts the floor's tier (design decision 4)
 
 
@@ -84,7 +84,19 @@ def _active_key_tier(key_type_onehot: Any) -> Action | None:
     built from, so the violation check below sees exactly what the
     policy saw.
     """
-    for key_type in KeyType:
+    # 4-wide since 2026-08-18 (spec §4.2): {none, classical, pqc, hybrid}.
+    # Slot 0 is the cold-start "no key" case, which the previous 3-wide
+    # encoding could not represent -- it flattened to all-zeros, identical to
+    # holding a classical key, and this function silently returned None for
+    # both.
+    if len(key_type_onehot) >= 4:
+        if key_type_onehot[0] == 1.0:
+            return None
+        for key_type in KeyType:
+            if key_type_onehot[int(key_type) + 1] == 1.0:
+                return _KEY_TYPE_TO_SERVE_ACTION[key_type]
+        return None
+    for key_type in KeyType:  # legacy 3-wide
         if key_type_onehot[int(key_type)] == 1.0:
             return _KEY_TYPE_TO_SERVE_ACTION[key_type]
     return None

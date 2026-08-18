@@ -32,61 +32,57 @@ from env.contracts import Action, ActionMask, N_ACTIONS, StateDict
 # State flattening (Addition A: vector length depends on use_foresight)
 # ---------------------------------------------------------------------------
 
-_OFF_STATE_DIM = 13
-_FORECAST_STATE_DIM = 28
-"""`flatten_state`'s two possible output lengths, spelled out here so
-tests don't need to hardcode them independently of the implementation
-below. See `flatten_state`'s docstring for the field-by-field
-breakdown that produces each number."""
+_OFF_STATE_DIM = 29
+_FORECAST_STATE_DIM = 36
+"""`flatten_state`'s two output lengths, matching SMARTKEYNET_BUILD_SPEC.md
+§4.2 exactly.
+
+Base block arithmetic, which the spec asks to be asserted in a test:
+**13 scalars + three 4-wide one-hots + the 4-wide posture vector = 13 + 16 = 29.**
+Foresight block: `pool_hat(3) + skr_trend(1) + hybrid_demand_hat(3) = 7`.
+So `off = 29` and `ewma = lstm = 36`.
+
+These were 13/28 until 2026-08-18 -- a smaller, unnormalised feature set that
+omitted `posture_probs`, `request_class_onehot`, `floor_onehot`,
+`pqc_capable`, both queue features and `steps_since_rekey_norm`, and encoded
+key type in 3 slots rather than 4 (so a cold-start session with no key was
+indistinguishable from one holding a classical key -- both flattened to
+zeros).
+
+If you add a state feature, update these constants and the arithmetic above
+in the same commit. The dim test is what catches a silently mismatched
+checkpoint.
+"""
 
 
 def flatten_state(state: StateDict, has_forecast: bool) -> torch.Tensor:
     """Flatten a `StateDict` into the fixed-order tensor the Q-network
-    consumes.
+    consumes, per spec §4.2.
 
-    `has_forecast` must be supplied explicitly by the caller -- it is
-    never inferred from `state`'s own contents. An earlier version of
-    this function guessed the mode via `state["threat_score"] != 0.0`
-    (relying on `MovingAverageForecaster`'s sigmoid output never being
-    exactly `0.0`). That guess was only correct by accident: it held
-    solely because today's placeholder `threat_features`
-    (`[qber, load]`, both always non-negative -- see
-    `env/environment.py`'s `_threat_features_placeholder`) happen to
-    keep the sigmoid input away from wherever it might round to
-    exactly zero. Nothing guarantees that once real (possibly
-    negative/normalized) threat data replaces the placeholder, so the
-    inference was removed rather than hardened -- the real answer
-    ("is this episode running with foresight on?") is a config-time
-    fact, not something derivable from a single state observation.
-    The natural source at any call site is `config["use_foresight"] !=
-    "off"` -- the exact same condition `env/environment.py`'s
-    `_build_forecaster` uses to decide whether forecast fields get
-    populated at all.
+    `has_forecast` must be supplied explicitly by the caller -- it is never
+    inferred from `state`'s own contents. An earlier version guessed the mode
+    via `state["threat_score"] != 0.0`, which was correct only by accident and
+    would have broken the moment real (possibly zero) threat data arrived. The
+    real answer is a config-time fact: `config["use_foresight"] != "off"`.
 
-    Field order matches `env/contracts.py`'s `StateDict` declaration
-    order exactly; forecast-derived fields (`threat_score`,
-    `threat_forecast`, `pool_level_hat`, `skr_mean_hat`,
-    `hybrid_demand_hat`) are included only when `has_forecast` is
-    True -- genuinely omitted, not zero-padded, when False. This is
-    what makes the eventual E-A ablation (off vs. ewma vs. lstm) a
-    real input-dimensionality difference rather than a cosmetic one.
-    `regret_event_recent` (Addition C bookkeeping, not forecast-derived)
-    is always included regardless of `has_forecast`.
+    Every scalar here is already normalised by `env/environment.py` -- QBER by
+    `qber_abort`, SKR by its mean, key age by the SP 800-57 cap `L`, latency
+    per 100 ms, and so on. Raw units were a genuine defect rather than an
+    inelegance: `key_age` reached 500 while every other feature sat at or
+    below 3, and the first layer of the MLP was dominated by it.
 
-    Two possible lengths, both fixed and documented:
-      - `has_forecast=False` (`use_foresight: off`): 13 -- qber, skr,
-                pool_fill, arrival_rate, load, avg_latency, key_age,
-                key_type_onehot(3), sensitivity_class, policy_floor,
-                regret_event_recent.
-      - `has_forecast=True` (`use_foresight: ewma`/`lstm`): 28 --
-                threat_score, threat_forecast(5), [the 13 fields
-                above], pool_level_hat(3), skr_mean_hat(3),
-                hybrid_demand_hat(3).
+    **Deliberately excluded: absolute episode time.** Including it would let
+    the agent memorise the S6 migration timeline, which is exactly what Hard
+    Rule 8 forbids. `steps_since_rekey_norm` is a *relative* quantity and is
+    fine.
     """
     fields: list[float] = []
+
     if has_forecast:
         fields.append(float(state["threat_score"]))
-        fields.extend(float(v) for v in state["threat_forecast"])
+    else:
+        fields.append(0.0)
+    fields.extend(float(v) for v in state["posture_probs"])  # 4
 
     fields.append(float(state["qber"]))
     fields.append(float(state["skr"]))
@@ -95,16 +91,19 @@ def flatten_state(state: StateDict, has_forecast: bool) -> torch.Tensor:
     fields.append(float(state["load"]))
     fields.append(float(state["avg_latency"]))
     fields.append(float(state["key_age"]))
-    fields.extend(float(v) for v in state["key_type_onehot"])
-    fields.append(float(state["sensitivity_class"]))
-    fields.append(float(state["policy_floor"]))
+    fields.extend(float(v) for v in state["key_type_onehot"])  # 4
+    fields.extend(float(v) for v in state["request_class_onehot"])  # 4
+    fields.extend(float(v) for v in state["floor_onehot"])  # 4
+    fields.append(float(state["pqc_capable"]))
+    fields.append(float(state["queue_len_norm"]))
+    fields.append(float(state["queue_head_wait_norm"]))
+    fields.append(float(state["regret_event_recent"]))
+    fields.append(float(state["steps_since_rekey_norm"]))
 
     if has_forecast:
-        fields.extend(float(v) for v in state["pool_level_hat"])
-        fields.extend(float(v) for v in state["skr_mean_hat"])
-        fields.extend(float(v) for v in state["hybrid_demand_hat"])
-
-    fields.append(float(state["regret_event_recent"]))
+        fields.extend(float(v) for v in state["pool_level_hat"])  # 3
+        fields.append(float(state["skr_trend"]))  # 1
+        fields.extend(float(v) for v in state["hybrid_demand_hat"])  # 3
 
     return torch.tensor(fields, dtype=torch.float32)
 

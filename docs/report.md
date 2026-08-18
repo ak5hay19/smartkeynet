@@ -76,6 +76,16 @@ attack surface, reproduce it, and demonstrate the attack.
                           └── pool head ──▶ DQN state ONLY (never the policy table)
 ```
 
+The state vector is **29 dims without foresight, 36 with** — spec §4.2 exactly
+(13 normalised scalars, three 4-wide one-hots, and the 4-wide posture vector;
+plus `pool_hat(3) + skr_trend(1) + hybrid_demand_hat(3)` under foresight).
+Every scalar is scale-free, normalised at source: QBER by `qber_abort`, SKR by
+its mean, key age by the SP 800-57 cap `L`, latency per 100 ms.
+
+Absolute episode time is **deliberately excluded**. Including it would let the
+agent memorise the S6 migration timeline, which is what Hard Rule 8 forbids;
+`steps_since_rekey_norm` is relative and therefore fine.
+
 Five actions: `SERVE_CLASSICAL`, `SERVE_PQC`, `SERVE_HYBRID`, `REUSE`,
 `REKEY_NOW`. The policy table maps (sensitivity class × threat posture) to a
 minimum tier; everything below that floor is removed from the action set before
@@ -191,34 +201,26 @@ spanning −1,326 to −3,015,813 on one configuration.
 
 | policy | IQM reward | 95% CI | exhaustion | floor violations |
 |---|---|---|---|---|
-| **static threshold (tuned)** | **−603** | [−656, −575] | 0.6 | 0 |
-| greedy recommender | −636 | [−683, −600] | 0.6 | 0 |
-| random | −2,286,670 | [−3.58M, −1.35M] | 467.6 | 0 |
-| always-PQC | −2,513,753 | [−4.08M, −1.40M] | 488.0 | 0 |
-| DQN | −1,507,529 | [−2.74M, −0.62M] | 352.7 | 0 |
-| always-hybrid | −2,632,818 | [−4.22M, −1.52M] | 500.6 | 0 |
+| **static threshold (tuned)** | **−586** | [−624, −572] | 0.2 | 0 |
+| greedy recommender | −631 | [−679, −613] | 0.2 | 0 |
+| DQN | −733,303 | [−1,118,861, −310,483] | 200.7 | 0 |
 
-**Paired difference (DQN − threshold): −2,506,065, CI [−4,098,807, −1,399,999].**
-The interval excludes zero.
+**Paired difference (DQN − threshold): −1,130,946, CI [−1,396,153, −770,440].**
 
 ### Scenario S3 (QKD degradation)
 
 | policy | IQM reward | 95% CI | exhaustion | floor violations |
 |---|---|---|---|---|
-| **static threshold (tuned)** | **−275,866** | [−357,055, −140,955] | 118.6 | 0 |
-| greedy recommender | −327,974 | [−482,602, −246,514] | 142.8 | 0 |
-| DQN | −1,812,531 | [−2.75M, −1.07M] | 372.9 | 0 |
-| random | −3,591,497 | [−5.28M, −2.25M] | 538.4 | 0 |
-| always-PQC | −3,731,861 | [−5.54M, −2.23M] | 544.4 | 0 |
-| always-hybrid | −3,872,344 | [−5.93M, −2.37M] | 563.0 | 0 |
+| **static threshold (tuned)** | **−167,231** | [−295,217, −105,458] | 98.2 | 0 |
+| greedy recommender | −255,388 | [−326,187, −174,849] | 116.2 | 0 |
+| DQN | −1,419,193 | [−1,863,321, −858,224] | 265.5 | 0 |
 
-**Paired difference (DQN − threshold): −3,203,685, CI [−4,809,117, −2,040,303].**
-The interval excludes zero.
+**Paired difference (DQN − threshold): −1,181,972, CI [−1,979,246, −8,069].**
 
-Comparisons are **paired over shared seeds under common random numbers**
-(§9 rule 4): every policy in a cell sees the identical arrival stream and SKR
-trace, so the per-seed difference has far less variance than either policy's
-own spread. A CI on the difference that excludes zero is the claim.
+Both intervals exclude zero. Comparisons are **paired over shared seeds under
+common random numbers** (§9 rule 4), so the per-seed difference carries far
+less variance than either policy's own spread — which is what makes a claim
+from five seeds defensible.
 
 **Gate W3: NOT PASSED**, and by a wide margin. The DQN sits with the
 do-nothing-clever baselines, accumulating ~285 pool-exhaustion events per

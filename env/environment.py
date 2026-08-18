@@ -167,6 +167,18 @@ from env.request_generator import (
 from env.scenarios import ScenarioSpec, build_scenario
 
 
+_ARRIVAL_RATE_REFERENCE = 1.0
+"""Reference arrival rate for `arrival_rate_norm` (spec §4.2). Matches
+`env/request_generator.py`'s `_ARRIVAL_RATE_PER_STEP`."""
+
+_LATENCY_REFERENCE = 100.0
+"""Spec §4.2 normalises average latency per 100 ms."""
+
+_QUEUE_REFERENCE = 20.0
+"""`queue_ref` for `queue_len_norm` (spec §4.2), sized against the deferral
+queue depths actually observed under S3 scarcity."""
+
+
 class IllegalActionError(Exception):
     """Raised by `step()` if the given action is illegal under the mask
     returned by the previous decision.
@@ -803,6 +815,8 @@ class SmartKeyNetEnv(gym.Env):
             skr_mean_hat: list[float] = [0.0] * 3
             hybrid_demand_hat: list[float] = [0.0] * 3
             current_posture = ThreatPosture.CALM
+            posture_probs_vec = [1.0] + [0.0] * (len(ThreatPosture))
+            skr_trend = 0.0
         else:
             threat_forecast = self._forecaster.get_threat_forecast()
             pool_forecast = self._forecaster.get_pool_forecast()
@@ -812,6 +826,17 @@ class SmartKeyNetEnv(gym.Env):
             skr_mean_hat = list(pool_forecast.skr_mean_hat)
             hybrid_demand_hat = list(pool_forecast.hybrid_demand_hat)
             current_posture = ThreatPosture(int(np.argmax(threat_forecast.posture_probs)))
+            # 4-wide per spec {normal, elevated, high, critical}; this
+            # environment has three postures, so the fourth slot is always
+            # zero. Padded rather than narrowed, to match the frozen contract.
+            posture_probs_vec = list(threat_forecast.posture_probs) + [0.0]
+            # signed normalised slope of the SKR forecast
+            skr_mean_hat_list = list(pool_forecast.skr_mean_hat)
+            skr_trend = float(
+                (skr_mean_hat_list[-1] - skr_mean_hat_list[0])
+                / max(1e-9, abs(skr_mean_hat_list[0]) + 1e-9)
+            )
+            skr_trend = float(np.clip(skr_trend, -1.0, 1.0))
 
         # Instantaneous (pre-ratchet) posture, exposed for the
         # forecaster's supervised targets. The *ratcheted* posture is
@@ -909,21 +934,65 @@ class SmartKeyNetEnv(gym.Env):
             and (self._step_count - self._last_regret_step) <= self._REGRET_RECENT_WINDOW_STEPS
         )
 
+        # --- spec §4.2 additions: normalised scalars and one-hots -------
+        # Every quantity the agent sees is now scale-free. Raw units were a
+        # real defect, not a cosmetic one: `key_age` reached 500 while other
+        # features sat at or below 3, and the first layer of an unnormalised
+        # MLP was dominated by it. Observation normalisation (agents/dqn.py)
+        # patched the symptom; normalising at source fixes the cause and makes
+        # the state readable.
+        qber_abort = float(self._qkd_cfg.get("qber_abort", 0.11))
+        skr_mean = float(self._qkd_cfg.get("mean_skr_kbps", 0.025))
+
+        # 4-wide, per spec: {none, classical, pqc, hybrid}. The "none" slot is
+        # what distinguishes a cold-start session from one holding a classical
+        # key -- previously indistinguishable, since both flattened to zeros.
+        key_type_onehot_4 = [0.0, 0.0, 0.0, 0.0]
+        if session.key_type is None:
+            key_type_onehot_4[0] = 1.0
+        else:
+            key_type_onehot_4[int(session.key_type) + 1] = 1.0
+
+        request_class_onehot = [0.0] * len(SensitivityClass)
+        request_class_onehot[int(request["sensitivity_class"])] = 1.0
+
+        # 4-wide {T0..T3}; this environment uses three tiers, so T3 is always
+        # zero. Kept 4-wide to match the frozen contract rather than silently
+        # narrowing it.
+        floor_onehot = [0.0, 0.0, 0.0, 0.0]
+        floor_onehot[min(3, int(floor))] = 1.0
+
+        queue_head_wait = 0.0
+        if len(self._deferral_queue) > 0:
+            queue_head_wait = float(
+                max((entry.wait_steps for entry in self._deferral_queue._heap), default=0.0)
+                if hasattr(self._deferral_queue, "_heap")
+                else 0.0
+            )
+
         state = StateDict(
             threat_score=threat_score,
             threat_forecast=threat_forecast_vec,
-            qber=self._last_pool_state.qber,
-            skr=self._last_pool_state.skr,
+            posture_probs=list(posture_probs_vec),
+            qber=self._last_pool_state.qber / max(1e-9, qber_abort),
+            skr=self._last_pool_state.skr / max(1e-9, skr_mean),
             pool_fill=self._pool_sim.fill / self._pool_sim.capacity,
-            arrival_rate=arrival_rate,
+            arrival_rate=arrival_rate / max(1e-9, _ARRIVAL_RATE_REFERENCE),
             load=self._current_load(),
-            avg_latency=avg_latency,
-            key_age=session.key_age,
-            key_type_onehot=key_type_onehot,
+            avg_latency=avg_latency / _LATENCY_REFERENCE,
+            key_age=session.key_age / max(1e-9, self._max_key_age),
+            key_type_onehot=key_type_onehot_4,
+            request_class_onehot=request_class_onehot,
+            floor_onehot=floor_onehot,
+            pqc_capable=1.0 if request["pqc_capable"] else 0.0,
+            queue_len_norm=min(1.0, len(self._deferral_queue) / _QUEUE_REFERENCE),
+            queue_head_wait_norm=min(1.0, queue_head_wait / 100.0),
+            steps_since_rekey_norm=min(1.0, session.key_age / max(1e-9, self._max_key_age)),
             sensitivity_class=request["sensitivity_class"],
             policy_floor=int(floor),
             pool_level_hat=pool_level_hat,
             skr_mean_hat=skr_mean_hat,
+            skr_trend=skr_trend,
             hybrid_demand_hat=hybrid_demand_hat,
             regret_event_recent=regret_event_recent,
         )

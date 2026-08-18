@@ -118,8 +118,20 @@ def test_reset_produces_valid_initial_state_and_mask():
     assert len(state["pool_level_hat"]) == 3
     assert len(state["skr_mean_hat"]) == 3
     assert len(state["hybrid_demand_hat"]) == 3
-    assert len(state["key_type_onehot"]) == 3
-    assert sum(state["key_type_onehot"]) in (0.0, 1.0)  # cold start -> all zero
+    # 4-wide since 2026-08-18 (spec §4.2): {none, classical, pqc, hybrid}.
+    # A cold-start session now sets the explicit "none" slot rather than
+    # flattening to all-zeros, which was indistinguishable from holding a
+    # classical key.
+    assert len(state["key_type_onehot"]) == 4
+    assert sum(state["key_type_onehot"]) == 1.0
+    assert state["key_type_onehot"][0] == 1.0  # cold start
+    assert len(state["posture_probs"]) == 4
+    assert len(state["request_class_onehot"]) == 4
+    assert len(state["floor_onehot"]) == 4
+    assert state["pqc_capable"] in (0.0, 1.0)
+    assert 0.0 <= state["queue_len_norm"] <= 1.0
+    assert 0.0 <= state["queue_head_wait_norm"] <= 1.0
+    assert 0.0 <= state["steps_since_rekey_norm"] <= 1.0
     assert 0.0 <= state["pool_fill"] <= 1.0
     assert state["policy_floor"] in (int(Action.SERVE_CLASSICAL), int(Action.SERVE_PQC), int(Action.SERVE_HYBRID))
     assert isinstance(state["regret_event_recent"], bool)

@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from agents.dqn import DQNAgent, DQNConfig
+from agents.dqn import DQNAgent, _OFF_STATE_DIM, DQNConfig
 from env.contracts import N_ACTIONS
 from experiments.harness import ScenarioResult
 from experiments.train import GreedyDQNPolicy, load_full_config, train
@@ -34,7 +34,15 @@ def _make_state(*, pool_fill: float = 0.5) -> dict[str, Any]:
         "load": 0.2,
         "avg_latency": 1.0,
         "key_age": 10.0,
-        "key_type_onehot": [0.0, 1.0, 0.0],
+        "key_type_onehot": [0.0, 0.0, 1.0, 0.0],
+        "posture_probs": [0.7, 0.2, 0.1, 0.0],
+        "request_class_onehot": [0.0, 1.0, 0.0, 0.0],
+        "floor_onehot": [0.0, 1.0, 0.0, 0.0],
+        "pqc_capable": 1.0,
+        "queue_len_norm": 0.0,
+        "queue_head_wait_norm": 0.0,
+        "steps_since_rekey_norm": 0.02,
+        "skr_trend": 0.0,
         "sensitivity_class": 1,
         "policy_floor": 1,
         "pool_level_hat": [0.0] * 3,
@@ -127,7 +135,7 @@ def test_greedy_policy_is_deterministic_unlike_stochastic_training_act():
     contrast unambiguous) is genuinely stochastic across repeated
     calls with that same state/mask."""
     stochastic_config = DQNConfig(epsilon_start=1.0, epsilon_end=1.0, epsilon_decay_steps=1, batch_size=4)
-    agent = DQNAgent(state_dim=13, has_forecast=False, config=stochastic_config)
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=stochastic_config)
 
     state = _make_state()
     mask = _full_mask()
@@ -145,7 +153,7 @@ def test_greedy_policy_never_mutates_agent_act_call_counter():
     epsilon-decay budget -- it never calls `agent.act()`, so
     `agent._act_calls` (which drives epsilon decay) must stay
     untouched by eval snapshots."""
-    agent = DQNAgent(state_dim=13, has_forecast=False, config=DQNConfig(batch_size=4))
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=DQNConfig(batch_size=4))
     state = _make_state()
     mask = _full_mask()
 

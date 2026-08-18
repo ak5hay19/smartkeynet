@@ -109,9 +109,14 @@ class StaticThresholdPolicy:
         )
 
     def act(self, state: StateDict, mask: ActionMask) -> Action:
-        # 1. key-lifetime rule: hold the existing key until it is `rho`
-        #    of the way to the SP 800-57-derived cap `L`.
-        if float(state["key_age"]) < self.rekey_age_frac * self.max_key_age and mask[int(Action.REUSE)]:
+        # 1. key-lifetime rule: hold the existing key until it is `rho` of the
+        #    way to the SP 800-57-derived cap `L`.
+        #
+        #    `state["key_age"]` is NORMALISED by `L` (spec §4.2), so the
+        #    comparison is directly against `rho`. It used to be raw steps;
+        #    comparing a 0..1 value against `rho * L` would make this branch
+        #    always true and the policy would never rekey at all.
+        if float(state["key_age"]) < self.rekey_age_frac and mask[int(Action.REUSE)]:
             return Action.REUSE
 
         # 2. tier rule: spend the pool only above both thresholds.
