@@ -115,25 +115,61 @@ def flatten_state(state: StateDict, has_forecast: bool) -> torch.Tensor:
 
 
 class QNetwork(nn.Module):
-    """Feedforward Q-network: state vector -> one Q-value per action.
+    """Q-network with an optional dueling head (spec §S8, ladder rung 3).
 
-    Plain two-hidden-layer MLP -- this isn't the research contribution
-    (PLAN.md tech stack: "start vanilla, upgrade to Double/Dueling if
-    needed").
+    Dueling splits the estimate into a state value and per-action advantages.
+    It helps most when many actions have similar value, which action masking
+    makes common here: on a typical step two or three of the five actions are
+    illegal and the rest are near-substitutes.
+
+    THE CENTRING MUST BE OVER LEGAL ACTIONS ONLY. The spec calls this out as
+    "a real and rarely-mentioned trap", and it is worth restating why:
+    subtracting a mean taken over all five actions lets the advantages of
+    *masked* actions -- which the network is never trained on, so they drift
+    arbitrarily -- leak into `V(s)`. The value head then tracks noise from
+    actions that could not be taken. Centring over the legal set keeps `V`
+    estimating what it is supposed to estimate.
+
+    `forward` without a mask falls back to centring over all actions, which is
+    only correct when every action is legal; callers inside this module always
+    pass the mask.
     """
 
-    def __init__(self, state_dim: int, n_actions: int = N_ACTIONS) -> None:
+    def __init__(self, state_dim: int, n_actions: int = N_ACTIONS, dueling: bool = True) -> None:
         super().__init__()
-        self.net = nn.Sequential(
+        self.dueling = dueling
+        self.n_actions = n_actions
+
+        self.trunk = nn.Sequential(
             nn.Linear(state_dim, 128),
             nn.ReLU(),
+            nn.LayerNorm(128),
             nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(128, n_actions),
+            nn.LayerNorm(128),
         )
+        if dueling:
+            self.value_head = nn.Linear(128, 1)
+            self.advantage_head = nn.Linear(128, n_actions)
+        else:
+            self.head = nn.Linear(128, n_actions)
 
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
-        return self.net(state)
+    def forward(self, state: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+        features = self.trunk(state)
+        if not self.dueling:
+            return self.head(features)
+
+        value = self.value_head(features)
+        advantage = self.advantage_head(features)
+
+        if mask is None:
+            advantage_mean = advantage.mean(dim=1, keepdim=True)
+        else:
+            legal = mask.to(advantage.dtype)
+            legal_count = legal.sum(dim=1, keepdim=True).clamp(min=1.0)
+            advantage_mean = (advantage * legal).sum(dim=1, keepdim=True) / legal_count
+
+        return value + advantage - advantage_mean
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +191,11 @@ class DQNConfig:
     epsilon_decay_steps: int = 50_000
 
     # --- upgrade-ladder switches (SMARTKEYNET_BUILD_SPEC.md §8) ---
+    dueling: bool = True
+    """Dueling architecture with legal-only advantage centring (spec §S8,
+    ladder rung 3). Helps when many actions are near-substitutes, which
+    masking makes common."""
+
     double: bool = True
     """Double DQN: select the bootstrap action with the online network,
     evaluate it with the target network. Spec §8 ranks this second on
@@ -206,6 +247,10 @@ class _Transition:
     reward: float
     next_state: torch.Tensor
     next_mask: np.ndarray
+    mask: np.ndarray
+    """Mask of `state` itself. Needed by dueling's legal-only advantage
+    centring; `next_mask` alone is not enough."""
+
     done: bool
     n_steps: int = 1
     """How many environment steps of reward `reward` accumulates, and
@@ -388,8 +433,8 @@ class DQNAgent:
             random.seed(seed)
             torch.manual_seed(seed)
 
-        self.q_network = QNetwork(state_dim)
-        self.target_network = QNetwork(state_dim)
+        self.q_network = QNetwork(state_dim, dueling=self.config.dueling)
+        self.target_network = QNetwork(state_dim, dueling=self.config.dueling)
         self.target_network.load_state_dict(self.q_network.state_dict())
         self.target_network.eval()
 
@@ -398,6 +443,7 @@ class DQNAgent:
         # observation normalisation (spec §3.2 `obs_norm: running_mean_std`)
         self.obs_rms = RunningMeanStd(state_dim)
         self.normalizer_frozen = False
+        self._last_act_mask: np.ndarray = np.ones(N_ACTIONS, dtype=bool)
         # pending n-step accumulation window (see `observe`)
         self._n_step_window: deque[_Transition] = deque(maxlen=max(1, self.config.n_step))
 
@@ -427,12 +473,18 @@ class DQNAgent:
 
         epsilon = self._current_epsilon()
         self._act_calls += 1
+        # remembered so `observe` can store the mask this decision was made
+        # under -- dueling needs it to centre advantages over legal actions
+        self._last_act_mask = np.asarray(mask, dtype=bool).copy()
 
         if random.random() < epsilon:
             return Action(random.choice(legal_indices))
 
         with torch.no_grad():
-            q_values = self.q_network(self.normalized_state(state).unsqueeze(0)).squeeze(0)
+            mask_tensor = torch.as_tensor(np.asarray(mask, dtype=bool)).unsqueeze(0)
+            q_values = self.q_network(
+                self.normalized_state(state).unsqueeze(0), mask_tensor
+            ).squeeze(0)
         masked_q_values = q_values.clone()
         illegal = ~torch.as_tensor(np.asarray(mask, dtype=bool))
         masked_q_values[illegal] = float("-inf")
@@ -490,6 +542,7 @@ class DQNAgent:
                 reward=float(reward),
                 next_state=self.normalized_state(next_state, update=False),
                 next_mask=np.asarray(next_mask, dtype=bool).copy(),
+                mask=self._last_act_mask.copy(),
                 done=bool(done),
             )
         )
@@ -533,6 +586,7 @@ class DQNAgent:
             reward=accumulated_reward,
             next_state=last.next_state,
             next_mask=last.next_mask,
+            mask=first.mask,
             done=last.done,
             n_steps=n_accumulated,
         )
@@ -557,9 +611,11 @@ class DQNAgent:
         next_states = torch.stack([t.next_state for t in batch])
         dones = torch.tensor([t.done for t in batch], dtype=torch.float32)
         next_masks = torch.as_tensor(np.stack([t.next_mask for t in batch]), dtype=torch.bool)
+        # the mask of s itself, for dueling's legal-only advantage centring
+        masks = torch.as_tensor(np.stack([t.mask for t in batch]), dtype=torch.bool)
         n_steps = torch.tensor([t.n_steps for t in batch], dtype=torch.float32)
 
-        q_values = self.q_network(states)
+        q_values = self.q_network(states, masks)
         q_selected = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
 
         with torch.no_grad():
@@ -572,9 +628,9 @@ class DQNAgent:
             # target net that evaluates it -- or the selection step
             # reintroduces exactly the illegal-action leak the masking
             # is there to prevent.
-            target_q_values = self.target_network(next_states)
+            target_q_values = self.target_network(next_states, next_masks)
             if self.config.double:
-                online_next_q = self.q_network(next_states)
+                online_next_q = self.q_network(next_states, next_masks)
                 online_next_q = online_next_q.masked_fill(~next_masks, float("-inf"))
                 best_actions = online_next_q.argmax(dim=1, keepdim=True)
                 next_q_max = target_q_values.gather(1, best_actions).squeeze(1)

@@ -450,9 +450,10 @@ def test_double_dqn_target_still_respects_the_next_state_mask():
 
     # make one illegal action wildly attractive to the online network;
     # if the mask were not applied at selection time the target would
-    # bootstrap straight off it.
+    # bootstrap straight off it. (Reaches into the advantage head, since
+    # QNetwork became dueling -- `net` no longer exists.)
     with torch.no_grad():
-        agent.q_network.net[-1].bias[int(Action.SERVE_HYBRID)] += 1e6
+        agent.q_network.advantage_head.bias[int(Action.SERVE_HYBRID)] += 1e6
 
     metrics = agent.learn()
     assert np.isfinite(metrics["loss"])

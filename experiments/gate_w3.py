@@ -50,6 +50,7 @@ from agents.baselines import (
     RandomPolicy,
     StaticThresholdPolicy,
 )
+from metrics.aggregate import bootstrap_ci, paired_difference
 from experiments.harness import run_scenario
 from experiments.train import GreedyDQNPolicy, load_full_config, train
 
@@ -85,10 +86,21 @@ class PolicyScore:
     def median_reward(self) -> float:
         return float(np.median(self.rewards))
 
+    @property
+    def iqm(self):
+        """IQM with a 95% bootstrap CI over seeds -- spec §9 rules 2 and 3.
+
+        The mean is not used as the headline because a single diverged seed
+        moves it by orders of magnitude; this project measured per-seed
+        results spanning -1,326 to -3,015,813 on one configuration."""
+        return bootstrap_ci(self.rewards)
+
     def summary_row(self) -> str:
+        estimate = self.iqm
         return (
-            f"{self.policy:22s} {self.mean_reward:12.1f} {self.std_reward:10.1f} "
-            f"{self.median_reward:12.1f} {float(np.mean(self.exhaustion_events)):9.1f} "
+            f"{self.policy:22s} {estimate.point:12.1f} "
+            f"[{estimate.low:11.1f}, {estimate.high:11.1f}] "
+            f"{float(np.mean(self.exhaustion_events)):9.1f} "
             f"{int(sum(self.floor_violations)):6d}"
         )
 
@@ -223,17 +235,38 @@ def run_gate(
 
         scores["dqn"] = dqn_score
 
-        print(f"\n  {'policy':22s} {'mean':>12s} {'std':>10s} {'median':>12s} {'exhaust':>9s} {'viol':>6s}")
+        print(
+            f"\n  {'policy':22s} {'IQM':>12s} {'95% CI':>26s} {'exhaust':>9s} {'viol':>6s}"
+        )
         for name in ("dqn", "static_threshold_tuned", "greedy_recommender", "always_pqc", "always_hybrid", "random"):
             print(f"  {scores[name].summary_row()}")
 
-        threshold_mean = scores["static_threshold_tuned"].mean_reward
-        dqn_mean = dqn_score.mean_reward
-        beats = dqn_mean > threshold_mean
-        print(
-            f"\n  DQN {'BEATS' if beats else 'DOES NOT BEAT'} the tuned threshold on {scenario}: "
-            f"{dqn_mean:.1f} vs {threshold_mean:.1f}"
+        # The claim is a PAIRED difference over shared seeds (spec §9 rule 4):
+        # policies see identical arrival streams and SKR traces, so the
+        # per-seed difference has far less variance than either policy's own
+        # spread. A CI on the difference that excludes zero is the claim.
+        threshold_score = scores["static_threshold_tuned"]
+        n_paired = min(len(dqn_score.rewards), len(threshold_score.rewards))
+        difference = paired_difference(
+            dqn_score.rewards[:n_paired], threshold_score.rewards[:n_paired]
         )
+        beats = difference.point > 0 and difference.excludes(0.0)
+
+        print(
+            f"\n  DQN - threshold (paired, IQM): {difference.point:.1f} "
+            f"[{difference.low:.1f}, {difference.high:.1f}]"
+        )
+        print(
+            f"  DQN {'BEATS' if beats else 'DOES NOT BEAT'} the tuned threshold on "
+            f"{scenario} (CI on the difference "
+            f"{'excludes' if difference.excludes(0.0) else 'includes'} zero)"
+        )
+        report.setdefault("paired_difference", {})[scenario] = {
+            "point": difference.point,
+            "low": difference.low,
+            "high": difference.high,
+            "excludes_zero": bool(difference.excludes(0.0)),
+        }
         print(f"  per-training-seed DQN means: {[round(r, 1) for r in dqn_rewards]}")
 
         report["scenarios"][scenario] = {
@@ -242,6 +275,9 @@ def run_gate(
             "beats_threshold": bool(beats),
             "policies": {
                 name: {
+                    "iqm_reward": score.iqm.point,
+                    "iqm_ci_low": score.iqm.low,
+                    "iqm_ci_high": score.iqm.high,
                     "mean_reward": score.mean_reward,
                     "std_reward": score.std_reward,
                     "median_reward": score.median_reward,

@@ -182,27 +182,43 @@ grid-searched over all three of its parameters *on training seeds only*.
 .venv/bin/python -m experiments.gate_w3 --train-seeds 5 --eval-seeds 5 --steps 40000
 ```
 
+All figures are **IQM with a 95% stratified bootstrap CI over seeds**
+(§9 rules 2–3), not means. The mean is unusable here: a single diverged seed
+moves it by orders of magnitude, and this project measured per-seed results
+spanning −1,326 to −3,015,813 on one configuration.
+
 ### Scenario S1 (benign baseline)
 
-| policy | mean reward | σ | exhaustion events | floor violations |
+| policy | IQM reward | 95% CI | exhaustion | floor violations |
 |---|---|---|---|---|
-| **static threshold (tuned)** | **−581** | 9 | 0.0 | 0 |
-| greedy recommender | −624 | 9 | 0.0 | 0 |
-| always-PQC | −1,024,388 | 127,672 | 276.7 | 0 |
-| random | −1,044,540 | 138,084 | 284.3 | 0 |
-| DQN | −1,046,440 | 142,764 | 280.7 | 0 |
-| always-hybrid | −1,116,806 | 139,765 | 289.0 | 0 |
+| **static threshold (tuned)** | **−603** | [−656, −575] | 0.6 | 0 |
+| greedy recommender | −636 | [−683, −600] | 0.6 | 0 |
+| random | −2,286,670 | [−3.58M, −1.35M] | 467.6 | 0 |
+| always-PQC | −2,513,753 | [−4.08M, −1.40M] | 488.0 | 0 |
+| DQN | −1,507,529 | [−2.74M, −0.62M] | 352.7 | 0 |
+| always-hybrid | −2,632,818 | [−4.22M, −1.52M] | 500.6 | 0 |
+
+**Paired difference (DQN − threshold): −2,506,065, CI [−4,098,807, −1,399,999].**
+The interval excludes zero.
 
 ### Scenario S3 (QKD degradation)
 
-| policy | mean reward | σ | exhaustion events | floor violations |
+| policy | IQM reward | 95% CI | exhaustion | floor violations |
 |---|---|---|---|---|
-| **static threshold (tuned)** | **−132,835** | 55,856 | 82.0 | 0 |
-| greedy recommender | −258,025 | 86,637 | 103.3 | 0 |
-| always-PQC | −1,614,420 | 142,277 | 294.3 | 0 |
-| random | −1,617,124 | 151,655 | 302.3 | 0 |
-| DQN | −1,675,848 | 162,054 | 302.0 | 0 |
-| always-hybrid | −1,719,587 | 157,223 | 306.7 | 0 |
+| **static threshold (tuned)** | **−275,866** | [−357,055, −140,955] | 118.6 | 0 |
+| greedy recommender | −327,974 | [−482,602, −246,514] | 142.8 | 0 |
+| DQN | −1,812,531 | [−2.75M, −1.07M] | 372.9 | 0 |
+| random | −3,591,497 | [−5.28M, −2.25M] | 538.4 | 0 |
+| always-PQC | −3,731,861 | [−5.54M, −2.23M] | 544.4 | 0 |
+| always-hybrid | −3,872,344 | [−5.93M, −2.37M] | 563.0 | 0 |
+
+**Paired difference (DQN − threshold): −3,203,685, CI [−4,809,117, −2,040,303].**
+The interval excludes zero.
+
+Comparisons are **paired over shared seeds under common random numbers**
+(§9 rule 4): every policy in a cell sees the identical arrival stream and SKR
+trace, so the per-seed difference has far less variance than either policy's
+own spread. A CI on the difference that excludes zero is the claim.
 
 **Gate W3: NOT PASSED**, and by a wide margin. The DQN sits with the
 do-nothing-clever baselines, accumulating ~285 pool-exhaustion events per
