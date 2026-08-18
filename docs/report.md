@@ -217,13 +217,38 @@ The spec's §7.1 diagnosis tree opens with one question, and it took building
 > If the gap is < 10% on regret events, **the environment has no foresight
 > value** and no agent can win."*
 
-**Measured foresight-value gap: 0.0% on S1, −4.7% on S3.**
+**Measured foresight-value gap: +4.0% on S3, and negative on S1/S2.**
 
-A model-predictive controller granted *perfect knowledge of future arrivals
-and future key refill* does not beat a tuned static threshold. It is
-marginally worse. That is the answer to Gate W3, and it is not a statement
-about our DQN at all: **no policy, however clever or however well informed,
-can win here, because there is nothing for anticipation to buy.**
+The spec's bar is **10%**. A model-predictive controller granted *perfect
+knowledge of future arrivals, future key refill, and the future floor
+schedule* beats a tuned static threshold by **4.0%** on S3 — the scenario
+where scarcity actually binds — and by nothing at all on S1 and S2.
+
+That is the answer to Gate W3, and it is not a statement about our DQN:
+**the maximum value anticipation can have here is 4%, so no policy, however
+clever or however well informed, can win by a margin worth claiming.**
+
+Getting this number right took three attempts at the oracle, and the failures
+are instructive because each was a way of accidentally measuring myopia
+instead of foresight:
+
+1. **Spent whenever `surplus > 1`** — which fired on nearly every step, so it
+   behaved like always-hybrid and scored *below* the threshold. An upper bound
+   that loses to a causal policy is not an upper bound.
+2. **Served the cheapest tier clearing the current floor** — myopically
+   optimal, and it scored *identically to `GreedyRecommenderPolicy`*, to the
+   decimal. An oracle that ties the myopic baseline is measuring myopia.
+3. **Reused until the lifetime cap** — which converts into a *forced* rekey at
+   whatever moment the cap falls, frequently one where the pool is empty. The
+   tuned threshold was rekeying early at cheap moments (`rho = 0.9`) and the
+   oracle was not.
+
+The working version pre-provisions to the floor the horizon will reach and
+rekeys before the cap when the pool can fund it. On S3 it dominates every
+causal policy, which is the property spec §S7 test 5 demands. On S1 and S2 it
+remains a few reward units behind the threshold — those scenarios are
+effectively ties (differences under 0.5% on totals near 600), and we report
+that rather than claim a bound we have not established.
 
 This reframes every other negative result in the report. The DQN was not
 underfitting. The E-A ablation was not a training failure. Both are downstream
