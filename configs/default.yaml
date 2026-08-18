@@ -12,6 +12,54 @@ seed: 0
 # --- env/forecast_provider.py, forecaster/model.py (Addition A) ---
 use_foresight: ewma  # off | ewma | lstm
 
+# --- Threat-signal source (PLAN2 §7.1 Panel 1; Addition D) ---
+# Where `ForecastObservation.threat_features` comes from. Both sources emit
+# STANDARDIZED units (benign ~ 0), which is what env/forecast_provider.py's
+# squash calibration and the LSTM threat head both expect.
+#
+#   scenario    -- the scenario's own threat level, one scalar. Deterministic
+#                  and free; used by every run that doesn't involve the LSTM.
+#   rt_iot2022  -- real flow-feature windows from the RT-IoT2022 capture. The
+#                  scenario's threat level decides only how likely a window is
+#                  to be ATTACK traffic; the forecaster is never told the level
+#                  and has to infer posture from the traffic itself. This is
+#                  what makes S2's "threat elevates -> floors ratchet up" a
+#                  detection result rather than a relabelling of a number the
+#                  environment already had.
+threat_input:
+  source: scenario          # scenario | rt_iot2022
+  dataset_path: null        # null -> auto-locate (data/raw/[rt_iot2022/]RT_IOT2022.csv)
+  window_size: 16           # flows aggregated per decision epoch
+  max_rows: null            # null -> whole capture; set for a fast smoke run
+
+# --- forecaster/model.py, forecaster/train.py (Addition A) ---
+# Dual-head LSTM: shared recurrent trunk, threat head (feeds env/masking.py's
+# floor computation, RAISE ONLY -- Hard Rule 2) + pool head (feeds the DQN
+# state ONLY -- never the policy table). Trained offline and FROZEN during DQN
+# training: the provider runs under torch.no_grad() with requires_grad False,
+# so no gradient from the agent's loss can reach these weights and the agent
+# cannot learn to talk its own floor down.
+forecaster:
+  hidden_size: 64
+  num_layers: 1
+  window_steps: 16
+  lr: 0.001
+  batch_size: 128
+  epochs: 8
+  threat_loss_weight: 1.0
+  pool_loss_weight: 1.0
+  seed: 0
+  checkpoint_path: checkpoints/forecaster_dual_head.pt  # *.pt is gitignored
+  # Rollout collection for offline training. Training scenarios only --
+  # forecaster/train.py refuses S6 (Hard Rule 8), and the rollouts come from
+  # the non-RL baselines, never the DQN (training the forecaster on the agent's
+  # own trajectories would make its input distribution depend on the policy it
+  # is about to be used to improve; same reasoning as the README's "never train
+  # on rl_experiment_* logs" anti-pattern).
+  rollout_scenarios: [S1, S2, S3]
+  rollout_seeds: [0, 1]
+  rollout_max_steps: 600
+
 # --- env/pool_sim.py ---
 #
 # 2026-08-19 RECALIBRATION (pre-registered before any training run this session --

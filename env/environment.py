@@ -104,6 +104,7 @@ summarized here for anyone reading the code cold):
 from __future__ import annotations
 
 from collections import deque
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Iterator, Sequence
 
@@ -350,6 +351,12 @@ class SmartKeyNetEnv(gym.Env):
         self._max_steps = config.get("max_steps")
         self._load_spike_cfg = self._build_load_spike_cfg(config.get("load_spike"))
 
+        self._threat_input_cfg = dict(config.get("threat_input") or {})
+        self._threat_source_name = str(self._threat_input_cfg.get("source", "scenario"))
+        self._threat_sampler = None  # built lazily in reset(): loading RT-IoT2022 is not free
+        self._last_threat_label = 0
+        self._last_forecast_observation: ForecastObservation | None = None
+
         self._scenario_name = str(config.get("scenario", "S1"))
         self._scenario = build_scenario_runtime(self._scenario_name, config)
         graph_cfg = config.get("tenant_graph") or {}
@@ -421,6 +428,9 @@ class SmartKeyNetEnv(gym.Env):
         self._deferral_queue = DeferralQueue()
         self._policy_table = PolicyTable()  # fresh every episode -- sticky ratchet must not carry over
         self._forecaster = self._build_forecaster()
+        self._threat_sampler = self._build_threat_sampler(episode_seed)
+        self._last_threat_label = 0
+        self._last_forecast_observation = None
         self._request_generator = None
         self._active_tenant_multipliers = self._scenario.tenant_rate_multipliers(0)
         if self._load_spike_cfg is not None:
@@ -544,11 +554,54 @@ class SmartKeyNetEnv(gym.Env):
         if self._use_foresight == "ewma":
             return MovingAverageForecaster()
         if self._use_foresight == "lstm":
-            raise NotImplementedError(
-                "use_foresight='lstm' requires forecaster.model.LSTMForecastProvider, "
-                "which doesn't exist yet (a future session's work)"
+            # Imported here rather than at module scope: forecaster.model
+            # imports torch, and `use_foresight: off`/`ewma` runs (which
+            # includes most of the test suite) should not pay for that.
+            from forecaster.model import LSTMForecastProvider
+
+            checkpoint = self._config.get("forecaster", {}).get(
+                "checkpoint_path", "checkpoints/forecaster_dual_head.pt"
             )
+            path = Path(checkpoint)
+            if not path.is_absolute():
+                path = Path(__file__).resolve().parent.parent / path
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"use_foresight='lstm' needs a trained forecaster at {path}. "
+                    "Run `python -m forecaster.train` first (PLAN.md Addition A)."
+                )
+            return LSTMForecastProvider.load(path)
         raise ValueError(f"unknown use_foresight value: {self._use_foresight!r}")
+
+    def _build_threat_sampler(self, episode_seed: int | None):
+        """Construct the RT-IoT2022 threat sampler, if this run uses one.
+
+        `threat_input.source` selects where `threat_features` comes from:
+
+          * `scenario` (default) -- the scenario's own standardized
+            threat level, a single scalar. Cheap, deterministic, and
+            enough for every run that doesn't involve the LSTM.
+          * `rt_iot2022` -- real flow-feature windows drawn from the
+            capture, with the scenario's threat level deciding only how
+            likely a window is to be *attack* traffic. The forecaster is
+            never told the threat level; it has to infer posture from
+            the traffic. That is what makes S2's "threat elevates ->
+            floors ratchet up" a detection result rather than a
+            relabelling of a number the environment already knew.
+        """
+        if self._threat_source_name != "rt_iot2022":
+            return None
+        from forecaster.dataset import ThreatTraceSampler, load_rt_iot2022
+
+        dataset = load_rt_iot2022(
+            path=self._threat_input_cfg.get("dataset_path"),
+            max_rows=self._threat_input_cfg.get("max_rows"),
+        )
+        return ThreatTraceSampler(
+            dataset,
+            window_size=int(self._threat_input_cfg.get("window_size", 16)),
+            seed=episode_seed,
+        )
 
     def _advance_to_next_decision(self) -> tuple[StateDict, ActionMask, dict[str, Any]]:
         """Recommended step cycle, steps 1-7: advance the simulator one
@@ -586,8 +639,10 @@ class SmartKeyNetEnv(gym.Env):
             # 4. forecast update, using signal accumulated since the
             #    last observation (see module docstring point 6 for
             #    the threat_features placeholder)
-            if self._forecaster is not None:
+            if self._forecaster is not None or self._threat_sampler is not None:
                 observation = self._build_forecast_observation()
+                self._last_forecast_observation = observation
+            if self._forecaster is not None:
                 self._forecaster.update(observation)
                 self._arrivals_per_class_accum = [0] * len(SensitivityClass)
                 self._hybrid_serves_accum = 0
@@ -642,6 +697,25 @@ class SmartKeyNetEnv(gym.Env):
 
         return n_new
 
+    def last_forecast_observation(self) -> ForecastObservation | None:
+        """The most recent `ForecastObservation` handed to the provider.
+
+        Exposed for `forecaster/dataset.py`'s offline rollout collection
+        and for the dashboard's Threat Input panel, both of which need
+        to see exactly what the forecaster saw. Read-only -- nothing in
+        the decision path consults it."""
+        return self._last_forecast_observation
+
+    def last_threat_label(self) -> int:
+        """Ground truth for the most recent threat window (1 == the
+        window was drawn from attack traffic).
+
+        Training-time only. The forecaster never receives this, and it
+        is not part of `StateDict`, so no agent or provider can read it
+        -- it exists so `forecaster/train.py` can supervise the threat
+        head on the same rollouts the pool head is trained on."""
+        return self._last_threat_label
+
     def _build_forecast_observation(self) -> ForecastObservation:
         return ForecastObservation(
             qber=self._last_pool_state.qber,
@@ -687,8 +761,22 @@ class SmartKeyNetEnv(gym.Env):
         """
         if self._external_threat_trace is not None:
             index = min(self._step_count, len(self._external_threat_trace) - 1)
-            return [float(self._external_threat_trace[index])]
-        return [self._scenario.threat_level(self._step_count)]
+            level = float(self._external_threat_trace[index])
+        else:
+            level = self._scenario.threat_level(self._step_count)
+
+        if self._threat_sampler is None:
+            return [level]
+
+        # Real RT-IoT2022 traffic. The scenario's threat level decides
+        # only the benign/attack *mixture*; the features themselves are
+        # real flow measurements, and the forecaster has to detect the
+        # difference. The per-step vector is the mean over the sampled
+        # flow window -- i.e. the aggregate of the flows observed during
+        # this decision epoch.
+        window, label = self._threat_sampler.labelled_window_for_level(level)
+        self._last_threat_label = label
+        return [float(v) for v in np.asarray(window, dtype=float).mean(axis=0)]
 
     def set_external_threat_trace(self, trace: Sequence[float] | None) -> None:
         """Override the scenario's threat signal with an externally

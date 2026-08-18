@@ -402,14 +402,17 @@ class RolloutDataset:
     """Per-step training tensors from baseline rollouts.
 
     `threat_windows[t]` is the real flow-feature window the environment
-    showed the forecaster at step t; `threat_labels[t]` is whether that
-    window was attack traffic; `pool_signals[t]` is the pool-side part
-    of the same `ForecastObservation`; `pool_targets[t]` is the *future*
+    showed the forecaster at step t; `threat_labels[t]` is a vector of
+    `1 + THREAT_HORIZON_STEPS` binary labels -- whether the window's
+    last step was attack traffic, followed by the same for the next k
+    steps, so the horizon head is genuinely forecasting rather than
+    reading its own input; `pool_signals[t]` is the pool-side part of
+    the same `ForecastObservation`; `pool_targets[t]` is the *future*
     pool state the pool head has to predict, read off the same rollout.
     """
 
     threat_windows: np.ndarray  # (n, window, N_FEATURES)
-    threat_labels: np.ndarray  # (n,) in {0, 1}
+    threat_labels: np.ndarray  # (n, 1 + THREAT_HORIZON_STEPS) in {0, 1}
     pool_signals: np.ndarray  # (n, window, N_POOL_SIGNALS)
     pool_targets: np.ndarray  # (n, 3 * len(POOL_HORIZONS))
 
@@ -434,3 +437,160 @@ def pool_signal_vector(observation: dict[str, Any]) -> list[float]:
         float(observation["pool_fill"]),
         float(observation["hybrid_serves"]),
     ]
+
+
+def build_rollout_dataset(
+    config: dict[str, Any],
+    scenarios: Sequence[str],
+    seeds: Sequence[int],
+    window_steps: int,
+    max_steps: int,
+    dataset: RTIoT2022Dataset | None = None,
+) -> RolloutDataset:
+    """Roll baseline policies through the real environment and record
+    per-step training tensors for the dual-head model.
+
+    Why rollouts and not a static file: the pool head has to predict the
+    *environment's own* pool trajectory, which only exists inside a
+    rollout, and the trunk is shared, so the threat head has to be
+    trained on sequences where the pool channels are the real ones.
+    Injecting real RT-IoT2022 windows into those same rollouts is what
+    gives every step both a threat label and a pool target.
+
+    Which policies: the mandatory non-RL baselines, never the DQN
+    (README anti-pattern: never train on `rl_experiment_*` logs -- the
+    same reasoning applies to the agent's own trajectories, which would
+    make the forecaster's input distribution depend on the policy it is
+    about to be used to improve). Baseline rollouts also give a wider
+    spread of pool trajectories than any single policy would.
+
+    Hard Rule 8 is respected by the caller passing training scenarios
+    only; `forecaster/train.py` refuses S6.
+    """
+    from agents.baselines import AlwaysHybridPolicy, AlwaysPQCPolicy, RandomPolicy, StaticThresholdPolicy
+    from env.environment import SmartKeyNetEnv
+
+    dataset = dataset if dataset is not None else load_rt_iot2022()
+
+    policy_factories = (
+        lambda seed: AlwaysPQCPolicy(),
+        lambda seed: AlwaysHybridPolicy(),
+        lambda seed: StaticThresholdPolicy(0.5),
+        lambda seed: RandomPolicy(seed=seed),
+    )
+
+    threat_windows: list[np.ndarray] = []
+    threat_labels: list[np.ndarray] = []
+    pool_signals: list[np.ndarray] = []
+    pool_targets: list[np.ndarray] = []
+
+    for scenario in scenarios:
+        for seed in seeds:
+            for factory in policy_factories:
+                env_config = {
+                    **config,
+                    "scenario": scenario,
+                    "seed": seed,
+                    "max_steps": max_steps,
+                    # force the real-capture threat source for training data,
+                    # whatever the ambient config says
+                    "threat_input": {**(config.get("threat_input") or {}), "source": "rt_iot2022"},
+                }
+                env = SmartKeyNetEnv(env_config)
+                state, info = env.reset(seed=seed)
+                policy = factory(seed)
+
+                step_features: list[list[float]] = []
+                step_labels: list[int] = []
+                step_pool: list[list[float]] = []
+                pool_track: list[tuple[float, float, float]] = []
+
+                truncated = False
+                while not truncated:
+                    observation = env.last_forecast_observation()
+                    if observation is not None:
+                        features = np.asarray(observation["threat_features"], dtype=np.float32)
+                        if features.size == N_FEATURES:
+                            step_features.append(features.tolist())
+                            step_labels.append(int(env.last_threat_label()))
+                            step_pool.append(pool_signal_vector(observation))
+                            pool_track.append(
+                                (
+                                    float(observation["pool_fill"]),
+                                    float(observation["skr"]),
+                                    float(observation["hybrid_serves"]),
+                                )
+                            )
+                    action = policy.act(state, info["action_mask"])
+                    state, _reward, _terminated, truncated, info = env.step(action)
+
+                _accumulate_windows(
+                    step_features,
+                    step_labels,
+                    step_pool,
+                    pool_track,
+                    window_steps,
+                    threat_windows,
+                    threat_labels,
+                    pool_signals,
+                    pool_targets,
+                )
+
+    if not threat_windows:
+        raise ValueError(
+            "rollouts produced no usable windows -- check that threat_input.source is "
+            "'rt_iot2022' and that max_steps exceeds window_steps + max(POOL_HORIZONS)"
+        )
+
+    return RolloutDataset(
+        threat_windows=np.asarray(threat_windows, dtype=np.float32),
+        threat_labels=np.asarray(threat_labels, dtype=np.float32),
+        pool_signals=np.asarray(pool_signals, dtype=np.float32),
+        pool_targets=np.asarray(pool_targets, dtype=np.float32),
+    )
+
+
+def _accumulate_windows(
+    step_features: list[list[float]],
+    step_labels: list[int],
+    step_pool: list[list[float]],
+    pool_track: list[tuple[float, float, float]],
+    window_steps: int,
+    out_threat_windows: list[np.ndarray],
+    out_threat_labels: list[np.ndarray],
+    out_pool_signals: list[np.ndarray],
+    out_pool_targets: list[np.ndarray],
+) -> None:
+    """Slice one rollout into `(window, label vector, pool target)` triples.
+
+    The label vector is `[label_now, label_{t+1}, ..., label_{t+k}]`
+    where "now" is the window's **last** step. The k future entries are
+    what make the horizon head a forecaster rather than a classifier
+    reading its own input. Pool targets are the mean of each tracked
+    quantity over the next H steps, for H in `POOL_HORIZONS`.
+    """
+    from forecaster.model import THREAT_HORIZON_STEPS  # local: avoids a circular import
+
+    horizon_max = max(POOL_HORIZONS)
+    n = len(step_features)
+    last_start = n - window_steps - max(horizon_max, THREAT_HORIZON_STEPS)
+    for start in range(0, max(0, last_start)):
+        end = start + window_steps
+        out_threat_windows.append(np.asarray(step_features[start:end], dtype=np.float32))
+        out_pool_signals.append(np.asarray(step_pool[start:end], dtype=np.float32))
+
+        now_index = end - 1
+        labels = [step_labels[now_index]] + [
+            step_labels[min(now_index + offset, n - 1)]
+            for offset in range(1, THREAT_HORIZON_STEPS + 1)
+        ]
+        out_threat_labels.append(np.asarray(labels, dtype=np.float32))
+
+        target: list[float] = []
+        for quantity_index in range(3):
+            for horizon in POOL_HORIZONS:
+                future = pool_track[end : end + horizon]
+                target.append(
+                    float(np.mean([row[quantity_index] for row in future])) if future else 0.0
+                )
+        out_pool_targets.append(np.asarray(target, dtype=np.float32))

@@ -8,6 +8,14 @@ EWMA fallback forecaster (PLAN.md Addition A). Owned by Person A
 frozen in `env/contracts.py` so `env/environment.py` can run in month 1
 before `forecaster.model.LSTMForecastProvider` exists. Selected via
 `configs/default.yaml`'s `use_foresight: ewma`.
+
+`LSTMForecastProvider` (Addition A's real, trained, frozen dual-head
+forecaster) is defined in `forecaster/model.py` -- which is where
+`env/contracts.py`'s `ForecastProvider` docstring promises it -- and
+re-exported here, because PROGRESS.md's milestone list and the E-A
+ablation both refer to it by this module path. Same object either way;
+the import is lazy so that `use_foresight: off`/`ewma` runs never pay
+for importing torch.
 """
 
 from __future__ import annotations
@@ -150,3 +158,18 @@ class MovingAverageForecaster(ForecastProvider):
             skr_mean_hat=[self._skr] * n_horizons,
             hybrid_demand_hat=[self._hybrid_serve_rate] * n_horizons,
         )
+
+
+def __getattr__(name: str):
+    """Lazily re-export `forecaster.model.LSTMForecastProvider`.
+
+    Module-level `__getattr__` (PEP 562) rather than a top-level import:
+    `forecaster.model` pulls in torch, and the great majority of this
+    repo's runs and tests never touch the LSTM path. Importing it eagerly
+    would make every `use_foresight: off`/`ewma` run pay for it.
+    """
+    if name == "LSTMForecastProvider":
+        from forecaster.model import LSTMForecastProvider
+
+        return LSTMForecastProvider
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

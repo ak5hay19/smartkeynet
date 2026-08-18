@@ -70,6 +70,45 @@ def load_key_lifetime_config(path: str | Path | None = None) -> dict[str, float]
 #     any threat elevation, per instruction: never below SERVE_PQC at
 #     CALM, escalating to SERVE_HYBRID under ELEVATED/HIGH.
 #
+# 2026-08-19 CORRECTION -- (S3, CALM): SERVE_PQC -> SERVE_HYBRID.
+#
+# The comment block above already states the intent: "S3 (patient-record-
+# grade, decades-long lifetime) [gets SERVE_HYBRID] even before any threat
+# elevation". The table did not implement it -- it gave S3 SERVE_PQC at
+# CALM, contradicting the paragraph directly above it, and the following
+# clause ("never below SERVE_PQC at CALM") reads as the weaker rule the
+# table actually encoded. Two readings of the same placeholder, and the
+# code shipped the one that was never argued for.
+#
+# The consequence was not cosmetic. S1, S3 and S4 all run at CALM posture,
+# and with no CALM-row hybrid floor anywhere in the table, **nothing in
+# those scenarios ever mandated a QKD draw at all**. Since Hard Rule 1
+# keeps security out of the reward, an unmandated hybrid serve is pure
+# cost -- so "never spend the pool" was optimal by construction, the
+# scarce resource the project is about was decorative, and
+# `AlwaysPQCPolicy` was unbeatable on reward for structural reasons rather
+# than because it budgets well.
+#
+# Grounding for the correction (Hard Rule 4 -- citable artifacts only):
+# S3 is the decades-long-confidentiality class, which is precisely the
+# Harvest-Now-Decrypt-Later target (PLAN2 §3.1). SP 800-57's cryptoperiod
+# guidance and CNSA 2.0's migration posture both say protect the
+# longest-lived data strongest and soonest, and hybrid (ML-KEM-768 XOR
+# ETSI GS QKD 014 key material) is the strongest tier available here. A
+# floor that waits for a *current* threat elevation before protecting data
+# whose exposure window is measured in decades has the HNDL threat model
+# backwards -- the whole point is that the adversary records now and
+# decrypts later, so present-tense calm is not evidence of safety.
+#
+# This is a floor RAISE, so Hard Rule 2 is unaffected in direction, and it
+# makes the environment strictly harder for every policy including the
+# agent (always-PQC must now serve hybrid for S3 traffic and can no longer
+# coast). It was made after Gate W3's first run came back negative, for
+# transparency -- Hard Rule 7 directs exactly this ("investigate
+# environment design first"), and both the before and after results are
+# reported. It is not a change made to help the agent win: see
+# SESSION_LOG.md 2026-08-19 for the re-run and its outcome.
+#
 # The one invariant that isn't a placeholder and must never regress:
 # floor is monotonically non-decreasing in both sensitivity_class and
 # threat_posture (verified by `PolicyTable.floor`'s docstring contract
@@ -84,7 +123,7 @@ _PLACEHOLDER_FLOOR_TABLE: dict[tuple[SensitivityClass, ThreatPosture], Action] =
     (SensitivityClass.S2, ThreatPosture.CALM): Action.SERVE_PQC,
     (SensitivityClass.S2, ThreatPosture.ELEVATED): Action.SERVE_PQC,
     (SensitivityClass.S2, ThreatPosture.HIGH): Action.SERVE_HYBRID,
-    (SensitivityClass.S3, ThreatPosture.CALM): Action.SERVE_PQC,
+    (SensitivityClass.S3, ThreatPosture.CALM): Action.SERVE_HYBRID,
     (SensitivityClass.S3, ThreatPosture.ELEVATED): Action.SERVE_HYBRID,
     (SensitivityClass.S3, ThreatPosture.HIGH): Action.SERVE_HYBRID,
 }
