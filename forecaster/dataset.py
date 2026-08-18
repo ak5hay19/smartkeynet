@@ -123,6 +123,12 @@ def collect_rollouts(
                     # between two request sources rather than between
                     # two scenarios.
                     "request_source": "graph",
+                    # Real RT-IoT2022 flow features. The forecaster's threat
+                    # head is a posture classifier, so it has to see what
+                    # posture is actually defined by; trained on the synthetic
+                    # placeholder it scored at chance.
+                    "threat_source": config.get("threat_source", "rt_iot2022"),
+                    "threat_split": "train",
                 }
                 env = SmartKeyNetEnv(env_config)
                 state, info = env.reset(seed=seed)

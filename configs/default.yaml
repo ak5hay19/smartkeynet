@@ -5,6 +5,15 @@
 # `reward.*` or `hard_rules.*` are floor-adjacent and should get a
 # team ping (split.md §3, "the shared files ... are the danger zone").
 
+# --- env/threat_source.py: the project's one real-network data slot ---
+# `rt_iot2022` feeds the forecaster real captured IoT intrusion flows instead of
+# the synthetic [qber, load, boost] placeholder. Classes map onto the intrusion
+# lifecycle: benign IoT -> CALM, NMAP scans -> ELEVATED, DoS/ARP/Metasploit -> HIGH,
+# so reconnaissance is a genuine leading indicator of the attack that follows.
+# Falls back to `synthetic` if the dataset is absent (it is gitignored, ~55 MB).
+threat_source: rt_iot2022   # rt_iot2022 | synthetic
+threat_split: train         # train | eval -- eval episodes must use unseen flows
+
 scenario: S1  # one of S1..S6 (PLAN.md §5); S6 is held-out eval only (Hard Rule 8)
 
 seed: 0

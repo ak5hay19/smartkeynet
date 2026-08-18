@@ -61,9 +61,33 @@ def test_feature_order_is_stable_against_class_count_changes():
 
     for observation in (short, long):
         assert len(observation_to_features(observation)) == N_FEATURES
-    # hybrid_serves stays in the final slot either way
-    assert observation_to_features(short)[-1] == 1.0
-    assert observation_to_features(long)[-1] == 1.0
+    # hybrid_serves stays at its fixed index either way -- it sits just
+    # before the reserved threat-feature block
+    from forecaster.model import N_THREAT_FEATURES_IN_MODEL
+
+    hybrid_index = N_FEATURES - N_THREAT_FEATURES_IN_MODEL - 1
+    assert observation_to_features(short)[hybrid_index] == 1.0
+    assert observation_to_features(long)[hybrid_index] == 1.0
+
+
+def test_threat_features_are_padded_to_a_fixed_width():
+    """Both sources share one input layer: RT-IoT2022 supplies 9 threat
+    features, the synthetic fallback 3, and the model sees the reserved
+    width either way."""
+    from forecaster.model import N_THREAT_FEATURES_IN_MODEL
+
+    synthetic = make_observation()
+    synthetic["threat_features"] = [0.02, 0.1, 0.5]  # 3, the fallback
+    real = make_observation()
+    real["threat_features"] = [0.1] * 9  # 9, RT-IoT2022
+
+    for observation in (synthetic, real):
+        assert len(observation_to_features(observation)) == N_FEATURES
+
+    # the short vector is zero-padded, not silently shifted
+    padded = observation_to_features(synthetic)[-N_THREAT_FEATURES_IN_MODEL:]
+    assert padded[:3] == [0.02, 0.1, 0.5]
+    assert padded[3:] == [0.0] * (N_THREAT_FEATURES_IN_MODEL - 3)
 
 
 def test_model_output_shapes_per_head():

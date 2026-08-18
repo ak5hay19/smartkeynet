@@ -40,6 +40,11 @@ _SCARCE_OVERRIDES = {
         "bits_per_hybrid_draw": 256.0,  # the real ETSI draw, not an inflated one
     },
     "qkd": {"mean_skr_kbps": 0.02},  # ~0.078 keys/step: a link that cannot keep up
+    # Synthetic threat signal: these tests are about POOL scarcity, and real
+    # RT-IoT2022 traffic occasionally trips the posture ratchet, which raises
+    # floors and changes how much hybrid demand exists -- a second moving part
+    # this test is not trying to measure.
+    "threat_source": "synthetic",
 }
 """Config override that makes the pool genuinely bind, for the
 deferral/regret tests below.

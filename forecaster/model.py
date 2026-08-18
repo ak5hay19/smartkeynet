@@ -71,23 +71,38 @@ HORIZONS: tuple[int, int, int] = (10, 25, 50)
 THREAT_HORIZON_STEPS = 5
 """Threat-head horizon k, per Addition A ("next k=5 steps")."""
 
-N_FEATURES = 8
+N_THREAT_FEATURES_IN_MODEL = 9
+"""Width reserved for `threat_features`, zero-padded or truncated to fit.
+
+RT-IoT2022 supplies 9 (eight standardised flow features plus the graded
+discriminant score); the synthetic fallback supplies 3. Reserving a fixed
+width lets both sources share one checkpoint-compatible input layer, which
+is what a raw variable-width passthrough could not do."""
+
+N_FEATURES = 8 + N_THREAT_FEATURES_IN_MODEL
 """Per-timestep input features, in a fixed order that must match
 `observation_to_features` exactly:
 
-    0  qber
-    1  skr
-    2  pool_fill
-    3-6  arrivals_per_class[0..3]
-    7  hybrid_serves
+    0     qber
+    1     skr
+    2     pool_fill
+    3-6   arrivals_per_class[0..3]
+    7     hybrid_serves
+    8-16  threat_features (padded/truncated to N_THREAT_FEATURES_IN_MODEL)
 
-`threat_features` is deliberately NOT passed through raw: its width is
-dataset-dependent (today a 3-vector placeholder, eventually
-RT-IoT2022-derived), and baking a variable width into a checkpoint's
-input layer would make every saved model incompatible with the next
-change to that vector. The threat head instead learns posture from the
-*observable dynamics* -- QBER, arrivals, pool behaviour -- which is
-also the more defensible modelling claim.
+**Threat features were excluded until 2026-08-18**, on the grounds that their
+width was dataset-dependent and baking it into a checkpoint's input layer
+would break every saved model when the vector changed. That reasoning was
+sound while the vector was a 3-element synthetic placeholder carrying no real
+information -- there was nothing to lose by omitting it.
+
+It stopped being sound once RT-IoT2022 was wired in. The threat head's entire
+job is to classify posture, the real flow features are what posture is
+*defined by*, and withholding them left the head inferring intrusion activity
+from QBER and pool level -- which is why it scored at chance. Padding to a
+fixed reserved width keeps the checkpoint-compatibility property that
+motivated the original exclusion, without starving the head of its actual
+signal.
 """
 
 N_POOL_OUTPUTS = 3 * len(HORIZONS)
@@ -108,12 +123,18 @@ def observation_to_features(observation: ForecastObservation) -> list[float]:
     # cannot silently shift every downstream feature index
     arrivals = (arrivals + [0, 0, 0, 0])[:4]
 
+    # pad/truncate to the reserved width so the synthetic (3) and
+    # RT-IoT2022 (9) sources share one input layer
+    threat = [float(value) for value in observation["threat_features"]]
+    threat = (threat + [0.0] * N_THREAT_FEATURES_IN_MODEL)[:N_THREAT_FEATURES_IN_MODEL]
+
     return [
         float(observation["qber"]),
         float(observation["skr"]),
         float(observation["pool_fill"]),
         *[float(count) for count in arrivals],
         float(observation["hybrid_serves"]),
+        *threat,
     ]
 
 

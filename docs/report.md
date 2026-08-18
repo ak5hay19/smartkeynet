@@ -31,10 +31,12 @@ Three claims, each supported by measurement:
 2. **Enforcing that guarantee is harder than stating it.** We found and closed
    **three** distinct paths by which the floor could be bypassed, all of which
    had been reporting `floor_violations = 0` while under-protecting traffic.
-3. **RL does not beat a well-tuned static rule in this environment, and
-   foresight buys nothing measurable.** Gate W3 fails; the E-A ablation is a null
-   result (off 317.2, ewma 317.8, lstm 722.0 regret events on S3). We report both,
-   explain why, and scope the claim accordingly.
+3. **RL does not beat a well-tuned static rule here, and accurate threat
+   forecasting actively costs availability.** Gate W3 fails. The E-A ablation
+   comes out *negative*: an LSTM threat head reaching 0.98 balanced accuracy on
+   real RT-IoT2022 traffic doubles S3 regret events (317 → 683), because correct
+   detection raises floors, the ratchet makes that irreversible, and the QKD pool
+   cannot fund the demand. We report both and explain the mechanism.
 
 ---
 
@@ -303,7 +305,7 @@ Worth recording, because both produced *confidently wrong* results:
 
 ---
 
-## 7. Experiment E-A — a null result
+## 7. Experiment E-A — foresight costs availability
 
 ```bash
 .venv/bin/python -m experiments.ea_ablation --train-seeds 3 --eval-seeds 5
@@ -312,58 +314,58 @@ Worth recording, because both produced *confidently wrong* results:
 Success criterion, set in advance: *LSTM foresight measurably reduces regret
 events on S3 versus `off`.*
 
-| `use_foresight` | S3 regret events | S3 reward | S6 regret events |
-|---|---|---|---|
-| off | 317.2 | −1,835,846 | 554.7 |
-| ewma | 317.8 | −1,838,534 | 552.3 |
-| lstm | 722.0 | −6,281,331 | 554.0 |
+| `use_foresight` | S3 regret events | S3 reward |
+|---|---|---|
+| **off** | **317.2** | −1,835,846 |
+| ewma | 639.2 | −4,901,421 |
+| lstm | 682.7 | −5,623,790 |
 
-**NOT MET.** `off` and `ewma` are indistinguishable (317.2 vs 317.8); the LSTM is
-substantially worse.
+**NOT MET**, and by a wide margin in the wrong direction. This is the
+project's most interesting negative result, because the forecaster is not
+broken — it is *accurate*.
 
-### A claim we had to retract
+### The forecaster works. That is the problem.
 
-An earlier revision of this report stated that EWMA foresight cut S3 regret events
-by 23%. **That result does not survive and has been withdrawn.** It was measured
-before two DQN training bugs were fixed (§5: missing observation normalisation,
-and an absorbing-state training loop). Once the agent's inputs were correctly
-scaled and its training no longer spent 95% of its time trapped in a starved
-regime, the apparent benefit of foresight disappeared — which is the right
-outcome, because the "benefit" had been an artifact of a broken agent responding
-to whichever features happened to dominate its unnormalised input.
+Trained on real RT-IoT2022 flow features (§3A), the threat head reaches
+**0.976–0.989 balanced accuracy** — against 0.334 (exact chance for three
+classes) on the synthetic signal it was previously given. It genuinely
+detects reconnaissance and attack traffic.
 
-The lesson is worth stating: **an ablation is only as trustworthy as the agent
-underneath it.** Re-running every experiment after the training fixes is what
-caught this; a timestamp check against the code that produced them is now part of
-closing out the project.
+And detection is what costs us. The chain is short and entirely mechanical:
 
-### Why the LSTM is worse than no foresight at all
+1. The threat head correctly identifies elevated traffic.
+2. The policy table raises the floor for affected classes.
+3. `PolicyTable`'s ratchet is **one-way** — a raised floor never falls.
+4. More flows now require hybrid keys than the QKD link can fund.
+5. Requests are deferred rather than downgraded (Hard Rule 9), and deferral
+   is precisely what a regret event counts.
 
-The threat head does genuinely learn — balanced accuracy went from 0.334 (exact
-chance for three classes) to 0.852, after fixing two labelling and class-imbalance
-bugs described below. But class weighting recovers rare escalations by trading
-precision for recall, and **every false positive raises a floor**. Under a pool
-this scarce, a raised floor converts directly into deferrals. A more *sensitive*
-threat forecaster is not automatically a better one: on shared, scarce
-infrastructure, over-triggering costs availability.
+So better threat detection produces **more** regret events, not fewer. The
+security/availability tension is not a caveat here; it is the measurement.
 
-### Two bugs fixed along the way, both hidden behind plausible numbers
+### The single-false-positive result
 
-1. **Threat windows were rectangular.** The signal jumped 0 → 3.0 in a single step
-   — four transitions across a 2,500-step episode — and absolute time is
-   deliberately excluded from the state, so *nothing observable predicted an
-   escalation*. There was no forecasting problem to solve, only a surprise.
-   Escalation now ramps over ~120 steps, which is also the realistic shape:
-   reconnaissance precedes exploitation.
-2. **The threat head was trained on the *ratcheted* posture, unweighted.** The
-   ratchet is monotone and sticky, so the label was "same as now" in **99.9%** of
-   samples; the 89/11/0.3 class imbalance then collapsed the head onto the
-   majority class — per-class recall 1.000 / 0.001 / 0.000. Raw accuracy read
-   0.838 and hid it completely: answering "calm" to everything scores the same.
+The sharpest illustration came from the benign baseline. On S1 with real
+traffic the instantaneous posture reads CALM on **1,199 of 1,200 steps** —
+one benign IoT flow has scan-like features and reads ELEVATED (threat score
+peaks at 0.277 against a 0.107 mean).
 
-Neither fix rescued the ablation. The honest summary is that **this environment
-has little forecastable structure worth acting on**, and we report that rather
-than tuning until a number came out the desired way.
+That one step raises the floor **for the remainder of the episode**, because
+the ratchet has no downward path.
+
+This is a direct consequence of the property that makes the architecture
+steering-proof. §6 shows suppression cannot walk a floor back down; the same
+one-way design means a lone false positive cannot be walked back either. The
+mechanism that defeats an adversary is the mechanism that amplifies a false
+alarm. Both follow from one line of the policy table, and an operator
+deploying this would need to know it.
+
+A hysteresis window (require *k* consecutive elevated readings before
+ratcheting) would blunt the false-positive cost, at the price of delaying
+genuine escalations by *k* steps — and delay is exactly what a sustained
+suppression attack buys. That trade-off is stated rather than resolved: it
+depends on the relative cost of an unprotected window versus a starved one,
+which is an operator's judgement, not ours.
 
 ## 8. Answering the examiner
 

@@ -120,10 +120,20 @@ class MovingAverageForecaster(ForecastProvider):
 
     def update(self, observation: ForecastObservation) -> None:
         threat_features = observation["threat_features"]
-        raw_signal = float(np.mean(threat_features)) if len(threat_features) > 0 else 0.0
-        squashed_signal = _squash_non_negative(raw_signal)
-
-        self._threat_score = self._ewma(self._threat_score, squashed_signal)
+        # CONVENTION: the LAST element of `threat_features` is a scalar threat
+        # summary already in [0, 1]; everything before it is raw per-flow
+        # detail for the LSTM head.
+        #
+        # This used to average the whole vector. That was fine while the
+        # vector was `[qber, load, boost]` and every entry rose with threat,
+        # and it broke the moment real RT-IoT2022 features arrived: those are
+        # standardised, so they average to ~0 regardless of posture, and they
+        # outnumber the summary 8 to 1. Measured on an S2 episode, the mean
+        # read 0.124 before the attack and -0.119 during reconnaissance --
+        # i.e. an escalation made the signal look *calmer*. Reading the
+        # summary directly is both correct and simpler.
+        summary = float(threat_features[-1]) if len(threat_features) > 0 else 0.0
+        self._threat_score = self._ewma(self._threat_score, min(1.0, max(0.0, summary)))
         self._pool_fill = self._ewma(self._pool_fill, float(observation["pool_fill"]))
         self._skr = self._ewma(self._skr, float(observation["skr"]))
         self._hybrid_serve_rate = self._ewma(self._hybrid_serve_rate, float(observation["hybrid_serves"]))

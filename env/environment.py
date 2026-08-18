@@ -305,6 +305,32 @@ class SmartKeyNetEnv(gym.Env):
         # deployment setting. `None` in every other scenario.
         self._steering_trace = config.get("steering_trace")
 
+        # --- real threat features (RT-IoT2022) ---
+        # `threat_source: rt_iot2022` replaces the synthetic placeholder with
+        # real captured flow features. `threat_split` selects the train or
+        # eval row pool so an agent is never evaluated on the same flows the
+        # forecaster trained against.
+        self._threat_source_name = config.get("threat_source", "synthetic")
+        self._threat_split = config.get("threat_split", "train")
+        self._threat_source = None
+        self._threat_scorer = None
+        if self._threat_source_name == "rt_iot2022":
+            from env.threat_source import RTIoT2022ThreatSource, fit_graded_threat_scorer
+
+            self._threat_source = RTIoT2022ThreatSource(
+                split=self._threat_split, seed=self._seed
+            )
+            # Always fitted on the TRAIN pool, whichever split the episode
+            # samples from -- fitting on eval flows would leak.
+            self._threat_scorer = fit_graded_threat_scorer(
+                RTIoT2022ThreatSource(split="train", seed=0)
+            )
+        elif self._threat_source_name != "synthetic":
+            raise ValueError(
+                f"unknown threat_source {self._threat_source_name!r} -- "
+                "expected 'synthetic' or 'rt_iot2022'"
+            )
+
         # Populated fresh by reset(); typed here for clarity.
         self._pool_sim: PoolSim | None = None
         self._deferral_queue: DeferralQueue | None = None
@@ -687,11 +713,21 @@ class SmartKeyNetEnv(gym.Env):
         construction (`env/scenarios.py` validates this), so it can
         only ever raise the derived posture -- Hard Rule 2.
         """
-        features = [
-            self._last_pool_state.qber,
-            self._current_load(),
-            self._scenario.threat_boost_at(self._step_count),
-        ]
+        if self._threat_source is not None:
+            features = self._real_threat_features()
+        else:
+            # Last element is the scalar threat summary in [0, 1] -- see
+            # `_real_threat_features` for the convention. The synthetic boost
+            # is normalised so both sources agree on that contract.
+            features = [
+                self._last_pool_state.qber,
+                self._current_load(),
+                min(
+                    1.0,
+                    self._scenario.threat_boost_at(self._step_count)
+                    / self._MAX_THREAT_BOOST,
+                ),
+            ]
         if self._steering_trace is not None:
             # S5: the adversary's influence enters HERE and nowhere else
             # -- on the telemetry the forecaster reads. It never touches
@@ -701,6 +737,47 @@ class SmartKeyNetEnv(gym.Env):
             # question is what it can do with it.
             features = self._steering_trace.apply(features, self._step_count)
         return features
+
+    _MAX_THREAT_BOOST = 8.0
+    """Largest intensity any scenario threat window reaches (env/scenarios.py
+    `_S2_THREAT_WINDOWS`). Used only to normalise the boost into the [0, 1]
+    mixing intensity below."""
+
+    def _real_threat_features(self) -> list[float]:
+        """Real RT-IoT2022 flow features for this step.
+
+        The scenario says *how escalated* things are; the dataset says *what
+        that looks like on the wire*. The scenario's threat boost is
+        normalised to an intensity in [0, 1] and turned into mixing weights
+        over the three class pools:
+
+            intensity 0.0  ->  all benign IoT traffic
+            intensity 0.5  ->  benign mixed with reconnaissance scans
+            intensity 1.0  ->  predominantly active attack traffic
+
+        Mixing rather than switching is deliberate. A real escalation does not
+        replace normal traffic; attack flows appear *alongside* it and grow as
+        a share. That gradual change is exactly the structure the forecaster
+        has to pick up on, and it is what makes reconnaissance a usable
+        leading indicator for the attack that follows.
+
+        The returned vector is the 8 standardised flow features plus the
+        scalar discriminant score. The scalar is appended because the EWMA
+        fallback averages this vector, and the raw features are not monotone
+        in threat -- see `ThreatScorer` for the measurement.
+        """
+        intensity = min(
+            1.0, self._scenario.threat_boost_at(self._step_count) / self._MAX_THREAT_BOOST
+        )
+        calm_weight = max(0.0, 1.0 - 2.0 * intensity)
+        elevated_weight = 1.0 - abs(2.0 * intensity - 1.0)
+        high_weight = max(0.0, 2.0 * intensity - 1.0)
+
+        sampled = self._threat_source.sample_mixture(
+            calm_weight, elevated_weight, high_weight
+        )
+        threat_score = self._threat_scorer.score(sampled)
+        return [float(value) for value in sampled] + [threat_score]
 
     def _current_load(self) -> float:
         backlog = len(self._pending_requests) + len(self._deferral_queue)
