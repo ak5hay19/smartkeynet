@@ -176,6 +176,42 @@ def load_pool_config(path: str | Path | None = None) -> dict[str, float]:
     return config["pool"]
 
 
+_DEFAULT_LINK_SKR_KBPS = 200.0
+_DEFAULT_KMS_REQUESTS_PER_DECISION_EPOCH = 1000.0
+"""Fallbacks for `slice_skr_kbps` when a caller passes a `pool:` block
+predating the 2026-08-19 recalibration (e.g. a hand-built test config).
+Same values `configs/default.yaml` states with their derivation."""
+
+
+def slice_skr_kbps(pool_config: dict[str, Any]) -> float:
+    """Secret-key rate available to *this simulated tenant slice*, in kbps.
+
+    The QKD link's own rate is a physical property of the fibre
+    (`link_skr_kbps`, cited in `SyntheticSKRQBERTrace`'s docstring).
+    The rate available to one modelled slice is that divided by how
+    many key requests the KMS behind the link serves per decision
+    epoch (`kms_requests_per_decision_epoch`), because
+    `env/environment.py` renders exactly one decision per epoch for
+    one slice while the real KMS is serving its whole tenant
+    population from the same pool.
+
+    Keeping this a two-factor derivation rather than one opaque rate
+    is deliberate: it is the assumption that decides whether QKD is
+    scarce at all, and before 2026-08-19 it was implicitly (and
+    wrongly) set to 1.0 -- see `configs/default.yaml`'s `pool:` block
+    for the full recalibration note and the measured before/after.
+    """
+    link_kbps = float(pool_config.get("link_skr_kbps", _DEFAULT_LINK_SKR_KBPS))
+    requests_per_epoch = float(
+        pool_config.get("kms_requests_per_decision_epoch", _DEFAULT_KMS_REQUESTS_PER_DECISION_EPOCH)
+    )
+    if requests_per_epoch <= 0:
+        raise ValueError(
+            f"kms_requests_per_decision_epoch must be positive, got {requests_per_epoch}"
+        )
+    return link_kbps / requests_per_epoch
+
+
 @dataclass
 class SyntheticSKRQBERTrace:
     """Documented synthetic SKR/QBER trace (PLAN.md "Datasets &

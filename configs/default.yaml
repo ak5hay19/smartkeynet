@@ -13,11 +13,66 @@ seed: 0
 use_foresight: ewma  # off | ewma | lstm
 
 # --- env/pool_sim.py ---
+#
+# 2026-08-19 RECALIBRATION (pre-registered before any training run this session --
+# see PROGRESS.md "Environment recalibration" and SESSION_LOG.md 2026-08-18b).
+#
+# The previous values made the QKD pool a *non-scarce* resource, which silently
+# disabled the project's central premise. Measured on the pre-recalibration
+# config: refill was 200 kbps * 1000 = ~203,000 bits per step against a 256-bit
+# draw and at most one decision per step -- the link funded ~793 hybrid keys per
+# key consumed, so `pool_fill` pinned at 1.0 by step 2 and stayed there. Under
+# that regime `AlwaysHybridPolicy` produced 0 pool-exhaustion events, 0 regret
+# events and 0 deferrals on S1 (PLAN2 §7.4 expects the opposite), and every
+# threshold in `baselines.static_threshold_grid` saw `pool_fill = 1.0 > t` and
+# therefore behaved *identically* to always-hybrid -- i.e. the mandatory tuned
+# threshold baseline (Hard Rule 7) was not a distinct policy at all.
+#
+# Nothing security-related is touched by this block: no floor, no mask, no tier,
+# no Hard Rule 4 constant. `bits_per_hybrid_draw` (the one genuinely cited
+# security-adjacent constant here) is UNCHANGED at ETSI GS QKD 014's 256 bits.
+# What changed is the *time base and slice* the refill rate is expressed in, and
+# the pool store's size -- both stated with their derivation below rather than
+# tuned to a result.
 pool:
-  capacity_bits: 1_000_000
+  # 50 ETSI GS QKD 014 keys (50 * 256 = 12,800 bits). A per-consumer key store
+  # of a few tens of keys is the ETSI GS QKD 014 KMS deployment convention
+  # (keys are delivered and consumed continuously, not stockpiled); it is also
+  # what makes a 250-step evaluation episode able to genuinely exhaust the pool
+  # rather than never reaching its floor. Was 1_000_000 bits (3,906 keys).
+  capacity_bits: 12_800
   initial_fill_frac: 0.5
   bits_per_hybrid_draw: 256  # ETSI GS QKD 014 key size (256-bit); PLAN.md §4 Datasets & Provenance:
                               # "ETSI GS QKD 014 gives key sizes (256-bit)" -- Hard Rule 4, no invented number
+
+  # Refill available to the modelled tenant slice, stated as an explicit
+  # two-factor derivation rather than one opaque rate, so the assumption is
+  # visible and testable (tests/test_pool_sim.py::test_slice_skr_derivation).
+  #
+  #     mean_skr_kbps = link_skr_kbps / kms_requests_per_decision_epoch
+  #                   = 200.0 / 1000.0 = 0.2 kbps = 200 bits per decision epoch
+  #
+  # link_skr_kbps: the metro CV-QKD field-trial secret-key rate already cited in
+  #   env/pool_sim.py's `SyntheticSKRQBERTrace` docstring (O(10-100s) kbps over
+  #   tens of km of standard fibre). Unchanged -- this is the physics.
+  # kms_requests_per_decision_epoch: the KMS behind that link serves the whole
+  #   tenant population at cloud-KMS request rates (~10^3 key requests/second),
+  #   while this simulator renders exactly one decision per epoch for one tenant
+  #   slice (env/environment.py: "one env.step() = one request decision"). The
+  #   slice's share of the link is therefore the link rate divided by the KMS's
+  #   request rate. This is the number the old config implicitly set to 1.0 --
+  #   i.e. it assumed the entire metro QKD link backed a KMS serving one key
+  #   request per second, which is what made the pool infinite.
+  #
+  # Net effect: the link funds 200/256 = ~0.78 of one hybrid key per decision,
+  # against a request stream that is ~20% hybrid-mandatory plus whatever the
+  # policy discretionarily spends. Scarcity binds, in both directions -- verified
+  # across seeds 0-4 before this value was frozen: always-hybrid exhausts
+  # (2-12 events / 250 steps, 38-62 / 1000 steps) while always-PQC and every
+  # grid threshold exhaust 0 times. That two-sided outcome is the budgeting
+  # problem PLAN2 §3.2 describes; it did not exist before.
+  link_skr_kbps: 200.0
+  kms_requests_per_decision_epoch: 1000.0
 
 # --- env/masking.py (Hard Rule 2, 4, 5) ---
 key_lifetime:
@@ -28,7 +83,20 @@ reward:
   w_lat: 1.0
   w_en: 0.1
   w_fr: 0.1
-  w_qkd: 1.0
+  w_qkd: 0.004            # scarcity price per pool BIT. Recalibrated 2026-08-19 alongside the
+                          # `pool:` block above, same pre-registration. The reward formula itself is
+                          # UNCHANGED (`- w_qkd * bits_consumed`, PLAN2 §5.3) -- only this coefficient
+                          # moved, and it is an operational cost weight, not a security term (Hard
+                          # Rule 1 is untouched and untouchable). Rationale: at w_qkd = 1.0 a single
+                          # 256-bit hybrid draw cost -256.0 reward against a per-serve latency term of
+                          # -1.5 and a rekey cost of -1.0 to -2.0 -- a term two orders of magnitude
+                          # larger than every other term combined, which makes SERVE_HYBRID a cliff the
+                          # agent simply never explores rather than a resource it budgets. Set so one
+                          # hybrid draw prices at ~1 reward unit (0.004 * 256 = 1.024), i.e. comparable
+                          # to one serve's latency, leaving the *real* cost of over-spending the pool
+                          # to be learned through the MDP where it actually lives: the -r_starve
+                          # deferral penalty a drained pool causes later (Hard Rule 9). Chosen on that
+                          # principle before any training run, and not revisited afterwards.
   r_starve: 10.0         # ~= 10 * w_lat (PLAN.md §4)
   c_rekey_base: 1.0       # c0 in c_rekey(load) = c0 * (1 + beta * load)
   c_rekey_load_beta: 1.0  # beta in the same formula

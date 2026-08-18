@@ -127,7 +127,7 @@ from env.contracts import (
 from env.deferral_queue import DeferralQueue
 from env.forecast_provider import MovingAverageForecaster
 from env.masking import PolicyTable, compute_mask
-from env.pool_sim import PoolSim, SyntheticSKRQBERTrace
+from env.pool_sim import PoolSim, SyntheticSKRQBERTrace, slice_skr_kbps
 from env.request_generator import random_request_generator
 
 
@@ -238,6 +238,7 @@ class SmartKeyNetEnv(gym.Env):
         self._pool_capacity = float(config["pool"]["capacity_bits"])
         self._pool_initial_fill_frac = float(config["pool"]["initial_fill_frac"])
         self._bits_per_hybrid_draw = float(config["pool"]["bits_per_hybrid_draw"])
+        self._slice_skr_kbps = slice_skr_kbps(config["pool"])
         self._max_key_age = float(config["key_lifetime"]["max_key_age_steps"])
         self._reward_cfg = config["reward"]
         self._use_foresight = config.get("use_foresight", "off")
@@ -289,6 +290,7 @@ class SmartKeyNetEnv(gym.Env):
 
         trace = SyntheticSKRQBERTrace(
             n_steps=self._TRACE_N_STEPS,
+            mean_skr_kbps=self._slice_skr_kbps,
             seed=episode_seed if episode_seed is not None else 0,
         )
         self._pool_sim = PoolSim(

@@ -149,3 +149,51 @@ def test_run_grid_returns_one_result_per_combination():
         assert result.scenario == "S1"
         assert result.seed in seeds
         assert result.floor_violations == 0
+
+
+# ---------------------------------------------------------------------------
+# Scarcity premise (2026-08-19 pool recalibration -- see
+# configs/default.yaml's `pool:` block)
+# ---------------------------------------------------------------------------
+
+
+def test_always_hybrid_exhausts_the_pool_and_always_pqc_does_not():
+    """PLAN2 §7.4's Panel 4 premise, as an executable check: the greedy
+    baseline must genuinely drain the pool (nonzero exhaustion/regret)
+    while the conservative one never does. Before the 2026-08-19 pool
+    recalibration *both* sat at exactly zero, because the QKD link
+    funded ~793 keys per key consumed -- the scenario the whole project
+    is about could not occur."""
+    config = load_test_config(overrides={"max_steps": 250})
+
+    hybrid = run_scenario(AlwaysHybridPolicy(), "S1", config, seed=0)
+    pqc = run_scenario(AlwaysPQCPolicy(), "S1", config, seed=0)
+
+    assert hybrid.pool_exhaustion_events > 0
+    assert hybrid.episode_metrics.regret_events > 0
+    assert pqc.pool_exhaustion_events == 0
+    assert pqc.episode_metrics.regret_events == 0
+    # Hard Rule 9: exhaustion is an availability failure, never a security one.
+    assert hybrid.floor_violations == 0
+    assert pqc.floor_violations == 0
+
+
+def test_tuned_threshold_is_a_distinct_policy_from_always_hybrid():
+    """Hard Rule 7 requires a *tuned threshold* baseline. That baseline
+    is only meaningful if `pool_fill` actually varies -- otherwise every
+    threshold in `baselines.static_threshold_grid` sees the same
+    constant and the "tuned threshold" is a relabelled always-hybrid.
+    That was literally true before the 2026-08-19 recalibration (both
+    scored total_reward == -64854.6 on S1/seed 0)."""
+    config = load_test_config(overrides={"max_steps": 250})
+    grid = config["baselines"]["static_threshold_grid"]
+
+    hybrid = run_scenario(AlwaysHybridPolicy(), "S1", config, seed=0)
+    rewards = {
+        t: run_scenario(StaticThresholdPolicy(t), "S1", config, seed=0).total_reward for t in grid
+    }
+
+    # at least one grid threshold must behave differently from always-hybrid
+    assert any(r != pytest.approx(hybrid.total_reward) for r in rewards.values())
+    # and the grid must not be degenerate -- different thresholds, different outcomes
+    assert len(set(round(r, 6) for r in rewards.values())) > 1

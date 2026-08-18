@@ -52,6 +52,27 @@ def load_test_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     return config
 
 
+_EXTREME_SCARCITY_POOL: dict[str, float] = {
+    "capacity_bits": 500_000.0,
+    "initial_fill_frac": 0.0,
+    "bits_per_hybrid_draw": 300_000.0,
+    # A hand-built draw size ~1,200x the production one needs a refill rate to
+    # match, or the pool takes 1,500 steps to cover a single draw and nothing
+    # these tests are actually about (deferral onset, then drain) is observable
+    # inside a 250-300 step window. 200 kbps / 1 request-per-epoch == 200,000
+    # bits/step, i.e. two steps of refill per draw. Before the 2026-08-19 pool
+    # recalibration (see configs/default.yaml's `pool:` block) this was the
+    # *production* rate, which is why these tests didn't state it themselves.
+    "link_skr_kbps": 200.0,
+    "kms_requests_per_decision_epoch": 1.0,
+}
+"""Deliberately extreme scarcity for the Hard Rule 9 structural tests below:
+a pool that cannot cover a draw at reset and refills to cover one every two
+steps. Not representative of the production `pool:` block -- these tests are
+about the *mechanism* (never serve below floor; defer instead; drain later),
+which has to hold at any pool sizing."""
+
+
 def take_random_valid_step(env: SmartKeyNetEnv, rng: np.random.Generator, info: dict[str, Any]):
     mask = info["action_mask"]
     legal = [a for a in Action if mask[int(a)]]
@@ -160,7 +181,7 @@ def test_hybrid_mandatory_request_with_uncoverable_pool_never_reaches_agent():
     while the pool can't cover its draw -- if it were, it should have
     been diverted to the deferral queue instead (Hard Rule 9)."""
     config = load_test_config(
-        overrides={"pool": {"capacity_bits": 500_000.0, "initial_fill_frac": 0.0, "bits_per_hybrid_draw": 300_000.0}}
+        overrides={"pool": _EXTREME_SCARCITY_POOL}
     )
     env = SmartKeyNetEnv(config)
     state, info = env.reset(seed=0)
@@ -264,7 +285,13 @@ def test_reuse_reward_has_no_rekey_cost_or_pool_draw():
 
     fill_before = env._pool_sim.fill
     state, reward, terminated, truncated, info = env.step(Action.REUSE)
-    assert env._pool_sim.fill == pytest.approx(fill_before)  # REUSE never draws
+    # REUSE never draws: the pool can only have gone *up* (trace refill during
+    # the step's advance-to-next-decision phase). This was an equality check
+    # until 2026-08-19, which passed only because the pre-recalibration pool sat
+    # pinned at capacity every step -- refill was clamped away, so "no draw" and
+    # "no change" were indistinguishable. With a pool that genuinely moves, the
+    # real invariant is that nothing was *subtracted*.
+    assert env._pool_sim.fill >= fill_before
     assert "forced_rekey" not in info
 
 
@@ -331,7 +358,7 @@ def test_gate_full_s1_episode_random_valid_policy_zero_floor_violations():
 
 def test_gate_regret_events_logged_and_deferred_request_eventually_served():
     config = load_test_config(
-        overrides={"pool": {"capacity_bits": 500_000.0, "initial_fill_frac": 0.0, "bits_per_hybrid_draw": 300_000.0}}
+        overrides={"pool": _EXTREME_SCARCITY_POOL}
     )
     env = SmartKeyNetEnv(config)
     state, info = env.reset(seed=7)

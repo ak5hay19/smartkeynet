@@ -19,6 +19,7 @@ from env.pool_sim import (
     PoolSim,
     SyntheticSKRQBERTrace,
     load_pool_config,
+    slice_skr_kbps,
 )
 
 
@@ -265,3 +266,61 @@ def test_pool_drains_correctly_under_synthetic_trace_s3_degradation():
     refill_pre_spike_equivalent = pool.fill
 
     assert refill_during_spike < refill_pre_spike_equivalent
+
+
+# ---------------------------------------------------------------------------
+# Slice-SKR derivation (2026-08-19 pool recalibration -- see
+# configs/default.yaml's `pool:` block for the full note)
+# ---------------------------------------------------------------------------
+
+
+def test_slice_skr_derivation_divides_link_rate_by_kms_request_rate():
+    """`slice_skr_kbps` must be exactly the two-factor derivation the
+    config documents -- not a rate anyone can quietly retune to a
+    result. If this ratio is ever edited, this test is the thing that
+    forces the edit to be deliberate."""
+    assert slice_skr_kbps({"link_skr_kbps": 200.0, "kms_requests_per_decision_epoch": 1000.0}) == pytest.approx(0.2)
+    assert slice_skr_kbps({"link_skr_kbps": 200.0, "kms_requests_per_decision_epoch": 1.0}) == pytest.approx(200.0)
+
+
+def test_slice_skr_rejects_non_positive_request_rate():
+    with pytest.raises(ValueError):
+        slice_skr_kbps({"link_skr_kbps": 200.0, "kms_requests_per_decision_epoch": 0.0})
+
+
+def test_slice_skr_falls_back_for_pre_recalibration_pool_blocks():
+    """A hand-built `pool:` dict predating the recalibration (no
+    link/request-rate keys) still resolves, to the same documented
+    defaults."""
+    assert slice_skr_kbps({"capacity_bits": 1.0}) == pytest.approx(0.2)
+
+
+def test_configured_pool_makes_qkd_genuinely_scarce():
+    """The premise check (PLAN2 §3.2, Hard Rule 7's "investigate the
+    environment design first"): the configured link must fund *less
+    than one* hybrid key per decision epoch. If it ever funds more than
+    one again, the pool is not a scarce resource, `pool_fill` pins at
+    1.0, every `static_threshold_grid` entry collapses onto
+    always-hybrid, and the project's central budgeting problem
+    silently stops existing -- which is exactly the state this repo was
+    in before 2026-08-19.
+    """
+    cfg = load_pool_config()
+    bits_per_epoch = slice_skr_kbps(cfg) * 1000.0 * PoolSim._SECONDS_PER_STEP
+    draws_funded_per_epoch = bits_per_epoch / cfg["bits_per_hybrid_draw"]
+    assert draws_funded_per_epoch < 1.0, (
+        f"QKD refill funds {draws_funded_per_epoch:.2f} hybrid keys per decision -- "
+        "the pool is not scarce and the budgeting problem does not exist"
+    )
+    # ...and it must not be so starved that hybrid is unreachable either:
+    # a floor-mandated hybrid request has to be servable in bounded time.
+    assert draws_funded_per_epoch > 0.1
+
+
+def test_configured_pool_capacity_is_exhaustible_within_an_episode():
+    """Capacity must be small enough that a 250-step episode (the
+    harness default) can genuinely drain it, or pool exhaustion is
+    unobservable in every result the project reports."""
+    cfg = load_pool_config()
+    capacity_draws = cfg["capacity_bits"] / cfg["bits_per_hybrid_draw"]
+    assert capacity_draws < 250
