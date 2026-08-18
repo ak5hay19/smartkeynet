@@ -117,6 +117,11 @@ def run_scenario(
     env_config = {**config, "scenario": scenario, "seed": seed}
     env_config.setdefault("max_steps", _DEFAULT_MAX_STEPS)
     env = SmartKeyNetEnv(env_config)
+    # The perfect-foresight oracle needs the env to peek into; every other
+    # policy ignores this (see agents/mpc_oracle.py for the single method
+    # where the peek happens).
+    if hasattr(policy, "bind"):
+        policy.bind(env)
     state, info = env.reset(seed=seed)
 
     latencies: list[float] = []

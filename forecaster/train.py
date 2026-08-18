@@ -19,6 +19,7 @@ Run it:
 from __future__ import annotations
 
 import argparse
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -29,8 +30,9 @@ import torch.nn as nn
 from experiments.train import load_full_config
 from forecaster.dataset import (
     build_datasets,
+    chronological_split,
     collect_rollouts,
-    train_validation_split,
+    persistence_baseline_mae,
 )
 from forecaster.model import SmartKeyForecaster
 
@@ -47,6 +49,8 @@ class ForecasterTrainingRecord:
     n_train_samples: int = 0
     n_validation_samples: int = 0
     checkpoint_path: str | None = None
+    test_metrics: dict[str, float] = field(default_factory=dict)
+    persistence_mae: float = float("nan")
 
 
 def train_forecaster(
@@ -77,11 +81,19 @@ def train_forecaster(
     if verbose:
         print("collecting baseline rollouts (S1-S4) ...", flush=True)
     logs = collect_rollouts(config, n_steps=rollout_steps, seeds=rollout_seeds)
-    windows, threat_targets, pool_targets = build_datasets(logs)
 
-    (train_x, train_threat, train_pool), (val_x, val_threat, val_pool) = train_validation_split(
-        windows, threat_targets, pool_targets, seed=seed
-    )
+    # Chronological, not shuffled -- spec §S9 rule 3. See
+    # `chronological_split` for what the shuffled version was leaking.
+    # Episodes are collected grouped by scenario, so partitioning them in
+    # collection order would put whole scenarios in one split. Shuffling the
+    # EPISODE ORDER (never the samples within one) keeps every split
+    # representative while leaving windows non-overlapping across splits.
+    shuffled_logs = list(logs)
+    random.Random(seed).shuffle(shuffled_logs)
+    train_logs, validation_logs, test_logs = chronological_split(shuffled_logs)
+    train_x, train_threat, train_pool = build_datasets(train_logs)
+    val_x, val_threat, val_pool = build_datasets(validation_logs)
+    test_x, test_threat, test_pool = build_datasets(test_logs)
 
     record = ForecasterTrainingRecord(
         n_train_samples=int(train_x.shape[0]),
@@ -141,6 +153,24 @@ def train_forecaster(
                 f"balanced {metrics['threat_balanced_accuracy']:.3f}  "
                 f"pool_mae {metrics['pool_mae']:.4f}"
             )
+
+    # Held-out TEST metrics, plus the persistence bar the spec sets (§S9 test 7)
+    test_metrics = evaluate_forecaster(model, test_x, test_threat, test_pool, pool_loss_weight)
+    persistence_mae = persistence_baseline_mae(test_logs)
+    record.test_metrics = test_metrics
+    record.persistence_mae = persistence_mae
+    if verbose:
+        print(
+            f"\n  TEST (held out, chronological): threat_acc "
+            f"{test_metrics['threat_accuracy']:.3f}  balanced "
+            f"{test_metrics['threat_balanced_accuracy']:.3f}  pool_mae "
+            f"{test_metrics['pool_mae']:.4f}"
+        )
+        verdict = "BEATS" if test_metrics["pool_mae"] < persistence_mae else "LOSES TO"
+        print(
+            f"  pool head {verdict} persistence: {test_metrics['pool_mae']:.4f} "
+            f"vs {persistence_mae:.4f}"
+        )
 
     model.save(checkpoint_path)
     record.checkpoint_path = checkpoint_path
