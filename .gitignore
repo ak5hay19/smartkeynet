@@ -1,0 +1,44 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/*.egg-info
+
+# --- Secrets / local config ---
+.env
+.env.*
+!.env.example
+
+# --- Datasets (PLAN.md "Datasets & Provenance"; Q-OPSEC has no LICENSE) ---
+data/raw/
+*.csv
+!data/sample/**/*.csv
+
+# --- Model checkpoints / training artifacts ---
+*.pt
+*.pth
+*.ckpt
+runs/
+wandb/
+logs/
+*.log
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

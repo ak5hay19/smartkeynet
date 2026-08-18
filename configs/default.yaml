@@ -1,0 +1,114 @@
+# SmartKeyNet default configuration (PLAN.md §4, Addition A, Addition C).
+#
+# This is the single YAML all four owners read from. Treat top-level
+# keys as belonging to the module named in each comment; changes to
+# `reward.*` or `hard_rules.*` are floor-adjacent and should get a
+# team ping (split.md §3, "the shared files ... are the danger zone").
+
+scenario: S1  # one of S1..S6 (PLAN.md §5); S6 is held-out eval only (Hard Rule 8)
+
+seed: 0
+
+# --- env/forecast_provider.py, forecaster/model.py (Addition A) ---
+use_foresight: ewma  # off | ewma | lstm
+
+# --- env/pool_sim.py ---
+pool:
+  capacity_bits: 1_000_000
+  initial_fill_frac: 0.5
+  bits_per_hybrid_draw: 256  # ETSI GS QKD 014 key size (256-bit); PLAN.md §4 Datasets & Provenance:
+                              # "ETSI GS QKD 014 gives key sizes (256-bit)" -- Hard Rule 4, no invented number
+
+# --- env/masking.py (Hard Rule 2, 4, 5) ---
+key_lifetime:
+  max_key_age_steps: 500  # SP 800-57-derived cap L; forced rekey at/above this (Addition C)
+
+# --- env/environment.py reward (PLAN.md §4; Hard Rule 1 -- no security term, ever) ---
+reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_fr: 0.1
+  w_qkd: 1.0
+  r_starve: 10.0         # ~= 10 * w_lat (PLAN.md §4)
+  c_rekey_base: 1.0       # c0 in c_rekey(load) = c0 * (1 + beta * load)
+  c_rekey_load_beta: 1.0  # beta in the same formula
+
+# --- env/request_generator.py ---
+tenant_graph:
+  n_nodes: 10  # start small (PLAN.md §10 step 4); scale toward ~50 later
+
+# --- env/request_generator.py random_request_generator's optional load-spike diagnostic ---
+# NOT real S4 (PLAN.md §5): S4 is a specific low-sensitivity tenant flooding the system,
+# which needs the real tenant graph (tenant_graph above is still just n_nodes -- no graph
+# sampler exists yet) to target genuinely. This is a cruder, tenant-blind stand-in --
+# a periodically-recurring arrival-rate multiplier -- used only to test the narrower
+# question of whether proactive rekeying emerges once load varies over time at all, before
+# real S4 is worth building. See SESSION_LOG.md 2026-08-10 for the result this produced.
+# `enabled: false` (default) reproduces the exact stationary S1 stream, unchanged.
+load_spike:
+  enabled: false
+  period_steps: 500        # == key_lifetime.max_key_age_steps -- one spike/cooldown cycle
+                            # per key lifetime, so a policy that only ever reacts to forced
+                            # rekeys will sometimes land inside the expensive window and
+                            # sometimes not, purely by chance of when its clock started.
+  spike_duration_steps: 20       # first 20 of every 500 steps run at the elevated rate (4% duty cycle)
+  spike_rate_multiplier: 3.0     # arrival rate is 3x baseline during the spike
+  low_rate_multiplier: 0.3       # and 0.3x baseline (BELOW 1x, not "back to normal") the rest of the
+                                  # period -- env/environment.py's decision loop renders at most one
+                                  # decision per tick, so the undecorated stream (rate == 1 decision/tick)
+                                  # already sits at the queue's critical point with no slack to drain a
+                                  # spike-built backlog. Empirically tuned this session (see
+                                  # SESSION_LOG.md 2026-08-10): a "1x outside the window" version, and
+                                  # several milder duty-cycle/multiplier combinations, all permanently
+                                  # saturated `load` at its cap after the first cycle or two instead of
+                                  # oscillating -- these values were the first swept that genuinely
+                                  # oscillate over a full 25,000-step run (mean load ~0.35, ~29% of
+                                  # steps at the cap during spikes, ~51% under 0.1 during cooldown, no
+                                  # drift between the run's first and last quarter) -- see
+                                  # random_request_generator's docstring for the mechanism.
+
+# --- agents/dqn.py ---
+dqn:
+  gamma: 0.99
+  lr: 0.001
+  batch_size: 64
+  target_update_every: 1000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 12_500  # == half of training.total_steps (25_000) -- was 50_000 until 2026-08-10,
+                                 # which left epsilon at 0.525 (52% random actions) at the *end* of a full
+                                 # 25_000-step training run: the agent never got a real "mostly exploiting
+                                 # what I've learned" phase. Now the back half of training runs at
+                                 # epsilon_end, so refinement behavior (e.g. proactive vs. forced rekeying)
+                                 # actually gets a chance to show up. See SESSION_LOG.md 2026-08-10.
+
+# --- experiments/harness.py, agents/baselines.py ---
+baselines:
+  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+# --- attack/steering_trace.py (PLAN.md §5 S5) ---
+steering_attack:
+  doses: [0.0, 0.25, 0.5, 0.75, 1.0]
+  duration_steps: 1000
+
+# --- env/environment.py S6 migration wave (Hard Rule 3, 8 -- scripted, exogenous, held-out eval only) ---
+migration_schedule: []  # list of {step: int, tenant_cohort: str, new_floor: str} entries
+
+# --- experiments/train.py ---
+# S1-only overfit-on-purpose training campaign (PLAN.md §10 step 5).
+# `total_steps` is sized for a real "genuine test of overfitting" run
+# (roughly 1-2 minutes on the pace observed training agents/dqn.py's own
+# integration test, ~7s/3000 steps -- see SESSION_LOG.md 2026-08-08);
+# tests override `total_steps`/`eval_every`/`eval_max_steps` down to a
+# CI-fast smoke run via train()'s `training_overrides` param, they don't
+# edit this block.
+training:
+  total_steps: 25_000  # env steps (== act+observe+learn calls) for one continuous S1 training run
+  seed: 0               # training episode seed (SmartKeyNetEnv.reset(seed=...))
+  eval_every: 2_500      # steps between periodic greedy-mode eval snapshots (10 snapshots over the run)
+  eval_seed: 999         # fixed seed for every eval episode -- distinct from the training seed, and
+                          # held constant across snapshots so they're comparable to each other and to
+                          # the final baseline comparison
+  eval_max_steps: 250    # episode length per eval snapshot -- mirrors experiments/harness.py's own
+                          # _DEFAULT_MAX_STEPS convention
+  checkpoint_path: checkpoints/dqn_s1.pt  # *.pt is gitignored (see .gitignore "Model checkpoints")
