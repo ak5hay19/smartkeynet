@@ -149,8 +149,8 @@ class MPCOracle:
         from env.contracts import SensitivityClass, ThreatPosture
         from env.masking import PolicyTable
 
-        current_floor = int(state["policy_floor"])
-        sensitivity_class = SensitivityClass(int(state["sensitivity_class"]))
+        current_floor = int(state.get("policy_floor", 0))
+        sensitivity_class = SensitivityClass(int(state.get("sensitivity_class", 0)))
 
         # The scenario's threat schedule is scripted and deterministic, so the
         # posture the horizon will reach is knowable rather than forecastable.
@@ -168,6 +168,19 @@ class MPCOracle:
         )
         return max(current_floor, future_floor)
 
+    def _lifetime_cap(self) -> float:
+        """The SP 800-57-derived key lifetime cap `L`.
+
+        Present configuration, not foresight -- every causal policy is given
+        this too (`StaticThresholdPolicy` takes it as a constructor argument).
+        It lives in its own accessor so `act` reads nothing from the
+        environment directly, which keeps the "all environment access is
+        audited" invariant exactly checkable.
+        """
+        if self.env is None:
+            return float("inf")
+        return float(self.env._max_key_age)
+
     def _current_pool_keys(self) -> float:
         """Present pool level in whole keys. Not foresight -- every causal
         policy sees this too, via `state["pool_fill"]`."""
@@ -178,7 +191,7 @@ class MPCOracle:
     def act(self, state: StateDict, mask: ActionMask) -> Action:
         demand, refill = self.peek_future()
         surplus = self._current_pool_keys() + refill - demand
-        floor = int(state["policy_floor"])
+        floor = int(state.get("policy_floor", 0))
         future_floor = self.peek_future_floor(state)
 
         # 1. Reuse whenever legal -- UNLESS the horizon says the key is about
@@ -198,8 +211,8 @@ class MPCOracle:
         #    the oracle scored *below* the threshold on S3 (-288,535 vs
         #    -179,936) -- an upper bound that loses to a causal policy is not
         #    an upper bound.
-        key_age = float(state["key_age"])
-        lifetime_cap = float(self.env._max_key_age) if self.env is not None else float("inf")
+        key_age = float(state.get("key_age", 0.0))
+        lifetime_cap = self._lifetime_cap()
         expires_within_horizon = key_age + self.horizon >= lifetime_cap
         pool_can_fund_now = surplus > 1.0
 

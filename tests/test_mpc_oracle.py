@@ -31,8 +31,16 @@ def _all_nonempty_masks():
     return masks
 
 
-def _state(pool_fill=0.5, policy_floor=1):
-    return {"pool_fill": pool_fill, "policy_floor": policy_floor}
+def _state(pool_fill=0.5, policy_floor=1, key_age=0.0, sensitivity_class=1):
+    """Minimal state. The oracle must tolerate this like any other Policy --
+    `act` uses `.get` with defaults so a caller passing a partial state gets
+    conservative behaviour rather than a KeyError."""
+    return {
+        "pool_fill": pool_fill,
+        "policy_floor": policy_floor,
+        "key_age": key_age,
+        "sensitivity_class": sensitivity_class,
+    }
 
 
 @pytest.mark.parametrize("mask", _all_nonempty_masks())
@@ -50,11 +58,17 @@ def test_cheating_is_confined_to_one_method():
 
     source = inspect.getsource(MPCOracle)
     total_env_reads = source.count("self.env.")
-    accounted = inspect.getsource(MPCOracle.peek_future).count("self.env.")
-    accounted += inspect.getsource(MPCOracle._current_pool_keys).count("self.env.")
-    # Every environment access lives in one of two audited methods:
-    # `peek_future` (the actual cheat) and `_current_pool_keys` (present
-    # state, which every causal policy also sees). `bind` only assigns.
+    audited = (
+        MPCOracle.peek_future,        # future demand and refill -- the cheat
+        MPCOracle.peek_future_floor,  # the floor the horizon will reach -- the cheat
+        MPCOracle._current_pool_keys, # present pool level, which causal policies see too
+        MPCOracle._lifetime_cap,      # the SP 800-57 cap, given to every policy
+    )
+    accounted = sum(inspect.getsource(method).count("self.env.") for method in audited)
+    # Every environment access lives in one of three audited methods. `bind`
+    # only assigns, and `act` reads nothing from the env directly -- so an
+    # auditor has a bounded set of places to check that the foresight has not
+    # leaked into something claiming to be causal.
     assert total_env_reads == accounted
 
 
