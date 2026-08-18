@@ -176,40 +176,50 @@ def load_pool_config(path: str | Path | None = None) -> dict[str, float]:
     return config["pool"]
 
 
-_DEFAULT_LINK_SKR_KBPS = 200.0
-_DEFAULT_KMS_REQUESTS_PER_DECISION_EPOCH = 1000.0
-"""Fallbacks for `slice_skr_kbps` when a caller passes a `pool:` block
+_DEFAULT_REFILL_BITS_PER_STEP = 15.0
+"""Fallback for `slice_skr_kbps` when a caller passes a `pool:` block
 predating the 2026-08-19 recalibration (e.g. a hand-built test config).
-Same values `configs/default.yaml` states with their derivation."""
+Same value `configs/default.yaml` states with its full derivation."""
 
 
 def slice_skr_kbps(pool_config: dict[str, Any]) -> float:
     """Secret-key rate available to *this simulated tenant slice*, in kbps.
 
-    The QKD link's own rate is a physical property of the fibre
-    (`link_skr_kbps`, cited in `SyntheticSKRQBERTrace`'s docstring).
-    The rate available to one modelled slice is that divided by how
-    many key requests the KMS behind the link serves per decision
-    epoch (`kms_requests_per_decision_epoch`), because
-    `env/environment.py` renders exactly one decision per epoch for
-    one slice while the real KMS is serving its whole tenant
-    population from the same pool.
+    `PoolSim.step()` converts kbps to bits/step by multiplying by 1000
+    (one step == one second, `_SECONDS_PER_STEP`), so this is simply
+    `refill_bits_per_step / 1000` -- the config states the quantity
+    that actually matters (bits of key material per decision epoch)
+    and this converts into the unit the trace interface speaks.
 
-    Keeping this a two-factor derivation rather than one opaque rate
-    is deliberate: it is the assumption that decides whether QKD is
-    scarce at all, and before 2026-08-19 it was implicitly (and
-    wrongly) set to 1.0 -- see `configs/default.yaml`'s `pool:` block
-    for the full recalibration note and the measured before/after.
+    Two accepted spellings, so a `pool:` block from either side of the
+    2026-08-19 recalibration resolves:
+
+      * `refill_bits_per_step` (current) -- the slice's share directly.
+      * `link_skr_kbps` / `kms_requests_per_decision_epoch` (interim,
+        2026-08-19 morning) -- the two-factor form, kept working
+        because `tests/test_environment.py`'s extreme-scarcity fixtures
+        use it to ask for a deliberately huge refill.
+
+    Sizing this rate is the single most consequential modelling choice
+    in the repo -- it is what decides whether QKD is scarce at all --
+    so `configs/default.yaml`'s `pool:` block carries the measured
+    demand bracket it was chosen inside, and
+    `tests/test_pool_sim.py::test_configured_refill_sits_inside_the_
+    measured_demand_bracket` pins it there.
     """
-    link_kbps = float(pool_config.get("link_skr_kbps", _DEFAULT_LINK_SKR_KBPS))
-    requests_per_epoch = float(
-        pool_config.get("kms_requests_per_decision_epoch", _DEFAULT_KMS_REQUESTS_PER_DECISION_EPOCH)
-    )
-    if requests_per_epoch <= 0:
-        raise ValueError(
-            f"kms_requests_per_decision_epoch must be positive, got {requests_per_epoch}"
-        )
-    return link_kbps / requests_per_epoch
+    if "link_skr_kbps" in pool_config or "kms_requests_per_decision_epoch" in pool_config:
+        link_kbps = float(pool_config.get("link_skr_kbps", 200.0))
+        requests_per_epoch = float(pool_config.get("kms_requests_per_decision_epoch", 1000.0))
+        if requests_per_epoch <= 0:
+            raise ValueError(
+                f"kms_requests_per_decision_epoch must be positive, got {requests_per_epoch}"
+            )
+        return link_kbps / requests_per_epoch
+
+    bits_per_step = float(pool_config.get("refill_bits_per_step", _DEFAULT_REFILL_BITS_PER_STEP))
+    if bits_per_step <= 0:
+        raise ValueError(f"refill_bits_per_step must be positive, got {bits_per_step}")
+    return bits_per_step / 1000.0
 
 
 @dataclass

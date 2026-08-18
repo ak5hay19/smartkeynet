@@ -90,18 +90,27 @@ def test_random_policy_never_illegal(mask):
 # ---------------------------------------------------------------------------
 
 
-def test_always_pqc_prefers_pqc_when_legal():
-    mask = _mask(*list(Action))
+def test_always_pqc_prefers_pqc_when_a_key_must_be_established():
+    mask = _mask(Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID, Action.REKEY_NOW)
     assert AlwaysPQCPolicy().act(_dummy_state(), mask) == Action.SERVE_PQC
+
+
+def test_always_pqc_reuses_the_live_session_key_when_it_can():
+    """Reuse-awareness (2026-08-19, see agents/baselines.py's module
+    docstring): re-establishing key material for a request the existing
+    session key already covers is waste, not a baseline. This test
+    replaced one asserting the opposite."""
+    mask = _mask(*list(Action))
+    assert AlwaysPQCPolicy().act(_dummy_state(), mask) == Action.REUSE
 
 
 def test_always_pqc_never_voluntarily_draws_hybrid_when_pqc_legal():
     """Never draws from the pool unless the floor actually forces it --
-    i.e. whenever SERVE_PQC is legal at all, it's chosen over
-    SERVE_HYBRID, even if HYBRID is also legal."""
+    i.e. whenever a key must be established and SERVE_PQC is legal at
+    all, it's chosen over SERVE_HYBRID."""
     policy = AlwaysPQCPolicy()
     for mask in ALL_MASKS:
-        if mask[int(Action.SERVE_PQC)]:
+        if mask[int(Action.SERVE_PQC)] and not mask[int(Action.REUSE)]:
             assert policy.act(_dummy_state(), mask) == Action.SERVE_PQC
 
 
@@ -116,11 +125,20 @@ def test_always_pqc_falls_back_to_lowest_legal_tier_when_floor_forces_hybrid():
 # ---------------------------------------------------------------------------
 
 
-def test_always_hybrid_draws_whenever_legal():
+def test_always_hybrid_draws_at_every_key_establishment_it_is_allowed():
+    """The maximal *honest* drain rate: hybrid at every establishment,
+    but not on cache hits -- under ETSI GS QKD 014 key material is
+    consumed when a key is established, not per request against a live
+    session key."""
     policy = AlwaysHybridPolicy()
     for mask in ALL_MASKS:
-        if mask[int(Action.SERVE_HYBRID)]:
+        if mask[int(Action.SERVE_HYBRID)] and not mask[int(Action.REUSE)]:
             assert policy.act(_dummy_state(), mask) == Action.SERVE_HYBRID
+
+
+def test_always_hybrid_reuses_the_live_session_key_when_it_can():
+    mask = _mask(*list(Action))
+    assert AlwaysHybridPolicy().act(_dummy_state(), mask) == Action.REUSE
 
 
 def test_always_hybrid_falls_back_to_lowest_legal_tier_when_hybrid_masked():
@@ -135,11 +153,32 @@ def test_always_hybrid_falls_back_to_lowest_legal_tier_when_hybrid_masked():
 
 def test_static_threshold_flips_at_boundary():
     policy = StaticThresholdPolicy(pool_fill_threshold=0.5)
-    mask = _mask(*list(Action))  # nothing else constrains the choice
+    # REUSE excluded: the threshold only decides which tier to *establish*,
+    # and reuse-awareness (2026-08-19) short-circuits ahead of it.
+    mask = _mask(Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID, Action.REKEY_NOW)
 
     assert policy.act(_dummy_state(0.5 + 1e-9), mask) == Action.SERVE_HYBRID
     assert policy.act(_dummy_state(0.5), mask) == Action.SERVE_PQC  # exactly at threshold: not "exceeds"
     assert policy.act(_dummy_state(0.5 - 1e-9), mask) == Action.SERVE_PQC
+
+
+def test_static_threshold_reuses_before_consulting_the_threshold():
+    policy = StaticThresholdPolicy(pool_fill_threshold=0.5)
+    mask = _mask(*list(Action))
+    for pool_fill in (0.0, 0.4, 0.6, 1.0):
+        assert policy.act(_dummy_state(pool_fill), mask) == Action.REUSE
+
+
+@pytest.mark.parametrize(
+    "policy_factory", [AlwaysPQCPolicy, AlwaysHybridPolicy, lambda: StaticThresholdPolicy(0.5)]
+)
+def test_every_tier_policy_reuses_when_legal(policy_factory):
+    """The shared reuse-awareness contract, asserted once for all three
+    tier policies over every mask where REUSE is legal."""
+    policy = policy_factory()
+    for mask in ALL_MASKS:
+        if mask[int(Action.REUSE)]:
+            assert policy.act(_dummy_state(0.7), mask) == Action.REUSE
 
 
 def test_static_threshold_falls_back_when_pqc_also_masked():

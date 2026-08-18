@@ -122,12 +122,35 @@ _TRAFFIC_RATE_LOGNORMAL_SIGMA = 0.6
 tailed (a few flows carry most requests), and a uniform rate would make
 every tenant's pool contention identical by construction."""
 
-_ARRIVAL_RATE_PER_STEP: float = 1.0
+_ARRIVAL_RATE_PER_STEP: float = 0.8
 """Mean arrivals per step (Poisson rate lambda) -- a documented
 simulator constant, not a `configs/default.yaml` value. Shared by both
 generators in this module so the graph-driven stream and the graph-free
 stub sit at the same aggregate load, making them comparable (and
-1:1 swappable -- Hard Rule 3)."""
+1:1 swappable -- Hard Rule 3).
+
+Lowered from 1.0 on 2026-08-19. `env/environment.py` renders exactly
+one decision per internal tick, so its service rate is 1.0/step and an
+arrival rate of 1.0 put the request queue at **utilisation rho = 1.0**
+-- a critically-loaded queue, which grows without bound by definition
+rather than reaching a steady state. Measured on S1/always-PQC over
+2,000 steps before the change: pending depth 2 -> 14 -> 56 and still
+climbing at the end of the episode, `load` pinned at its cap for most
+of the run, and (once the pool could also defer) the reward's
+`-r_starve * deferred_critical_steps` term -- which charges per queued
+request per tick -- diverging with it. That last effect blew up DQN
+training: batch loss rose from ~2.6e4 to ~7.9e5 over a single 3,000-step
+integration run.
+
+This was a known defect, documented but never fixed: see
+`random_request_generator`'s `load_spike` docstring below, which works
+around it with a `low_rate_multiplier` deliberately *below* 1.0 so its
+spikes have slack to drain into.
+
+rho = 0.8 is an ordinary provisioning point for a queueing system that
+has to stay stable under bursts, and it leaves the arrival process
+otherwise untouched (still stationary Poisson, still the same draw
+sequence shape)."""
 
 
 def build_tenant_graph(n_nodes: int = 10, seed: int | None = None) -> nx.Graph:

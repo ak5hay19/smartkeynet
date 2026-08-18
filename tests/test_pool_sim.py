@@ -23,6 +23,11 @@ from env.pool_sim import (
 )
 
 
+_EVAL_EPISODE_STEPS = 2_000
+"""configs/default.yaml's `training.eval_max_steps` / the harness default.
+Spelled here so the exhaustibility check below stays honest if either moves."""
+
+
 @dataclass
 class FixedSKRQBERTrace:
     """Deterministic `SKRQBERTrace` for exact-arithmetic assertions."""
@@ -274,53 +279,71 @@ def test_pool_drains_correctly_under_synthetic_trace_s3_degradation():
 # ---------------------------------------------------------------------------
 
 
-def test_slice_skr_derivation_divides_link_rate_by_kms_request_rate():
-    """`slice_skr_kbps` must be exactly the two-factor derivation the
-    config documents -- not a rate anyone can quietly retune to a
-    result. If this ratio is ever edited, this test is the thing that
-    forces the edit to be deliberate."""
-    assert slice_skr_kbps({"link_skr_kbps": 200.0, "kms_requests_per_decision_epoch": 1000.0}) == pytest.approx(0.2)
+# Measured on the configured 50-node graph over 2000-step episodes, seeds 0-2,
+# with an effectively unlimited pool -- so these are *demands*, not outcomes.
+# See configs/default.yaml's `pool:` block for the full derivation.
+_FLOOR_MANDATED_DEMAND_BITS_PER_STEP = 8.64   # S2, HIGH posture
+_MAXIMAL_DEMAND_BITS_PER_STEP = 20.98         # always-hybrid
+
+
+def test_slice_skr_converts_configured_bits_per_step_into_the_trace_unit():
+    """`slice_skr_kbps` is a unit conversion, nothing more -- the config
+    states bits per decision epoch, `PoolSim.step()` speaks kbps."""
+    assert slice_skr_kbps({"refill_bits_per_step": 15.0}) == pytest.approx(0.015)
+    assert slice_skr_kbps({"refill_bits_per_step": 200.0}) == pytest.approx(0.2)
+
+
+def test_slice_skr_still_accepts_the_interim_two_factor_spelling():
+    """tests/test_environment.py's extreme-scarcity fixtures ask for a
+    deliberately huge refill in the two-factor form."""
     assert slice_skr_kbps({"link_skr_kbps": 200.0, "kms_requests_per_decision_epoch": 1.0}) == pytest.approx(200.0)
-
-
-def test_slice_skr_rejects_non_positive_request_rate():
     with pytest.raises(ValueError):
         slice_skr_kbps({"link_skr_kbps": 200.0, "kms_requests_per_decision_epoch": 0.0})
 
 
+def test_slice_skr_rejects_a_non_positive_refill():
+    with pytest.raises(ValueError):
+        slice_skr_kbps({"refill_bits_per_step": 0.0})
+
+
 def test_slice_skr_falls_back_for_pre_recalibration_pool_blocks():
-    """A hand-built `pool:` dict predating the recalibration (no
-    link/request-rate keys) still resolves, to the same documented
-    defaults."""
-    assert slice_skr_kbps({"capacity_bits": 1.0}) == pytest.approx(0.2)
+    """A hand-built `pool:` dict with neither spelling still resolves,
+    to the documented default."""
+    assert slice_skr_kbps({"capacity_bits": 1.0}) == pytest.approx(0.015)
 
 
-def test_configured_pool_makes_qkd_genuinely_scarce():
-    """The premise check (PLAN2 §3.2, Hard Rule 7's "investigate the
-    environment design first"): the configured link must fund *less
-    than one* hybrid key per decision epoch. If it ever funds more than
-    one again, the pool is not a scarce resource, `pool_fill` pins at
-    1.0, every `static_threshold_grid` entry collapses onto
-    always-hybrid, and the project's central budgeting problem
-    silently stops existing -- which is exactly the state this repo was
-    in before 2026-08-19.
+def test_configured_refill_sits_inside_the_measured_demand_bracket():
+    """The premise check (PLAN2 §3.2; Hard Rule 7's "investigate the
+    environment design first").
+
+    Refill must sit strictly between floor-MANDATED hybrid demand and
+    MAXIMAL hybrid demand, or the budgeting problem stops existing in
+    one direction or the other:
+
+      * at or below mandated demand -> floors become unservable and
+        every policy drowns in deferrals regardless of skill;
+      * at or above maximal demand  -> nothing can ever exhaust the
+        pool, `pool_fill` pins at 1.0, every threshold in the grid
+        collapses onto always-hybrid, and budgeting skill is
+        irrelevant. That was this repo's state as received.
     """
     cfg = load_pool_config()
-    bits_per_epoch = slice_skr_kbps(cfg) * 1000.0 * PoolSim._SECONDS_PER_STEP
-    draws_funded_per_epoch = bits_per_epoch / cfg["bits_per_hybrid_draw"]
-    assert draws_funded_per_epoch < 1.0, (
-        f"QKD refill funds {draws_funded_per_epoch:.2f} hybrid keys per decision -- "
-        "the pool is not scarce and the budgeting problem does not exist"
+    bits_per_step = slice_skr_kbps(cfg) * 1000.0 * PoolSim._SECONDS_PER_STEP
+    assert _FLOOR_MANDATED_DEMAND_BITS_PER_STEP < bits_per_step < _MAXIMAL_DEMAND_BITS_PER_STEP, (
+        f"refill of {bits_per_step:.2f} bits/step is outside the measured demand bracket "
+        f"({_FLOOR_MANDATED_DEMAND_BITS_PER_STEP}, {_MAXIMAL_DEMAND_BITS_PER_STEP}) -- "
+        "the QKD budgeting problem no longer exists at this sizing"
     )
-    # ...and it must not be so starved that hybrid is unreachable either:
-    # a floor-mandated hybrid request has to be servable in bounded time.
-    assert draws_funded_per_epoch > 0.1
 
 
 def test_configured_pool_capacity_is_exhaustible_within_an_episode():
-    """Capacity must be small enough that a 250-step episode (the
-    harness default) can genuinely drain it, or pool exhaustion is
-    unobservable in every result the project reports."""
+    """Capacity must be small enough that the deficit between maximal
+    demand and refill can genuinely drain the initial buffer inside one
+    evaluation episode, or pool exhaustion is unobservable in every
+    result the project reports."""
     cfg = load_pool_config()
-    capacity_draws = cfg["capacity_bits"] / cfg["bits_per_hybrid_draw"]
-    assert capacity_draws < 250
+    bits_per_step = slice_skr_kbps(cfg) * 1000.0 * PoolSim._SECONDS_PER_STEP
+    deficit_per_step = _MAXIMAL_DEMAND_BITS_PER_STEP - bits_per_step
+    assert deficit_per_step > 0
+    steps_to_drain = (cfg["capacity_bits"] * cfg["initial_fill_frac"]) / deficit_per_step
+    assert steps_to_drain < _EVAL_EPISODE_STEPS

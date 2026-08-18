@@ -22,14 +22,21 @@ from env.contracts import Action, KeyType
 from env.environment import _KEY_TYPE_TO_SERVE_ACTION, _LATENCY_UNITS, SmartKeyNetEnv
 from metrics.regret import EpisodeMetrics, compute_episode_metrics
 
-_DEFAULT_MAX_STEPS = 250
+_DEFAULT_MAX_STEPS = 2_000
 """Episode length used when `config` doesn't already set `max_steps`
 (env/environment.py's MDP has no natural terminal state -- `terminated`
 is always False -- so a run needs an explicit truncation bound to be
-"one full episode"). Mirrors the episode length split.md's Gate W2
-tests already use. Callers that want a different length set
-`config["max_steps"]` themselves; that value always wins (`setdefault`
-below)."""
+"one full episode").
+
+Raised from 250 on 2026-08-19. At `key_lifetime.max_key_age_steps =
+500`, a 250-step episode is *half of one cryptoperiod*: almost no
+session ever aged out, forced rekeys were essentially absent, and the
+entire reuse-vs-rekey tradeoff that the reward's `w_fr` and
+`c_rekey(load)` terms exist to create was invisible to every policy and
+to the agent. 2,000 steps spans four cryptoperiods, so key ageing,
+forced rekeys and pool drawdown all occur repeatedly within one
+episode. Callers that want a different length set `config["max_steps"]`
+themselves; that value always wins (`setdefault` below)."""
 
 _TIER_ACTIONS = (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID)
 
@@ -84,10 +91,10 @@ def run_scenario(
     `ScenarioResult`.
 
     `scenario` is threaded straight into the env config as
-    `config["scenario"]` -- the right final interface (PLAN.md §5's
-    S1-S6 grid) even though `env/environment.py` currently only
-    dispatches S1 (a separate future session wires S2-S6; see
-    PROGRESS.md).
+    `config["scenario"]` (PLAN.md §5's S1-S6 grid). Real dispatch for
+    S1-S4 landed 2026-08-19; S5's threat trace is injected by the
+    caller via `SmartKeyNetEnv.set_external_threat_trace`, and S6 is
+    held-out evaluation only (Hard Rule 8).
 
     `pool_exhaustion_events` is reported as the count of `RegretEvent`s
     logged this episode: in the current environment every regret event

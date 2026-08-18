@@ -8,6 +8,33 @@ Tuned non-RL baselines: always-PQC, always-hybrid, static-threshold
 Build these *before* tuning the DQN (Hard Rule 7; split.md Week 3).
 Disqualification rule (PLAN.md §2): if a simple threshold policy
 matches the DQN in evaluation, the project premise fails.
+
+Reuse-awareness (2026-08-19)
+----------------------------
+Every tier policy here reuses the existing session key whenever REUSE
+is legal, and only picks a tier when key material actually has to be
+established. Until 2026-08-19 they did not: each one re-established
+fresh key material on *every* request, which meant
+
+  * they paid a full rekey cost, serve latency and (for hybrid) a fresh
+    256-bit pool draw on requests that a real KMS would have served
+    from the existing session key -- measured on S1/seed 0, all three
+    tier policies took a tier action on 250/250 decisions while REUSE
+    was legal on 244 of them;
+  * and consequently the DQN's headline advantage over them was mostly
+    "the DQN discovered REUSE", not "the DQN budgets a scarce resource
+    better" -- a 10x reward gap that evaporates once the baselines
+    stop rekeying wastefully.
+
+A baseline that hands the agent a free 10x is not a tuned baseline, and
+Hard Rule 7 asks for tuned ones. It is also the physically wrong model:
+under ETSI GS QKD 014 key material is consumed when a key is
+*established*, not on every request that a live session key already
+covers, so charging a fresh QKD draw per cache hit was never right.
+
+`RandomPolicy` is deliberately excluded from this -- it is the
+uniform-random control, and biasing it toward REUSE would stop it
+being one.
 """
 
 from __future__ import annotations
@@ -44,36 +71,70 @@ def _lowest_legal_action(mask: ActionMask) -> Action:
     raise ValueError("no legal action in mask -- a valid mask must have at least one True entry")
 
 
+def _reuse_is_legal(mask: ActionMask) -> bool:
+    """Whether the existing session key can still serve this request.
+
+    `env/masking.py` makes REUSE illegal exactly when `key_age >=
+    max_key_age` (the SP 800-57-derived cap L) or when there is no key
+    yet -- so "REUSE is legal" is precisely "a live, in-cryptoperiod
+    session key already covers this request". Every tier policy in this
+    module checks this first: see the module docstring's
+    reuse-awareness note.
+    """
+    return bool(mask[int(Action.REUSE)])
+
+
 class AlwaysPQCPolicy:
-    """Serves SERVE_PQC whenever legal, else the lowest legal tier."""
+    """Reuses the live session key when it can; otherwise establishes
+    SERVE_PQC whenever legal, else the lowest legal tier.
+
+    The "never voluntarily spends pool" baseline."""
 
     def act(self, state: StateDict, mask: ActionMask) -> Action:
+        if _reuse_is_legal(mask):
+            return Action.REUSE
         if mask[int(Action.SERVE_PQC)]:
             return Action.SERVE_PQC
         return _lowest_legal_action(mask)
 
 
 class AlwaysHybridPolicy:
-    """Serves SERVE_HYBRID whenever legal, else the lowest legal tier.
+    """Reuses the live session key when it can; otherwise establishes
+    SERVE_HYBRID whenever legal, else the lowest legal tier.
 
-    The "drains the pool" baseline (PLAN.md §6 Demo Beat 2).
+    The "drains the pool" baseline (PLAN.md §6 Demo Beat 2): it spends
+    QKD material at every key establishment it is allowed to, which is
+    the maximal honest drain rate -- a policy that also drew on cache
+    hits would be draining the pool for key material nobody asked for.
     """
 
     def act(self, state: StateDict, mask: ActionMask) -> Action:
+        if _reuse_is_legal(mask):
+            return Action.REUSE
         if mask[int(Action.SERVE_HYBRID)]:
             return Action.SERVE_HYBRID
         return _lowest_legal_action(mask)
 
 
 class StaticThresholdPolicy:
-    """Serves SERVE_HYBRID iff `pool_fill` exceeds a fixed threshold,
-    else SERVE_PQC. Threshold is grid-searched, not hand-picked (Hard
-    Rule 7)."""
+    """Reuses the live session key when it can; otherwise establishes
+    SERVE_HYBRID iff `pool_fill` exceeds a fixed threshold, else
+    SERVE_PQC. Threshold is grid-searched, not hand-picked (Hard
+    Rule 7).
+
+    This is the baseline the project's premise is measured against
+    (PLAN2 §3.2's disqualification rule), so it gets the same
+    reuse-awareness as the others -- a threshold policy that rekeyed on
+    every request would be a strawman, and beating a strawman proves
+    nothing about budgeting.
+    """
 
     def __init__(self, pool_fill_threshold: float) -> None:
         self.pool_fill_threshold = pool_fill_threshold
 
     def act(self, state: StateDict, mask: ActionMask) -> Action:
+        if _reuse_is_legal(mask):
+            return Action.REUSE
         if state["pool_fill"] > self.pool_fill_threshold and mask[int(Action.SERVE_HYBRID)]:
             return Action.SERVE_HYBRID
         if mask[int(Action.SERVE_PQC)]:

@@ -59,15 +59,14 @@ _EXTREME_SCARCITY_POOL: dict[str, float] = {
     "capacity_bits": 500_000.0,
     "initial_fill_frac": 0.0,
     "bits_per_hybrid_draw": 300_000.0,
-    # A hand-built draw size ~1,200x the production one needs a refill rate to
-    # match, or the pool takes 1,500 steps to cover a single draw and nothing
-    # these tests are actually about (deferral onset, then drain) is observable
-    # inside a 250-300 step window. 200 kbps / 1 request-per-epoch == 200,000
-    # bits/step, i.e. two steps of refill per draw. Before the 2026-08-19 pool
-    # recalibration (see configs/default.yaml's `pool:` block) this was the
-    # *production* rate, which is why these tests didn't state it themselves.
-    "link_skr_kbps": 200.0,
-    "kms_requests_per_decision_epoch": 1.0,
+    # 15 steps of refill per draw: the pool starts unable to cover a single
+    # draw, and is unable to again for 15 steps after every draw it does
+    # cover. That is what reliably forces the deferral-onset-then-drain cycle
+    # these two tests are about. Retuned 2026-08-19 alongside the reuse-aware
+    # baselines: hybrid draws are now driven by key *establishment* rather
+    # than by every request, so a fixture sized against request volume stopped
+    # producing any deferrals at all.
+    "refill_bits_per_step": 20_000.0,
 }
 """Deliberately extreme scarcity for the Hard Rule 9 structural tests below:
 a pool that cannot cover a draw at reset and refills to cover one every two
@@ -566,7 +565,8 @@ def test_s4_floods_the_low_sensitivity_tenant_and_raises_load():
     def share(probe, tenant):
         return sum(t == tenant for t in probe["tenants"]) / len(probe["tenants"])
 
-    assert share(s4, "iot-telemetry") > 3 * share(s1, "iot-telemetry")
+    assert share(s4, "iot-telemetry") > 2 * share(s1, "iot-telemetry")
+    assert share(s4, "iot-telemetry") > 0.5  # the flood dominates the request mix
     assert np.mean(s4["loads"]) > np.mean(s1["loads"])
     # ...and it must not be a general load increase: the *other* tenants'
     # share has to fall, or "noisy neighbour" means nothing.

@@ -1,15 +1,20 @@
 """
 experiments/train.py
 
-Real training campaign for `agents.dqn.DQNAgent` on S1 -- overfit S1 on
-purpose to prove the training loop works, per PLAN.md §10 step 5. Owned
-by Person C (split.md §1).
+Real training campaign for `agents.dqn.DQNAgent`, per PLAN.md §10 step
+5. Owned by Person C (split.md §1).
 
-This is a genuine checkpoint toward split.md's Gate W3 ("DQN beats the
-tuned threshold baseline on S1 and S3"), not the gate itself: S3
-scenario dispatch isn't wired into `env/environment.py` yet (still
-S1-only -- see PROGRESS.md), so everything here is S1-only. Attempting
-the real gate is separate future work once S2-S4 dispatch exists.
+Scenario-parameterized as of 2026-08-19 (`train(..., scenario=...)`):
+S1-S4 dispatch now exists in `env/environment.py`, so Gate W3 ("DQN
+beats the tuned threshold baseline on S1 and S3") is finally
+attemptable for real. The campaign runner that actually attempts it --
+multi-seed, checkpoint-averaged, per PROGRESS.md's standing
+instruction about the training-stability finding -- is
+`experiments/campaign.py`; this module stays the single-run trainer it
+has always been.
+
+Hard Rule 8: training scenarios only. S6 (migration wave) is held-out
+evaluation and must never be passed here -- `train()` rejects it.
 
 Hard Rule 1 (no security term in the reward, ever): this module trains
 against exactly the reward `env/environment.py` computes via the
@@ -99,19 +104,87 @@ class TrainingRecord:
     losses: list[float] = field(default_factory=list)
     reward_window_avgs: list[float] = field(default_factory=list)
     eval_snapshots: list[tuple[int, ScenarioResult]] = field(default_factory=list)
+    eval_snapshot_metrics: list[tuple[int, dict[str, float]]] = field(default_factory=list)
+    """Per-snapshot metrics averaged over *all* of `training.eval_seeds`,
+    parallel to `eval_snapshots` (which keeps one representative
+    `ScenarioResult` at the primary `training.eval_seed`, unchanged).
+
+    Averaging several fixed eval episodes per checkpoint removes
+    eval-episode randomness from the comparison. PROGRESS.md item 6
+    established that this does NOT tame the checkpoint-to-checkpoint
+    oscillation -- the mean of 8 eval draws still swings nearly as hard
+    as a single draw -- so this is not a fix for that; it just stops
+    eval noise from being confounded with it. Taming the oscillation is
+    `experiments/campaign.py`'s checkpoint averaging, and the residual
+    is reported as spread rather than hidden."""
     checkpoint_path: str | None = None
+
+
+_METRIC_KEYS: tuple[str, ...] = (
+    "total_reward",
+    "p99_latency",
+    "pool_exhaustion_events",
+    "regret_events",
+    "deferred_critical_steps",
+    "forced_rekey_ratio",
+    "rekeys_per_100_requests",
+    "discretionary_hybrid_serves",
+    "floor_violations",
+)
+"""The metrics every comparison in this project reports, in the order
+PLAN2 §7.7's closing table wants them. Defined once here so the
+trainer, the campaign runner, the API facade and the dashboard cannot
+drift apart on what a "result" contains."""
+
+
+def result_metrics(result: ScenarioResult) -> dict[str, float]:
+    """Flatten one `ScenarioResult` into the `_METRIC_KEYS` dict."""
+    m = result.episode_metrics
+    return {
+        "total_reward": float(result.total_reward),
+        "p99_latency": float(result.p99_latency),
+        "pool_exhaustion_events": float(result.pool_exhaustion_events),
+        "regret_events": float(m.regret_events),
+        "deferred_critical_steps": float(m.deferred_critical_steps),
+        "forced_rekey_ratio": float(m.forced_rekey_ratio),
+        "rekeys_per_100_requests": float(m.rekeys_per_100_requests),
+        "discretionary_hybrid_serves": float(m.discretionary_hybrid_serves),
+        "floor_violations": float(result.floor_violations),
+    }
+
+
+def mean_result_metrics(results: list[ScenarioResult]) -> dict[str, float]:
+    """Element-wise mean of several `ScenarioResult`s' metrics."""
+    if not results:
+        raise ValueError("mean_result_metrics() needs at least one result")
+    per_result = [result_metrics(r) for r in results]
+    return {key: float(np.mean([m[key] for m in per_result])) for key in _METRIC_KEYS}
+
+
+_HELD_OUT_SCENARIOS = frozenset({"S6"})
+"""Hard Rule 8: "train on stationary scenarios; the migration-wave
+scenario is held-out evaluation only." Enforced in code rather than
+left to discipline -- training on S6 would invalidate the only
+robustness claim the project makes about non-stationarity, and it is
+a one-character mistake to make."""
 
 
 def train(
     full_config: dict[str, Any] | None = None,
     training_overrides: dict[str, Any] | None = None,
+    scenario: str = "S1",
 ) -> tuple[DQNAgent, TrainingRecord]:
-    """Run one continuous S1 training episode (the env has no natural
+    """Run one continuous training episode (the env has no natural
     terminal state -- see env/environment.py -- so training never
     needs to reset mid-run) for `training.total_steps` steps,
     `observe()`+`learn()` every step, with a periodic greedy-mode
     evaluation snapshot every `training.eval_every` steps. Saves a
     final checkpoint via `DQNAgent.save`.
+
+    `scenario` selects the training scenario (S1-S4). Evaluation
+    snapshots run on the *same* scenario, so a snapshot measures what
+    this checkpoint scores on the distribution it is being trained on.
+    `S6` is rejected outright (Hard Rule 8).
 
     `training_overrides` shallow-merges over the real `configs/
     default.yaml`'s `training:` block (itself flat, no nested dicts) --
@@ -119,6 +192,11 @@ def train(
     down to a CI-fast smoke run without touching this file's real
     defaults.
     """
+    if scenario in _HELD_OUT_SCENARIOS:
+        raise ValueError(
+            f"scenario {scenario!r} is held-out evaluation only (Hard Rule 8) -- never train on it"
+        )
+
     full_config = full_config if full_config is not None else load_full_config()
     training_cfg = {**full_config["training"], **(training_overrides or {})}
 
@@ -127,7 +205,7 @@ def train(
     # agents/dqn.py's flatten_state docstring).
     has_forecast = full_config.get("use_foresight", "off") != "off"
 
-    env_config = {**full_config, "scenario": "S1", "seed": training_cfg["seed"]}
+    env_config = {**full_config, "scenario": scenario, "seed": training_cfg["seed"]}
     env = SmartKeyNetEnv(env_config)
     state, info = env.reset(seed=training_cfg["seed"])
     mask = info["action_mask"]
@@ -149,6 +227,7 @@ def train(
     total_steps = training_cfg["total_steps"]
     eval_every = training_cfg["eval_every"]
     eval_seed = training_cfg["eval_seed"]
+    eval_seeds = list(training_cfg.get("eval_seeds") or [eval_seed])
     eval_max_steps = training_cfg["eval_max_steps"]
 
     record = TrainingRecord()
@@ -174,10 +253,21 @@ def train(
             reward_window = []
 
             eval_config = {**full_config, "max_steps": eval_max_steps}
-            eval_result = run_scenario(GreedyDQNPolicy(agent), "S1", eval_config, seed=eval_seed)
-            record.eval_snapshots.append((step, eval_result))
+            policy = GreedyDQNPolicy(agent)
+            seed_results = [
+                run_scenario(policy, scenario, eval_config, seed=s) for s in eval_seeds
+            ]
+            primary = (
+                seed_results[eval_seeds.index(eval_seed)]
+                if eval_seed in eval_seeds
+                else run_scenario(policy, scenario, eval_config, seed=eval_seed)
+            )
+            record.eval_snapshots.append((step, primary))
+            record.eval_snapshot_metrics.append((step, mean_result_metrics(seed_results)))
 
-    checkpoint_path = training_cfg["checkpoint_path"]
+    checkpoint_path = str(training_cfg["checkpoint_path"]).format(
+        scenario=scenario, seed=training_cfg["seed"]
+    )
     Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
     agent.save(checkpoint_path)
     record.checkpoint_path = checkpoint_path
@@ -185,37 +275,71 @@ def train(
     return agent, record
 
 
+def tune_threshold_policy(
+    full_config: dict[str, Any],
+    scenario: str,
+    eval_seeds: list[int],
+    eval_max_steps: int,
+) -> StaticThresholdPolicy:
+    """Grid-search `StaticThresholdPolicy` on `scenario` (Hard Rule 7).
+
+    Two deliberate choices about what "tuned" means here, both in the
+    baseline's favour:
+
+    1. **Tuned on `total_reward`, not `p99_latency`.** The agent
+       optimizes episode reward; scoring its mandatory competitor on a
+       coarse 4-valued latency proxy instead would be stacking the
+       deck. The strongest honest baseline is one tuned on exactly the
+       objective the agent is being credited for.
+    2. **Tuned on multiple seeds**, averaged, so the chosen threshold
+       isn't an artefact of one lucky episode.
+
+    This only *calls* `StaticThresholdPolicy.grid_search`; the grid
+    itself stays `configs/default.yaml`'s `baselines.
+    static_threshold_grid`, never widened or re-derived here.
+    """
+    eval_config = {**full_config, "max_steps": eval_max_steps}
+
+    def threshold_eval_fn(policy: StaticThresholdPolicy) -> float:
+        # grid_search maximizes eval_fn, and higher reward is better.
+        return float(
+            np.mean(
+                [
+                    run_scenario(policy, scenario, eval_config, seed=seed).total_reward
+                    for seed in eval_seeds
+                ]
+            )
+        )
+
+    grid = full_config["baselines"]["static_threshold_grid"]
+    return StaticThresholdPolicy.grid_search(grid, threshold_eval_fn)
+
+
 def evaluate_against_baseline(
     agent: DQNAgent,
     full_config: dict[str, Any],
     eval_seed: int,
     eval_max_steps: int,
+    scenario: str = "S1",
 ) -> tuple[ScenarioResult, ScenarioResult]:
-    """Compare the trained agent (greedy, via `GreedyDQNPolicy`) against
-    a `StaticThresholdPolicy` grid-searched on S1 -- both through
-    `experiments/harness.run_scenario` on the same fixed eval seed, so
-    it's an apples-to-apples comparison.
+    """Single-checkpoint comparison of the trained agent (greedy, via
+    `GreedyDQNPolicy`) against a tuned `StaticThresholdPolicy` -- both
+    through `experiments/harness.run_scenario` on the same fixed eval
+    seed, so it's an apples-to-apples comparison.
 
-    Hard Rule 7 is already satisfied (the four baselines exist and are
-    tuned -- see agents/baselines.py): this only *calls*
-    `StaticThresholdPolicy.grid_search`, it doesn't re-derive or widen
-    the grid itself (`configs/default.yaml`'s `baselines.
-    static_threshold_grid`, not hardcoded here).
+    NOTE: single-checkpoint. PROGRESS.md documents that this training
+    setup's greedy policy oscillates checkpoint-to-checkpoint by a
+    large margin with an unidentified mechanism, so a single-checkpoint
+    number is not evidence about the agent. Use
+    `experiments/campaign.py` for any comparison that is meant to
+    support a claim; this stays for `main()`'s human-readable run
+    summary and for tests.
     """
     eval_config = {**full_config, "max_steps": eval_max_steps}
+    tuned_threshold = tune_threshold_policy(full_config, scenario, [eval_seed], eval_max_steps)
 
-    def threshold_eval_fn(policy: StaticThresholdPolicy) -> float:
-        # grid_search maximizes eval_fn; lower p99 latency is better,
-        # so score it negatively -- mirrors tests/test_harness.py's
-        # own existing grid-search-then-run convention.
-        result = run_scenario(policy, "S1", eval_config, seed=eval_seed)
-        return -result.p99_latency
-
-    grid = full_config["baselines"]["static_threshold_grid"]
-    tuned_threshold = StaticThresholdPolicy.grid_search(grid, threshold_eval_fn)
-
-    dqn_result = run_scenario(GreedyDQNPolicy(agent), "S1", eval_config, seed=eval_seed)
-    threshold_result = run_scenario(tuned_threshold, "S1", eval_config, seed=eval_seed)
+    dqn_result = run_scenario(GreedyDQNPolicy(agent), scenario, eval_config, seed=eval_seed)
+    threshold_result = run_scenario(tuned_threshold, scenario, eval_config, seed=eval_seed)
 
     return dqn_result, threshold_result
 
