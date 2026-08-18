@@ -751,6 +751,7 @@ class SmartKeyNetEnv(gym.Env):
             key_age=session.key_age,
             max_key_age=self._max_key_age,
             pool_can_draw=pool_can_draw_hybrid,
+            current_key_type=session.key_type,
         )
 
         # Masking gap #1 (discovered via testing, not anticipated by

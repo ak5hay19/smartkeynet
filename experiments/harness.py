@@ -136,10 +136,20 @@ def run_scenario(
 
         action = policy.act(state, mask)
 
-        if action in _TIER_ACTIONS and int(action) < int(floor):
+        # A floor violation is "key material below the floor was actually
+        # delivered", which is what `_resolved_cost_action` computes -- NOT
+        # "a tier action numbered below the floor was chosen". Until
+        # 2026-08-19 only the three tier actions were checked, so a REUSE
+        # of a stale-tier session key sailed past this counter: measured on
+        # S2, 15.4% of REUSE decisions were delivering below-floor key
+        # material while this reported 0. env/masking.py's rule 4 now makes
+        # that impossible; this counts the right thing so that the guarantee
+        # is *measured*, not just asserted.
+        delivered_tier = _resolved_cost_action(action, key_type_onehot, floor)
+        if int(delivered_tier) < int(floor):
             floor_violations += 1  # should never fire -- the mask already forbids this
 
-        cost_action = _resolved_cost_action(action, key_type_onehot, floor)
+        cost_action = delivered_tier
         latencies.append(_LATENCY_UNITS[cost_action])
 
         is_rekey = action is not Action.REUSE

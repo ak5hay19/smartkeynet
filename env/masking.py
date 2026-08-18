@@ -22,6 +22,7 @@ from env.contracts import (
     N_ACTIONS,
     Action,
     ActionMask,
+    KeyType,
     Request,
     SensitivityClass,
     ThreatPosture,
@@ -143,41 +144,114 @@ class PolicyTable:
             self._ratcheted_posture = ThreatPosture(int(threat_posture))
 
 
+_KEY_TYPE_TO_TIER_ACTION: dict[KeyType, Action] = {
+    KeyType.CLASSICAL: Action.SERVE_CLASSICAL,
+    KeyType.PQC: Action.SERVE_PQC,
+    KeyType.HYBRID: Action.SERVE_HYBRID,
+}
+"""Which tier a session's existing key material actually delivers.
+Needed by rule 4 below; mirrors `env/environment.py`'s
+`_KEY_TYPE_TO_SERVE_ACTION` (kept local so masking.py doesn't import
+the environment)."""
+
+
+def _delivers_below_floor(current_key_type: KeyType | None, floor: Action) -> bool:
+    """Would this session's existing key material serve below `floor`?
+
+    `None` (no key established yet) is never below the floor -- there is
+    nothing to deliver, and both actions that would consult it are
+    already illegal or resolve to the floor's own tier.
+    """
+    if current_key_type is None:
+        return False
+    return int(_KEY_TYPE_TO_TIER_ACTION[current_key_type]) < int(floor)
+
+
 def compute_mask(
     request: Request,
     floor: Action,
     key_age: float,
     max_key_age: float,
     pool_can_draw: bool,
+    current_key_type: KeyType | None = None,
 ) -> ActionMask:
     """Build the boolean action mask for one request (Hard Rules 2, 5, 9).
 
     Legality rules (PLAN.md Hard Rules):
-      - Actions below `floor` are illegal.
-      - `SERVE_HYBRID` is illegal if `not pool_can_draw` -- pool
-        exhaustion routes the request to `env/deferral_queue.py`
-        instead of masking in a downgrade (Hard Rule 9).
-      - `REUSE` is illegal if `key_age >= max_key_age` (the SP
-        800-57-derived cap `L`); this triggers a forced rekey instead,
-        logged via `contracts.ForcedRekey` (Addition C).
+      1. Actions below `floor` are illegal.
+      2. `SERVE_HYBRID` is illegal if `not pool_can_draw` -- pool
+         exhaustion routes the request to `env/deferral_queue.py`
+         instead of masking in a downgrade (Hard Rule 9).
+      3. `REUSE` is illegal if `key_age >= max_key_age` (the SP
+         800-57-derived cap `L`); this triggers a forced rekey instead,
+         logged via `contracts.ForcedRekey` (Addition C).
+      4. `REUSE` is illegal if the session's **existing key material is
+         below the current floor** -- see below.
+      5. `REKEY_NOW` is illegal on the same grounds: it refreshes the
+         session's *existing* tier in place (env/environment.py design
+         decision 4), so if that tier is below the floor it would
+         re-establish below-floor key material.
       - Key-type changes only happen at rekey boundaries (Hard Rule
         5); this function only encodes *this step's* legality, not
         mid-session switching.
 
+    Rule 4 (added 2026-08-19) closes a real Hard Rule 2 hole. Rules 1-3
+    gate REUSE on *age* only, never on the tier the existing key
+    actually delivers. Because `PolicyTable`'s ratchet is one-way, a
+    session that established a PQC key under CALM posture kept being
+    allowed to REUSE it after the floor ratcheted to SERVE_HYBRID --
+    i.e. it went on serving PQC-grade key material to a request whose
+    floor said hybrid. Measured before the fix on S2 (2,000 steps,
+    seed 0, always-PQC): **275 of 1,788 REUSE decisions -- 15.4% --
+    delivered key material below the request's current floor.** It was
+    invisible because `experiments/harness.py`'s `floor_violations`
+    counter only inspected the three tier actions, so it dutifully
+    reported 0. The project's headline structural guarantee (PLAN2
+    §7.7: floor violations "0 -- structural") was therefore true of
+    tier actions and untested for REUSE.
+
+    Rule 5 closes the same hole on the other delivery path, and it is
+    reachable even with a flat CALM posture: sessions are keyed on
+    (tenant, service) while the floor is a function of the *request's*
+    sensitivity class, so two requests on one session can carry
+    different floors. A session established CLASSICAL for an S0 request
+    and then refreshed via REKEY_NOW for an S2 request was
+    re-establishing classical key material under a PQC floor -- caught
+    on S1/seed 1 as 2 violations once `experiments/harness.py` started
+    counting delivered tier rather than chosen action.
+
+    Neither masked-out action downgrades anything: the request falls
+    through to a rekey at or above the floor, exactly as a
+    forced-rekey-on-age does, and SERVE_PQC/SERVE_HYBRID remain legal
+    by rule 1. If the floor is SERVE_HYBRID and the pool cannot cover
+    it, rule 2 leaves nothing legal and `env/environment.py` defers the
+    request (Hard Rule 9) rather than serving it weak.
+
+    `current_key_type=None` means "no key established yet", for which
+    REUSE is already illegal via rule 3 (`env/environment.py`
+    cold-starts a session at `key_age = max_key_age` precisely so that
+    rule covers it) -- so the default preserves every pre-existing call
+    shape exactly.
+
     Returns an `ActionMask` of shape (N_ACTIONS,), aligned to `Action`.
 
     `request` is accepted for signature completeness (masking is
-    always computed per-request) but isn't consulted by any of the
-    three rules below -- only `floor`, `key_age`/`max_key_age`, and
-    `pool_can_draw` are. (`floor` is expected to already be the output
-    of `PolicyTable.floor(request['sensitivity_class'], ...)`.)
+    always computed per-request) but isn't consulted by any rule --
+    only `floor`, `key_age`/`max_key_age`, `pool_can_draw` and
+    `current_key_type` are. (`floor` is expected to already be the
+    output of `PolicyTable.floor(request['sensitivity_class'], ...)`.)
     """
     mask = np.zeros(N_ACTIONS, dtype=bool)
     for action in Action:
         legal = int(action) >= int(floor)
         if action is Action.SERVE_HYBRID and not pool_can_draw:
             legal = False
-        if action is Action.REUSE and key_age >= max_key_age:
-            legal = False
+        if action is Action.REUSE:
+            if key_age >= max_key_age:
+                legal = False
+            elif _delivers_below_floor(current_key_type, floor):
+                legal = False  # rule 4
+        if action is Action.REKEY_NOW and _delivers_below_floor(current_key_type, floor):
+            legal = False  # rule 5
         mask[action] = legal
     return mask

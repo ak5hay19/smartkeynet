@@ -23,6 +23,7 @@ from agents.baselines import (
     RandomPolicy,
     StaticThresholdPolicy,
 )
+from env.contracts import Action
 from experiments.harness import ScenarioResult, run_grid, run_scenario
 from metrics.regret import EpisodeMetrics
 
@@ -197,3 +198,47 @@ def test_tuned_threshold_is_a_distinct_policy_from_always_hybrid():
     assert any(r != pytest.approx(hybrid.total_reward) for r in rewards.values())
     # and the grid must not be degenerate -- different thresholds, different outcomes
     assert len(set(round(r, 6) for r in rewards.values())) > 1
+
+
+def test_floor_violations_counts_delivered_tier_not_chosen_action():
+    """The counter must measure "below-floor key material was actually
+    delivered", not "a tier action numbered below the floor was chosen".
+
+    Until 2026-08-19 it only inspected the three tier actions, so a
+    REUSE of a stale-tier session key -- or a REKEY_NOW refreshing one
+    in place -- sailed straight past it. Measured on S2 at the time:
+    15.4% of REUSE decisions delivered below-floor key material while
+    this counter reported 0. env/masking.py rules 4 and 5 now make that
+    impossible; this asserts the counter would notice if they were ever
+    removed."""
+    config = load_test_config(overrides={"max_steps": 500})
+    for scenario in ("S1", "S2", "S3", "S4"):
+        for policy in (AlwaysHybridPolicy(), AlwaysPQCPolicy(), StaticThresholdPolicy(0.5)):
+            result = run_scenario(policy, scenario, config, seed=0)
+            assert result.floor_violations == 0, f"{scenario} floor violation"
+
+
+def test_reuse_never_delivers_below_floor_key_material_end_to_end():
+    """The same guarantee checked directly against session state rather
+    than through the harness's counter, so the two cannot drift."""
+    from env.environment import _KEY_TYPE_TO_SERVE_ACTION, SmartKeyNetEnv
+
+    config = load_test_config(overrides={"scenario": "S2", "max_steps": 1000})
+    env = SmartKeyNetEnv(config)
+    state, info = env.reset(seed=0)
+    policy = AlwaysPQCPolicy()
+
+    reuse_decisions = 0
+    truncated = False
+    while not truncated:
+        action = policy.act(state, info["action_mask"])
+        if action is Action.REUSE:
+            reuse_decisions += 1
+            request = env._current_request
+            session = env._sessions[(request["tenant"], request["service"])]
+            assert session.key_type is not None
+            delivered = _KEY_TYPE_TO_SERVE_ACTION[session.key_type]
+            assert int(delivered) >= int(env._current_floor)
+        state, _r, _t, truncated, info = env.step(action)
+
+    assert reuse_decisions > 100  # the path was genuinely exercised
