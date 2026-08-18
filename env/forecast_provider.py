@@ -33,8 +33,29 @@ class MovingAverageForecaster(ForecastProvider):
 
     Threat head: `threat_features` (an arbitrary-length raw feature
     vector meant for the real LSTM threat head) is collapsed to a
-    single scalar via its mean, squashed through a sigmoid into (0, 1),
-    then EWMA-smoothed -- this scalar is `threat_score`.
+    single scalar via its mean, squashed through a *calibrated* sigmoid
+    into (0, 1), then EWMA-smoothed -- this scalar is `threat_score`.
+
+    Squash calibration (`_THREAT_SQUASH_GAIN`/`_THREAT_SQUASH_BIAS`,
+    added 2026-08-19): `threat_features` is contractually a vector of
+    **standardized** network features -- benign traffic sits at a mean
+    of ~0, and an attack window shows up as a positive deviation of a
+    few standard deviations. A bare `sigmoid(mean)` maps benign (mean
+    0) to exactly 0.5, i.e. straight onto the ELEVATED anchor, and
+    since `env/environment.py` ratchets the `PolicyTable` on every
+    decision (design decision 7) and the ratchet is deliberately
+    one-way (Hard Rule 2), that pinned every episode at ELEVATED from
+    its second tick onward and made the policy table's entire CALM row
+    unreachable in practice. Measured before the fix: a full benign S1
+    episode spent 249 of 250 decisions at ELEVATED, never returning to
+    CALM. The gain/bias below place benign (mean 0) at ~0.05 (CALM),
+    mean ~1.7 at ~0.5 (ELEVATED), and mean ~3.0 at ~0.90 (HIGH), so
+    all three postures are reachable from a realistic standardized
+    signal. This is a calibration of an explicitly-placeholder
+    heuristic, not a change to what the threat signal is allowed to do:
+    it still only ever feeds `ThreatForecast`, and Hard Rule 2 still
+    means it can only raise floors.
+
     `posture_probs` is a fixed-temperature RBF-softmax over three
     anchor points at 0.0/0.5/1.0 (CALM/ELEVATED/HIGH) in that squashed
     space, which is what guarantees it always sums to 1 (softmax
@@ -71,6 +92,14 @@ class MovingAverageForecaster(ForecastProvider):
     than crashing or returning garbage.
     """
 
+    _THREAT_SQUASH_GAIN: float = 1.7
+    _THREAT_SQUASH_BIAS: float = -2.94
+    """Calibration of the threat squash -- see the class docstring.
+    Chosen so a standardized benign signal (feature mean 0) resolves to
+    CALM rather than ELEVATED; `_THREAT_SQUASH_BIAS` is
+    `logit(0.05)` and `_THREAT_SQUASH_GAIN` puts a +3 sigma deviation
+    at ~0.90."""
+
     _POSTURE_ANCHORS: tuple[float, float, float] = (0.0, 0.5, 1.0)  # CALM, ELEVATED, HIGH in squashed-threat-score space
     _POSTURE_TEMPERATURE: float = 0.15  # fixed RBF-softmax spread; smaller -> sharper posture assignment
     _THREAT_HORIZON_STEPS: int = 5  # Addition A: "next k=5-step threat signal"
@@ -92,7 +121,8 @@ class MovingAverageForecaster(ForecastProvider):
     def update(self, observation: ForecastObservation) -> None:
         threat_features = observation["threat_features"]
         raw_signal = float(np.mean(threat_features)) if len(threat_features) > 0 else 0.0
-        squashed_signal = float(1.0 / (1.0 + np.exp(-raw_signal)))
+        logit = self._THREAT_SQUASH_GAIN * raw_signal + self._THREAT_SQUASH_BIAS
+        squashed_signal = float(1.0 / (1.0 + np.exp(-logit)))
 
         self._threat_score = self._ewma(self._threat_score, squashed_signal)
         self._pool_fill = self._ewma(self._pool_fill, float(observation["pool_fill"]))

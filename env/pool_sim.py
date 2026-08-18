@@ -242,6 +242,18 @@ class SyntheticSKRQBERTrace:
          shrinks the fraction of exchanged bits that survive error
          correction / privacy amplification into secret key. This is
          a documented monotonic stand-in, not a fitted physical model.
+         If `spike_skr_scale` is set, it *replaces* that stand-in for
+         the spike window and scales SKR by exactly that factor
+         instead. The stand-in floors at a 50% reduction by
+         construction (`min(qber, 0.5)`), which is fine as a generic
+         monotonic relationship but cannot express S3's "pool refill
+         collapses" (PLAN2 §9) -- in real CV-QKD the secret-key rate
+         falls to zero as QBER approaches the security threshold,
+         rather than asymptoting at half. Rather than re-fit a
+         physical QBER->SKR curve (which would be an invented
+         constant dressed up as physics), the collapse depth is an
+         explicit, config-stated scenario dial. `None` (the default)
+         leaves every pre-existing trace byte-identical.
       5. Draws use `numpy.random.default_rng(seed)`, re-seeded fresh
          each time `__iter__` is called, so the same trace object
          yields an identical sequence every time it is iterated --
@@ -257,6 +269,7 @@ class SyntheticSKRQBERTrace:
     spike_start: int | None = None
     spike_duration: int = 0
     spike_magnitude: float = 0.0
+    spike_skr_scale: float | None = None
     seed: int = 0
 
     def __iter__(self) -> Iterator[tuple[float, float]]:
@@ -274,7 +287,10 @@ class SyntheticSKRQBERTrace:
 
             skr = float(rng.normal(self.mean_skr_kbps, self.skr_noise_frac * self.mean_skr_kbps))
             if in_spike:
-                skr *= max(0.0, 1.0 - min(qber, 0.5))
+                if self.spike_skr_scale is not None:
+                    skr *= self.spike_skr_scale
+                else:
+                    skr *= max(0.0, 1.0 - min(qber, 0.5))
             skr = max(0.0, skr)
 
             yield skr, qber

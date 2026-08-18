@@ -105,7 +105,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any, Iterator, Sequence
 
 import gymnasium as gym
 import numpy as np
@@ -128,7 +128,7 @@ from env.deferral_queue import DeferralQueue
 from env.forecast_provider import MovingAverageForecaster
 from env.masking import PolicyTable, compute_mask
 from env.pool_sim import PoolSim, SyntheticSKRQBERTrace, slice_skr_kbps
-from env.request_generator import random_request_generator
+from env.request_generator import RequestGenerator, build_tenant_graph, random_request_generator
 
 
 class IllegalActionError(Exception):
@@ -197,6 +197,110 @@ _ACTION_TO_KEY_TYPE: dict[Action, KeyType] = {
 _KEY_TYPE_TO_SERVE_ACTION: dict[KeyType, Action] = {v: k for k, v in _ACTION_TO_KEY_TYPE.items()}
 
 
+# ---------------------------------------------------------------------------
+# Scenario dispatch (PLAN2 §9's S1-S6 grid; configs/default.yaml's
+# `scenarios:` block). Added 2026-08-19 -- before this, `config["scenario"]`
+# was read but never acted on and every scenario silently ran S1.
+#
+# Every scenario here is an *exogenous* perturbation of one of three things:
+# the arrival process (S4), the pool physics (S3), or the threat signal
+# (S2, S5). None of them touches the reward formula, the masking rules, or
+# the action space, and none of them is visible to the agent as anything
+# other than ordinary state -- Hard Rule 3's "deleting the tenant graph and
+# replacing it with a plain arrival process must not change one line of
+# agent code" still holds with all six wired.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _ScenarioRuntime:
+    """Resolved, step-indexed view of one scenario's config block.
+
+    Deliberately a pure function of (config, step) with no internal
+    state: the same scenario at the same step always resolves the same
+    way, so an episode is reproducible from its seed alone and a
+    scenario can be re-derived for the dashboard's replay without
+    re-running the environment.
+    """
+
+    name: str
+    base_threat_level: float = 0.0
+    threat_ramp: dict[str, Any] | None = None
+    qber_spike: dict[str, Any] | None = None
+    tenant_flood: dict[str, Any] | None = None
+
+    def threat_level(self, step: int) -> float:
+        """Standardized threat-signal level at `step` (0.0 == benign).
+
+        Feeds `ForecastObservation.threat_features`, therefore the
+        forecaster's threat head, therefore `PolicyTable.ratchet_up`.
+        Hard Rule 2 is preserved end-to-end: this can only ever push
+        the posture (and so the floor) *upward*, because the ratchet
+        itself is one-way -- a falling threat level never lowers a
+        floor that has already been raised.
+        """
+        level = self.base_threat_level
+        ramp = self.threat_ramp
+        if ramp is not None:
+            start = int(ramp["start_step"])
+            ramp_steps = max(1, int(ramp["ramp_steps"]))
+            peak = float(ramp["peak_level"])
+            if step >= start:
+                progress = min(1.0, (step - start) / ramp_steps)
+                level = max(level, peak * progress)
+        return level
+
+    def trace_kwargs(self) -> dict[str, Any]:
+        """Extra `SyntheticSKRQBERTrace` kwargs implementing S3's
+        QBER-up / SKR-down pool-refill collapse."""
+        spike = self.qber_spike
+        if spike is None:
+            return {}
+        kwargs: dict[str, Any] = {
+            "spike_start": int(spike["start_step"]),
+            "spike_duration": int(spike["duration_steps"]),
+            "spike_magnitude": float(spike["magnitude"]),
+        }
+        if spike.get("skr_scale") is not None:
+            kwargs["spike_skr_scale"] = float(spike["skr_scale"])
+        return kwargs
+
+    def tenant_rate_multipliers(self, step: int) -> dict[str, float]:
+        """S4's noisy neighbour: the flooding tenant's arrival rate is
+        multiplied inside the flood window and back to 1.0 outside it."""
+        flood = self.tenant_flood
+        if flood is None:
+            return {}
+        start = int(flood["start_step"])
+        end = start + int(flood["duration_steps"])
+        if start <= step < end:
+            return {str(flood["tenant"]): float(flood["multiplier"])}
+        return {}
+
+
+def build_scenario_runtime(scenario: str, config: dict[str, Any]) -> _ScenarioRuntime:
+    """Resolve `config["scenarios"][scenario]` into a `_ScenarioRuntime`.
+
+    An unknown scenario name is an error rather than a silent fallback
+    to S1 -- silently running the wrong scenario is exactly the failure
+    mode this repo had before 2026-08-19, and it is invisible in
+    results.
+    """
+    scenarios = config.get("scenarios") or {}
+    if scenario not in scenarios:
+        known = ", ".join(sorted(scenarios)) or "<none configured>"
+        raise ValueError(f"unknown scenario {scenario!r} -- configured scenarios: {known}")
+
+    block = scenarios[scenario] or {}
+    return _ScenarioRuntime(
+        name=scenario,
+        base_threat_level=float(block.get("threat_level", 0.0)),
+        threat_ramp=block.get("threat_ramp"),
+        qber_spike=block.get("qber_spike"),
+        tenant_flood=block.get("tenant_flood"),
+    )
+
+
 class SmartKeyNetEnv(gym.Env):
     """The MDP (PLAN.md §4). One agent, one MDP (Hard Rule 3).
 
@@ -246,6 +350,19 @@ class SmartKeyNetEnv(gym.Env):
         self._max_steps = config.get("max_steps")
         self._load_spike_cfg = self._build_load_spike_cfg(config.get("load_spike"))
 
+        self._scenario_name = str(config.get("scenario", "S1"))
+        self._scenario = build_scenario_runtime(self._scenario_name, config)
+        graph_cfg = config.get("tenant_graph") or {}
+        self._graph_n_nodes = int(graph_cfg.get("n_nodes", 10))
+        # Topology seed is held fixed across episodes and scenarios on purpose:
+        # every row of the experiment grid must run against the *same* tenant
+        # network, or a policy comparison is confounded by graph luck. Only the
+        # arrival draws vary with the episode seed.
+        self._graph_seed = graph_cfg.get("seed", 0)
+        self._tenant_graph = build_tenant_graph(n_nodes=self._graph_n_nodes, seed=self._graph_seed)
+        self._request_generator: RequestGenerator | None = None
+        self._active_tenant_multipliers: dict[str, float] = {}
+
         # Populated fresh by reset(); typed here for clarity.
         self._pool_sim: PoolSim | None = None
         self._deferral_queue: DeferralQueue | None = None
@@ -275,6 +392,7 @@ class SmartKeyNetEnv(gym.Env):
         self._current_floor: Action | None = None
         self._current_reuse_masked_due_to_age = False
         self._current_mask: ActionMask | None = None
+        self._external_threat_trace: list[float] | None = None
 
     # -----------------------------------------------------------------
     # Gymnasium API
@@ -292,6 +410,7 @@ class SmartKeyNetEnv(gym.Env):
             n_steps=self._TRACE_N_STEPS,
             mean_skr_kbps=self._slice_skr_kbps,
             seed=episode_seed if episode_seed is not None else 0,
+            **self._scenario.trace_kwargs(),
         )
         self._pool_sim = PoolSim(
             capacity=self._pool_capacity,
@@ -302,7 +421,22 @@ class SmartKeyNetEnv(gym.Env):
         self._deferral_queue = DeferralQueue()
         self._policy_table = PolicyTable()  # fresh every episode -- sticky ratchet must not carry over
         self._forecaster = self._build_forecaster()
-        self._request_stream = random_request_generator(seed=episode_seed, load_spike=self._load_spike_cfg)
+        self._request_generator = None
+        self._active_tenant_multipliers = self._scenario.tenant_rate_multipliers(0)
+        if self._load_spike_cfg is not None:
+            # Legacy 2026-08-10 diagnostic path -- the graph-free stub with a
+            # periodic arrival-rate multiplier. Retained only so that session's
+            # recorded runs stay reproducible; no scenario in the grid uses it.
+            self._request_stream = random_request_generator(
+                seed=episode_seed, load_spike=self._load_spike_cfg
+            )
+        else:
+            self._request_generator = RequestGenerator(
+                self._tenant_graph,
+                seed=episode_seed,
+                tenant_rate_multipliers=self._active_tenant_multipliers,
+            )
+            self._request_stream = self._request_generator.stream()
         self._peeked_arrival = None
 
         self._sessions = {}
@@ -429,6 +563,11 @@ class SmartKeyNetEnv(gym.Env):
             self._last_pool_state = self._pool_sim.step()
             self._step_count += 1
 
+            # 1b. apply this tick's exogenous scenario perturbations (S4's
+            #     flood window opening or closing). Purely a property of the
+            #     arrival process -- the agent never sees it (Hard Rule 3).
+            self._apply_scenario_tick(self._step_count)
+
             # age every tracked session by one tick, not just the one
             # being decided (design decision 2)
             for session in self._sessions.values():
@@ -510,14 +649,61 @@ class SmartKeyNetEnv(gym.Env):
             pool_fill=self._pool_sim.fill / self._pool_sim.capacity,
             arrivals_per_class=list(self._arrivals_per_class_accum),
             hybrid_serves=self._hybrid_serves_accum,
-            threat_features=self._threat_features_placeholder(),
+            threat_features=self._threat_features(),
         )
 
-    def _threat_features_placeholder(self) -> list[float]:
-        """No real RT-IoT2022 threat-feature source is wired yet
-        (Person A's future dataset-ingestion session) -- see module
-        docstring point 6. Not a real threat signal."""
-        return [self._last_pool_state.qber, self._current_load()]
+    def _apply_scenario_tick(self, step: int) -> None:
+        """Apply any step-indexed scenario perturbation to the arrival
+        process. Only S4's flood window currently varies within an
+        episode; every other scenario resolves once at `reset()`."""
+        if self._request_generator is None:
+            return
+        multipliers = self._scenario.tenant_rate_multipliers(step)
+        if multipliers != self._active_tenant_multipliers:
+            self._active_tenant_multipliers = multipliers
+            self._request_generator.set_tenant_rate_multipliers(multipliers)
+
+    def _threat_features(self) -> list[float]:
+        """The threat-signal feature vector handed to the forecaster's
+        threat head (`ForecastObservation.threat_features`).
+
+        Contract: **standardized** units -- 0.0 is benign, positive
+        values are deviations in standard deviations. That is what
+        `env/forecast_provider.py`'s squash calibration and (from
+        Addition A) the LSTM threat head both expect.
+
+        Until 2026-08-19 this returned `[qber, load]`, flagged in this
+        module's design decision 6 as an explicit placeholder standing
+        in for a real threat source. It was worse than a placeholder:
+        QBER is pool physics and `load` is traffic volume -- neither is
+        a threat signal -- and because both are non-negative, the
+        forecaster's `sigmoid(mean(...))` could never drop below 0.5,
+        pinning every episode at ELEVATED posture from its second tick
+        and making the policy table's CALM row unreachable. The threat
+        signal now comes from the scenario (S1 benign, S2's HNDL ramp,
+        S5's adversarial trace via `set_external_threat_trace`), and
+        Addition A replaces that with real RT-IoT2022-derived feature
+        windows behind the same contract.
+        """
+        if self._external_threat_trace is not None:
+            index = min(self._step_count, len(self._external_threat_trace) - 1)
+            return [float(self._external_threat_trace[index])]
+        return [self._scenario.threat_level(self._step_count)]
+
+    def set_external_threat_trace(self, trace: Sequence[float] | None) -> None:
+        """Override the scenario's threat signal with an externally
+        supplied, step-indexed trace (S5's steering attack).
+
+        This is the *only* way a caller can influence the threat
+        signal, and it is deliberately narrow: the trace reaches
+        `ForecastObservation.threat_features` and nothing else. It
+        cannot lower a floor (`PolicyTable`'s ratchet is one-way --
+        Hard Rule 2), it cannot reach the reward (Hard Rule 1), and it
+        cannot widen an action mask. Demonstrating exactly that, under
+        an adversarially shaped trace, is the project's headline result
+        (PLAN2 §7.5).
+        """
+        self._external_threat_trace = list(trace) if trace is not None else None
 
     def _current_load(self) -> float:
         backlog = len(self._pending_requests) + len(self._deferral_queue)

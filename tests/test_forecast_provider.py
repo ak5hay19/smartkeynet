@@ -5,9 +5,10 @@ before the real LSTM forecaster exists).
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
-from env.contracts import ForecastObservation
+from env.contracts import ForecastObservation, ThreatPosture
 from env.forecast_provider import MovingAverageForecaster
 
 
@@ -151,3 +152,49 @@ def test_threat_horizon_scores_are_also_flat_held():
     horizon_scores = forecaster.get_threat_forecast().horizon_scores
     assert len(horizon_scores) == 5
     assert all(s == horizon_scores[0] for s in horizon_scores)
+
+
+# ---------------------------------------------------------------------------
+# Threat-squash calibration (2026-08-19 -- see MovingAverageForecaster's
+# class docstring for the measured "CALM was unreachable" finding)
+# ---------------------------------------------------------------------------
+
+
+def _posture_of(forecaster: MovingAverageForecaster) -> ThreatPosture:
+    probs = forecaster.get_threat_forecast().posture_probs
+    return ThreatPosture(int(np.argmax(probs)))
+
+
+def test_standardized_benign_signal_resolves_to_calm_not_elevated():
+    """The regression this calibration exists to prevent: a benign
+    (standardized mean 0) threat signal must classify CALM. With the
+    pre-2026-08-19 bare sigmoid it landed on exactly 0.5 -- the
+    ELEVATED anchor -- which, combined with the deliberately one-way
+    PolicyTable ratchet, made the CALM row of the floor table
+    unreachable for the rest of every episode."""
+    forecaster = MovingAverageForecaster()
+    for _ in range(50):
+        forecaster.update(make_observation(threat_features=[0.0, 0.0, 0.0]))
+
+    assert forecaster.get_threat_forecast().threat_score < 0.25
+    assert _posture_of(forecaster) is ThreatPosture.CALM
+
+
+def test_all_three_postures_are_reachable_from_a_standardized_signal():
+    reached = set()
+    for level in (0.0, 1.7, 3.5):
+        forecaster = MovingAverageForecaster()
+        for _ in range(50):
+            forecaster.update(make_observation(threat_features=[level]))
+        reached.add(_posture_of(forecaster))
+    assert reached == {ThreatPosture.CALM, ThreatPosture.ELEVATED, ThreatPosture.HIGH}
+
+
+def test_threat_score_is_monotonically_non_decreasing_in_the_signal():
+    scores = []
+    for level in (-1.0, 0.0, 1.0, 2.0, 3.0, 4.0):
+        forecaster = MovingAverageForecaster()
+        for _ in range(50):
+            forecaster.update(make_observation(threat_features=[level]))
+        scores.append(forecaster.get_threat_forecast().threat_score)
+    assert scores == sorted(scores)

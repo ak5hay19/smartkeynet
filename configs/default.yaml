@@ -104,6 +104,61 @@ reward:
 # --- env/request_generator.py ---
 tenant_graph:
   n_nodes: 10  # start small (PLAN.md §10 step 4); scale toward ~50 later
+  seed: 0       # graph topology seed -- held FIXED across episodes and scenarios so
+                # every comparison in the experiment grid runs against the same tenant
+                # network. Only the *arrival draws* vary by episode seed.
+
+# --- env/environment.py scenario dispatch (PLAN2 §9's S1-S6 grid) ---
+#
+# Every scenario is a purely exogenous perturbation of the environment: arrival
+# process, pool physics, or threat signal. None of it is visible to the agent as
+# anything other than ordinary state, and none of it touches the reward or the
+# masking rules (Hard Rules 1, 2, 3).
+#
+# `threat_level` values are in standardized-signal units, the same units
+# `ForecastObservation.threat_features` carries: 0.0 == benign, and a positive
+# value is a deviation in standard deviations. See env/forecast_provider.py's
+# squash calibration for how those map onto CALM/ELEVATED/HIGH.
+scenarios:
+  S1:  # Benign baseline -- steady mixed traffic. The training scenario.
+    threat_level: 0.0
+
+  S2:  # HNDL posture -- threat elevates, floors ratchet up (PLAN2 §9).
+    threat_level: 0.0
+    threat_ramp:
+      start_step: 60      # calm long enough to establish a CALM baseline first
+      ramp_steps: 40      # then a gradual, not instantaneous, elevation
+      peak_level: 3.2     # ~0.90 threat score -> HIGH posture
+
+  S3:  # QKD degradation -- QBER up, SKR down, pool refill collapses (PLAN2 §9).
+    threat_level: 0.0
+    qber_spike:
+      start_step: 50
+      duration_steps: 150
+      magnitude: 0.25        # additive QBER, on top of the 0.02 baseline
+      skr_scale: 0.15        # refill collapses to 15% of nominal during the window.
+                             # The trace's default QBER->SKR stand-in floors at a 50%
+                             # reduction, which is not a "collapse" -- see
+                             # SyntheticSKRQBERTrace.spike_skr_scale for why this is an
+                             # explicit dial rather than a re-fitted physical model.
+
+  S4:  # DDoS / noisy neighbour -- one low-sensitivity tenant floods the API.
+    threat_level: 0.0
+    tenant_flood:
+      tenant: iot-telemetry  # the lowest-sensitivity profile in the graph, so the
+                             # flood is genuinely "cheap traffic crowding out critical
+                             # traffic" rather than a general load increase
+      multiplier: 14.0
+      start_step: 50
+      duration_steps: 150
+
+  S5:  # Steering attack -- the threat trace is supplied by attack/steering_trace.py
+       # at run time (see agents/soft_reward_baseline.py + attack/). Eval only.
+    threat_level: 0.0
+
+  S6:  # Migration wave -- scripted floor ratchet. HELD-OUT EVAL ONLY (Hard Rule 8).
+       # The schedule itself lives in `migration_schedule` below.
+    threat_level: 0.0
 
 # --- env/request_generator.py random_request_generator's optional load-spike diagnostic ---
 # NOT real S4 (PLAN.md §5): S4 is a specific low-sensitivity tenant flooding the system,

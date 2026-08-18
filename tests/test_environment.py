@@ -21,7 +21,8 @@ import numpy as np
 import pytest
 import yaml
 
-from env.contracts import Action
+from agents.baselines import AlwaysHybridPolicy, AlwaysPQCPolicy
+from env.contracts import Action, ThreatPosture
 from env.environment import (
     _ACTION_TO_KEY_TYPE,
     _ENERGY_UNITS,
@@ -29,7 +30,9 @@ from env.environment import (
     _LATENCY_UNITS,
     IllegalActionError,
     SmartKeyNetEnv,
+    build_scenario_runtime,
 )
+from experiments.harness import run_scenario
 
 _TIER_ACTIONS = (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID)
 
@@ -456,3 +459,176 @@ def test_load_spike_absent_key_behaves_same_as_disabled():
     del config["load_spike"]
     env = SmartKeyNetEnv(config)
     assert env._load_spike_cfg is None
+
+
+# ---------------------------------------------------------------------------
+# Scenario dispatch S1-S4 (2026-08-19 -- before this, config["scenario"] was
+# read but never acted on, so every scenario silently ran S1)
+# ---------------------------------------------------------------------------
+
+
+def _run_scenario_probe(scenario: str, seed: int = 0, steps: int = 250):
+    """Drive one scenario with a fixed, boring policy and collect the
+    environment-side quantities each scenario is supposed to move.
+    AlwaysPQC never draws from the pool, so pool/threat/load effects
+    are attributable to the scenario rather than to policy behaviour."""
+    config = load_test_config(overrides={"scenario": scenario, "max_steps": steps})
+    env = SmartKeyNetEnv(config)
+    state, info = env.reset(seed=seed)
+    policy = AlwaysPQCPolicy()
+
+    floors, postures, loads, skrs, tenants = [], [], [], [], []
+    truncated = False
+    while not truncated:
+        floors.append(state["policy_floor"])
+        loads.append(state["load"])
+        skrs.append(state["skr"])
+        tenants.append(env._current_request["tenant"])
+        postures.append(
+            ThreatPosture(int(np.argmax(env._forecaster.get_threat_forecast().posture_probs)))
+        )
+        action = policy.act(state, info["action_mask"])
+        state, _reward, _terminated, truncated, info = env.step(action)
+
+    return {
+        "floors": floors,
+        "postures": postures,
+        "loads": loads,
+        "skrs": skrs,
+        "tenants": tenants,
+        "ratcheted_posture": env._policy_table._ratcheted_posture,
+    }
+
+
+def test_unknown_scenario_is_an_error_not_a_silent_fallback_to_s1():
+    """Silently running the wrong scenario is invisible in results --
+    which is exactly the failure mode this repo had before scenario
+    dispatch existed."""
+    with pytest.raises(ValueError):
+        SmartKeyNetEnv(load_test_config(overrides={"scenario": "S99"}))
+
+
+def test_s1_stays_calm_for_a_whole_benign_episode():
+    """S1 is the *benign* baseline, and every other scenario's claim is
+    relative to it. Regression guard for the 2026-08-19 forecaster
+    squash calibration: before it, S1 spent 249/250 decisions at
+    ELEVATED and the CALM floor row was unreachable."""
+    probe = _run_scenario_probe("S1")
+    assert set(probe["postures"]) == {ThreatPosture.CALM}
+    assert probe["ratcheted_posture"] is ThreatPosture.CALM
+
+
+def test_s2_elevates_threat_and_ratchets_floors_above_s1():
+    """S2's distinguishing behaviour (PLAN2 §9): threat elevates ->
+    floors ratchet up."""
+    s1 = _run_scenario_probe("S1")
+    s2 = _run_scenario_probe("S2")
+
+    assert s2["ratcheted_posture"] is ThreatPosture.HIGH
+    assert ThreatPosture.HIGH in s2["postures"]
+    assert np.mean(s2["floors"]) > np.mean(s1["floors"])
+
+    # Hard Rule 2: the ratchet is one-way -- the resolved posture must
+    # never step back down over the episode, even as the raw signal
+    # ramps through intermediate values.
+    ratchet_track = np.maximum.accumulate([int(p) for p in s2["postures"]])
+    assert list(ratchet_track) == sorted(ratchet_track)
+
+
+def test_s3_collapses_pool_refill_and_multiplies_exhaustion():
+    """S3's distinguishing behaviour (PLAN2 §9): QBER up, SKR down,
+    pool refill collapses."""
+    s1 = _run_scenario_probe("S1")
+    s3 = _run_scenario_probe("S3")
+
+    assert np.mean(s3["skrs"]) < 0.75 * np.mean(s1["skrs"])
+    assert min(s3["skrs"]) < min(s1["skrs"])
+
+    config = load_test_config(overrides={"max_steps": 250})
+    s1_hybrid = run_scenario(AlwaysHybridPolicy(), "S1", config, seed=0)
+    s3_hybrid = run_scenario(AlwaysHybridPolicy(), "S3", config, seed=0)
+    assert s3_hybrid.pool_exhaustion_events > s1_hybrid.pool_exhaustion_events
+    assert (
+        s3_hybrid.episode_metrics.deferred_critical_steps
+        > s1_hybrid.episode_metrics.deferred_critical_steps
+    )
+
+
+def test_s4_floods_the_low_sensitivity_tenant_and_raises_load():
+    """S4's distinguishing behaviour (PLAN2 §9): one low-sensitivity
+    tenant floods the API. The flood must show up as a *share* shift
+    toward that tenant and as higher aggregate load -- a noisy
+    neighbour sends more traffic, it does not merely take a bigger
+    slice of a fixed budget."""
+    s1 = _run_scenario_probe("S1")
+    s4 = _run_scenario_probe("S4")
+
+    def share(probe, tenant):
+        return sum(t == tenant for t in probe["tenants"]) / len(probe["tenants"])
+
+    assert share(s4, "iot-telemetry") > 3 * share(s1, "iot-telemetry")
+    assert np.mean(s4["loads"]) > np.mean(s1["loads"])
+    # ...and it must not be a general load increase: the *other* tenants'
+    # share has to fall, or "noisy neighbour" means nothing.
+    assert share(s4, "hospital") < share(s1, "hospital")
+
+
+@pytest.mark.parametrize("scenario", ["S1", "S2", "S3", "S4"])
+def test_floor_violations_stay_structurally_impossible_in_every_scenario(scenario):
+    """Hard Rule 2/9 hold under every perturbation, not just the benign
+    baseline -- including S3, where the pool genuinely runs dry."""
+    config = load_test_config(overrides={"max_steps": 200})
+    for policy in (AlwaysHybridPolicy(), AlwaysPQCPolicy()):
+        result = run_scenario(policy, scenario, config, seed=0)
+        assert result.floor_violations == 0
+
+
+@pytest.mark.parametrize("scenario", ["S1", "S2", "S3", "S4"])
+def test_agent_visible_state_never_leaks_the_tenant_graph(scenario):
+    """Hard Rule 3: the graph shapes which requests arrive and nothing
+    else. A `StateDict` must carry no tenant identity, no node/edge
+    reference, and no scenario name -- otherwise deleting the graph
+    would change agent code."""
+    config = load_test_config(overrides={"scenario": scenario, "max_steps": 50})
+    env = SmartKeyNetEnv(config)
+    state, info = env.reset(seed=0)
+    tenants = {data["tenant"] for _n, data in env._tenant_graph.nodes(data=True)}
+
+    truncated = False
+    while not truncated:
+        for key, value in state.items():
+            assert not isinstance(value, str), f"{key} leaked a string into agent-visible state"
+            if isinstance(value, (list, tuple)):
+                assert not any(isinstance(v, str) for v in value)
+        assert tenants.isdisjoint(set(state))
+        action = next(a for a in Action if info["action_mask"][int(a)])
+        state, _r, _t, truncated, info = env.step(action)
+
+
+def test_scenario_runtime_is_a_pure_function_of_step():
+    """`_ScenarioRuntime` carries no internal state, so an episode is
+    reproducible from its seed alone and the dashboard can re-derive a
+    scenario's schedule without re-running the environment."""
+    config = load_test_config()
+    runtime = build_scenario_runtime("S2", config)
+    first = [runtime.threat_level(s) for s in range(200)]
+    second = [runtime.threat_level(s) for s in reversed(range(200))][::-1]
+    assert first == second
+    assert first == sorted(first)  # the HNDL ramp only ever rises
+
+
+def test_external_threat_trace_overrides_the_scenario_signal():
+    """S5's hook. Narrow by construction: it reaches the forecaster's
+    threat features and nothing else."""
+    config = load_test_config(overrides={"scenario": "S1", "max_steps": 30})
+    env = SmartKeyNetEnv(config)
+    env.set_external_threat_trace([4.0] * 500)
+    state, info = env.reset(seed=0)
+
+    for _ in range(20):
+        action = next(a for a in Action if info["action_mask"][int(a)])
+        state, _r, _t, _tr, info = env.step(action)
+
+    # an adversarially high trace can only push the posture UP
+    assert env._policy_table._ratcheted_posture is not ThreatPosture.CALM
+    assert state["threat_score"] > 0.5
