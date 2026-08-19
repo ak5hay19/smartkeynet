@@ -6,66 +6,68 @@
   "eval_seeds": [
     2000,
     2001,
-    2002
+    2002,
+    2003,
+    2004
   ],
-  "total_steps": 15000,
+  "total_steps": 60000,
   "modes": {
     "off": {
       "S3": {
-        "mean_reward": -1000940.3948666669,
-        "std_reward": 802267.0017744832,
-        "mean_regret_events": 208.66666666666666,
-        "mean_p99_latency": 1.3499999999999999,
+        "mean_reward": -98769.07647999981,
+        "std_reward": 195760.78150181106,
+        "mean_regret_events": 31.5,
+        "mean_p99_latency": 150.0,
         "total_floor_violations": 0
       },
       "S6": {
-        "mean_reward": -1879521.6356333338,
-        "std_reward": 1504367.9888254749,
-        "mean_regret_events": 372.1666666666667,
-        "mean_p99_latency": 1.45,
+        "mean_reward": -1530.0696799999957,
+        "std_reward": 450.46575433650855,
+        "mean_regret_events": 3.1,
+        "mean_p99_latency": 150.0,
         "total_floor_violations": 0
       }
     },
     "ewma": {
       "S3": {
-        "mean_reward": -982966.4324333299,
-        "std_reward": 549745.2778808586,
-        "mean_regret_events": 236.66666666666666,
-        "mean_p99_latency": 1.2500000000000002,
+        "mean_reward": -56919.84379999984,
+        "std_reward": 125443.79916104232,
+        "mean_regret_events": 37.6,
+        "mean_p99_latency": 150.0,
         "total_floor_violations": 0
       },
       "S6": {
-        "mean_reward": -442.5118000000004,
-        "std_reward": 125.03145183891401,
-        "mean_regret_events": 0.0,
-        "mean_p99_latency": 1.2,
+        "mean_reward": -1758.2267399999923,
+        "std_reward": 983.8179004842543,
+        "mean_regret_events": 1.0,
+        "mean_p99_latency": 150.0,
         "total_floor_violations": 0
       }
     },
     "lstm": {
       "S3": {
-        "mean_reward": -3680160.8720000316,
-        "std_reward": 2227522.4614751115,
-        "mean_regret_events": 556.3333333333334,
-        "mean_p99_latency": 1.5,
+        "mean_reward": -5824.944459999996,
+        "std_reward": 9576.35594293139,
+        "mean_regret_events": 8.4,
+        "mean_p99_latency": 150.0,
         "total_floor_violations": 0
       },
       "S6": {
-        "mean_reward": -1006849.1211333299,
-        "std_reward": 1131300.2246729638,
-        "mean_regret_events": 310.5,
-        "mean_p99_latency": 1.45,
+        "mean_reward": -3597.5016199999855,
+        "std_reward": 2304.9188656384567,
+        "mean_regret_events": 16.9,
+        "mean_p99_latency": 150.0,
         "total_floor_violations": 0
       }
     }
   },
   "s3_regret_by_mode": {
-    "off": 208.66666666666666,
-    "ewma": 236.66666666666666,
-    "lstm": 556.3333333333334
+    "off": 31.5,
+    "ewma": 37.6,
+    "lstm": 8.4
   },
-  "lstm_beats_off_on_s3_regret": false,
-  "lstm_beats_ewma_on_s3_regret": false,
-  "best_mode_on_s3_regret": "off",
+  "lstm_beats_off_on_s3_regret": true,
+  "lstm_beats_ewma_on_s3_regret": true,
+  "best_mode_on_s3_regret": "lstm",
   "ewma_beats_off_on_s3_regret": false
 }

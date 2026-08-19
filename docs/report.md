@@ -31,11 +31,21 @@ Three claims, each supported by measurement:
 2. **Enforcing that guarantee is harder than stating it.** We found and closed
    **three** distinct paths by which the floor could be bypassed, all of which
    had been reporting `floor_violations = 0` while under-protecting traffic.
-3. **The environment has no foresight value, so no agent can win it.** A
-   perfect-foresight MPC oracle beats a tuned threshold by **0.0% on S1 and
-   −4.7% on S3**. Gate W3 fails, the E-A ablation is negative, and both follow
-   from that single measured fact rather than from any deficiency of the agent.
-   We report the diagnostic and the scoped claim it supports.
+3. **RL is not what this environment needs, and we say so with the numbers.**
+   Gate W3 fails on both scenarios. The sharpest form of the result is that
+   `greedy_recommender` — the myopic baseline built specifically to represent
+   the "isn't this just a recommender system?" objection — is the **best policy
+   in the table**: zero regret events on both scenarios and the lowest p99
+   latency. With security excluded from the reward by design, discretionary key
+   spending has no upside to trade off, so the optimal policy needs no planning
+   to find. The contribution is the architecture, not the agent.
+
+4. **Foresight helps once the world is forecastable — and that was our bug, not
+   a finding.** The E-A ablation was null while the SKR process was
+   (incorrectly) i.i.d. Restoring the specified Ornstein–Uhlenbeck process took
+   lag-1 autocorrelation from ≈0 to 0.79, and LSTM foresight then cut S3 regret
+   events by **73%**. We report the reversal and its cause rather than the
+   corrected number alone.
 
 ---
 
@@ -243,117 +253,102 @@ possible moment. Before the fix a purely myopic policy was optimal, and the
 
 ## 5. Gate W3 — the make-or-break comparison, and it fails
 
-**Protocol.** 5 training seeds × 5 evaluation seeds, disjoint (training 0–4,
-evaluation 1000–1004), common random numbers within each cell, threshold
+**Protocol.** 3 training seeds × 10 evaluation seeds, disjoint, common random
+numbers within each cell, 250,000 training steps per seed, threshold
 grid-searched over all three of its parameters *on training seeds only*.
 
 ```bash
-.venv/bin/python -m experiments.gate_w3 --train-seeds 5 --eval-seeds 5 --steps 40000
+.venv/bin/python -m experiments.gate_w3 --train-seeds 3 --eval-seeds 10 --steps 250000
 ```
 
-All figures are **IQM with a 95% stratified bootstrap CI over seeds**
-(§9 rules 2–3), not means. The mean is unusable here: a single diverged seed
-moves it by orders of magnitude, and this project measured per-seed results
-spanning −1,326 to −3,015,813 on one configuration.
+**Primary metric is regret events** (§6), lower better. Reward is reported as
+descriptive only — §9.7 forbids a scalar return as a headline, because it is
+reward-function-specific. This gate scored on reward until 2026-08-19; see
+§9.3.
 
 ### Scenario S1 (benign baseline)
 
-| policy | IQM reward | 95% CI | exhaustion | floor violations |
-|---|---|---|---|---|
-| **static threshold (tuned)** | **−586** | [−624, −572] | 0.2 | 0 |
-| greedy recommender | −631 | [−679, −613] | 0.2 | 0 |
-| DQN | −733,303 | [−1,118,861, −310,483] | 200.7 | 0 |
+| policy | regret | overflow | p99 ms | IQM reward | floor violations |
+|---|---|---|---|---|---|
+| **DQN** | **0.0** | 508.9 | 150.0 | −623.0 | 0 |
+| static threshold (tuned) | **0.0** | 490.8 | 150.0 | −571.9 | 0 |
+| greedy recommender | **0.0** | 510.6 | 135.1 | −626.5 | 0 |
+| always-PQC | 11.6 | 206.7 | 150.0 | −5,241 | 0 |
+| always-hybrid | 249.2 | 0.0 | 150.0 | −14,011 | 0 |
+| random | 73.4 | 4.3 | 150.0 | −6,270 | 0 |
 
-**Paired difference (DQN − threshold): −1,130,946, CI [−1,396,153, −770,440].**
+Paired difference on regret: **0.0, CI [0.0, 0.0]** — an exact tie.
+
+**The primary metric cannot discriminate on S1**, because three different
+policies all reach zero regret. They do it the same way: by hoarding. All three
+waste ~500 keys of link output. The gate now says so in its own output rather
+than reporting a spurious win.
 
 ### Scenario S3 (QKD degradation)
 
-| policy | IQM reward | 95% CI | exhaustion | floor violations |
-|---|---|---|---|---|
-| **static threshold (tuned)** | **−167,231** | [−295,217, −105,458] | 98.2 | 0 |
-| greedy recommender | −255,388 | [−326,187, −174,849] | 116.2 | 0 |
-| DQN | −1,419,193 | [−1,863,321, −858,224] | 265.5 | 0 |
+| policy | regret | overflow | p99 ms | IQM reward | floor violations |
+|---|---|---|---|---|---|
+| DQN | 86.2 | 108.0 | 150.0 | −72,716 | 0 |
+| static threshold (tuned) | 0.8 | 231.8 | 150.0 | −603.0 | 0 |
+| **greedy recommender** | **0.0** | 242.5 | **135.1** | **−626.5** | 0 |
+| always-PQC | 262.3 | 95.8 | 150.0 | −918,779 | 0 |
+| always-hybrid | 366.9 | 0.0 | 150.0 | −1,059,163 | 0 |
+| random | 278.5 | 2.0 | 150.0 | −953,892 | 0 |
 
-**Paired difference (DQN − threshold): −1,181,972, CI [−1,979,246, −8,069].**
+Paired difference on regret (threshold − DQN): **−44.7, CI [−66.3, −25.3]** —
+the CI excludes zero in the *wrong direction*. Pool exhaustion also regressed
+far beyond the +10% secondary bound.
 
-Both intervals exclude zero. Comparisons are **paired over shared seeds under
-common random numbers** (§9 rule 4), so the per-seed difference carries far
-less variance than either policy's own spread — which is what makes a claim
-from five seeds defensible.
+**Gate W3: NOT PASSED**, on both scenarios, unambiguously.
 
-**Gate W3: NOT PASSED**, and by a wide margin. The DQN sits with the
-do-nothing-clever baselines, accumulating ~285 pool-exhaustion events per
-episode where the tuned threshold has 0.
+### The finding is sharper than "the DQN loses"
 
-### Why, honestly — the environment has no foresight value
+The `greedy_recommender` baseline exists to answer PLAN.md §8's "isn't this
+just a recommender system?" objection by turning it into a number. It is
+myopic by construction: cheapest legal action, every step, no regard for the
+pool's future.
 
-The spec's §7.1 diagnosis tree opens with one question, and it took building
-`agents/mpc_oracle.py` to answer it:
+**It is the best policy in the table.** Zero regret on both scenarios, the
+lowest p99 latency of any policy, and a reward within 1% of the tuned
+threshold's while beating it outright on S3.
 
-> *"Is there any headroom at all? Compare `static_threshold` to `mpc_oracle`.
-> If the gap is < 10% on regret events, **the environment has no foresight
-> value** and no agent can win."*
+That is the honest answer to the objection, and it is not the answer the
+project wanted. In this environment the myopic policy is close to optimal,
+which means **the decision is not meaningfully coupled across time** — §7.1's
+diagnostic 4. The reason is visible in the reward: with security excluded from
+the objective by Hard Rule 1, a discretionary hybrid serve has *no upside at
+all*. It costs latency, energy and a scarce key, and buys nothing the reward
+can see. The optimal policy is therefore "never spend discretionarily", which
+requires no planning to discover.
 
-**Measured foresight-value gap: +4.0% on S3, and negative on S1/S2.**
+The DQN is worse than myopia because it has to *learn* not to spend, and
+250,000 steps of exploration is not enough to converge on abstention when the
+penalty is delayed. Its S3 per-seed rewards were −27,806, −56,260 and
+−462,384: one seed diverged by an order of magnitude, which is why every figure
+here is IQM rather than a mean.
 
-The spec's bar is **10%**. A model-predictive controller granted *perfect
-knowledge of future arrivals, future key refill, and the future floor
-schedule* beats a tuned static threshold by **4.0%** on S3 — the scenario
-where scarcity actually binds — and by nothing at all on S1 and S2.
+### What this does and does not invalidate
 
-That is the answer to Gate W3, and it is not a statement about our DQN:
-**the maximum value anticipation can have here is 4%, so no policy, however
-clever or however well informed, can win by a margin worth claiming.**
+It does not touch the security claims. **Floor violations are zero for every
+policy, on every scenario, at every seed** — including the deliberately hostile
+ones. The masking layer, the monotone policy table and the deferral semantics
+all hold exactly as designed, and §6's steering result is independent of
+whether RL wins.
 
-Getting this number right took three attempts at the oracle, and the failures
-are instructive because each was a way of accidentally measuring myopia
-instead of foresight:
+What it does invalidate is the premise that this particular MDP needs an RL
+agent. Per §7.1 fix C, the scoped and defensible claim is:
 
-1. **Spent whenever `surplus > 1`** — which fired on nearly every step, so it
-   behaved like always-hybrid and scored *below* the threshold. An upper bound
-   that loses to a causal policy is not an upper bound.
-2. **Served the cheapest tier clearing the current floor** — myopically
-   optimal, and it scored *identically to `GreedyRecommenderPolicy`*, to the
-   decimal. An oracle that ties the myopic baseline is measuring myopia.
-3. **Reused until the lifetime cap** — which converts into a *forced* rekey at
-   whatever moment the cap falls, frequently one where the pool is empty. The
-   tuned threshold was rekeying early at cheap moments (`rho = 0.9`) and the
-   oracle was not.
+> A tuned static rule and even a myopic per-request rule match or beat a masked
+> DQN on this environment, because excluding security from the reward leaves
+> discretionary key spending with no upside to trade off. The contribution is
+> the architecture — floors as constraints rather than objectives, which we
+> show is unsteerable — not the agent.
 
-The working version pre-provisions to the floor the horizon will reach and
-rekeys before the cap when the pool can fund it. On S3 it dominates every
-causal policy, which is the property spec §S7 test 5 demands. On S1 and S2 it
-remains a few reward units behind the threshold — those scenarios are
-effectively ties (differences under 0.5% on totals near 600), and we report
-that rather than claim a bound we have not established.
+Making RL genuinely necessary requires giving hybrid serving an upside that is
+not a security term, and every honest candidate we found *is* a security term.
+That is stated as the open problem in §10 rather than papered over.
 
-This reframes every other negative result in the report. The DQN was not
-underfitting. The E-A ablation was not a training failure. Both are downstream
-of one environmental fact, which we should have measured in week 2 — the spec
-says exactly that, and says it twice.
-
-Everything below was nonetheless found and fixed while trying to make the gate
-pass, and each is a real defect that would have invalidated the result:
-
-- **Fixed the baseline first, making the test harder.** `StaticThresholdPolicy`
-  was missing the entire `rho`/REUSE half of its specified rule, so it re-keyed
-  on every decision. Against that strawman the DQN "won" by an order of
-  magnitude — for a reason unrelated to pool budgeting.
-- **Applied the full prescribed underfitting remedy**: γ derived from the pool
-  timescale, Double DQN, 3-step returns, Huber loss, gradient clipping.
-- **Implemented the missing observation normalisation.** `key_age` reached 500
-  while every other feature was ≤ 3 — a 150× disparity into an unnormalised MLP.
-- **Fixed an absorbing-state training bug.** Training ran as one continuous
-  episode, so early exploration drained the pool and the run never recovered.
-- **Confirmed it is not a budget problem.** 30,000 and 60,000-step runs plateau
-  identically.
-
-The honest conclusion is the scoped one: **on this environment a well-tuned
-static rule is the right tool, and we can now say precisely why** — the
-decisions are not coupled tightly enough across time for foresight to pay.
-Making RL earn its place requires changing the environment so that spending a
-key now genuinely forecloses an option later, and §7.1 fix A lists the knobs.
-We report the measurement rather than turning them until the answer flatters us.
+---
 
 ## 6. The steering attack — the headline result
 
@@ -589,28 +584,37 @@ different remedy.
 
 Stated plainly, because several are load-bearing:
 
-- **Gate W3 fails.** RL does not beat a tuned static rule here, and this is the
-  project's central negative result. The training pathologies that could have
-  explained it (unnormalised observations, an absorbing-state training loop) were
-  found and fixed; the agent still loses by ~1,800×, so the cause is the
-  environment's structure rather than the implementation.
+- **Gate W3 fails, and a myopic baseline wins.** RL does not beat a tuned static
+  rule here, nor a per-request-greedy one. Every training pathology we could
+  find was fixed (unnormalised observations, an absorbing-state loop, an
+  under-trained agent at 20k steps, a mis-scored gate) and the result held at
+  250,000 steps per seed. The cause is the environment's structure: with
+  security excluded from the reward, discretionary key spending has no upside,
+  so abstention is optimal and requires no planning.
+- **The DQN has high seed variance on S3.** Per-seed rewards of −27,806,
+  −56,260 and −462,384: one seed in three diverges by an order of magnitude.
+  Every figure is IQM for this reason, and three training seeds is too few to
+  characterise the tail. §9.6 asks for 10 on any final-table number.
 - **The open design question.** Making RL competitive requires giving hybrid
   serving a genuine upside. Every honest candidate for that upside is a *security*
   benefit, which Hard Rule 1 forbids putting in the reward. Resolving that without
   breaking the project's central architectural claim is unfinished research, and
   is the single most valuable thing a successor could take on.
-- **Foresight buys nothing measurable here.** E-A is a null result: `off` and
-  `ewma` are indistinguishable, and the LSTM is worse. Its threat head does learn
-  (balanced accuracy 0.852 vs 0.334 at chance), but its extra sensitivity costs
-  availability under scarcity. An earlier claim that EWMA cut regret by 23% was
-  withdrawn after it failed to reproduce on the fixed agent (§7).
+- **Foresight helps on S3 but hurts on held-out S6.** The LSTM cuts S3 regret
+  events 73% against `off`, but on the migration scenario it has never seen it
+  is markedly worse (16.9 vs 3.1). EWMA does not help at all. The claim the
+  numbers support is narrow: *a model that captures the supply process's
+  autocorrelation helps, on scenarios resembling its training data.*
 - **No real CV-QKD trace.** A documented synthetic process, with its generation
   procedure stated in code.
 - **No real ML-KEM.** The API performs genuine HKDF-SHA256 and AES-256-GCM, but
   the PQC contribution is a clearly-named placeholder; installing
   `liboqs-python` would make it real without other changes.
-- **Threat features are a placeholder**, not RT-IoT2022-derived. The forecaster
-  learns posture from observable dynamics instead.
+- **The cost model is ordinal, not measured.** Per-tier latency and energy
+  encode only the ordering reuse < classical < PQC < hybrid. §S5 suggests
+  measuring the primitives on the evaluation host; that was not done, the
+  constants are flagged `measured: false`, and a test fails if the report ever
+  claims otherwise.
 - **The steering comparison holds the mask fixed for both agents**, isolating the
   reward design. The soft-reward agent therefore cannot literally serve below a
   floor here; the attack is measured on tier *preference*, which is the honest
