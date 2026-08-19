@@ -288,9 +288,7 @@ def _assert_schedule_only_ratchets_up(schedule: tuple[FloorChange, ...]) -> None
         highest_so_far[change.tenant_cohort] = int(change.new_floor)
 
 
-def build_scenario(
-    name: str, config: dict[str, Any], episode_steps: int
-) -> ScenarioSpec:
+def build_scenario(name: str, config: dict[str, Any], episode_steps: int) -> ScenarioSpec:
     """Build the `ScenarioSpec` for `name`.
 
     `episode_steps` sizes step-indexed schedules that are defined

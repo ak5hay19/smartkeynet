@@ -32,7 +32,7 @@ def load_test_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     tests/test_environment.py's helper of the same name -- nothing
     hardcoded here) and shallow-merge per-section overrides."""
     config_path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         config: dict[str, Any] = yaml.safe_load(f)
 
     if overrides:

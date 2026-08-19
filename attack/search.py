@@ -26,8 +26,8 @@ evidence the space is easy rather than that the optimiser is good.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
 
 import numpy as np
 
@@ -68,7 +68,7 @@ BOUNDS: tuple[tuple[float, float], ...] = (
 def _project(vector: np.ndarray) -> np.ndarray:
     """Clip into the plausibility box (§S11: 'project theta after each step')."""
     return np.array(
-        [np.clip(value, low, high) for value, (low, high) in zip(vector, BOUNDS)]
+        [np.clip(value, low, high) for value, (low, high) in zip(vector, BOUNDS, strict=True)]
     )
 
 
@@ -165,7 +165,7 @@ def _search_cma(
         strategy.tell(population, [-s for s in scores])
         evaluations += len(population)
         history.extend(scores)
-        for vector, score in zip(population, scores):
+        for vector, score in zip(population, scores, strict=True):
             if score > best_score:
                 best_score, best_vector = score, np.array(vector)
 

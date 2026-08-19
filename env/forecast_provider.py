@@ -100,8 +100,14 @@ class MovingAverageForecaster(ForecastProvider):
     than crashing or returning garbage.
     """
 
-    _POSTURE_ANCHORS: tuple[float, float, float] = (0.0, 0.5, 1.0)  # CALM, ELEVATED, HIGH in squashed-threat-score space
-    _POSTURE_TEMPERATURE: float = 0.15  # fixed RBF-softmax spread; smaller -> sharper posture assignment
+    _POSTURE_ANCHORS: tuple[float, float, float] = (
+        0.0,
+        0.5,
+        1.0,
+    )  # CALM, ELEVATED, HIGH in squashed-threat-score space
+    _POSTURE_TEMPERATURE: float = (
+        0.15  # fixed RBF-softmax spread; smaller -> sharper posture assignment
+    )
     _THREAT_HORIZON_STEPS: int = 5  # Addition A: "next k=5-step threat signal"
     _POOL_HORIZONS: tuple[int, int, int] = (10, 25, 50)  # H in {10, 25, 50} per contracts.py
 
@@ -136,7 +142,9 @@ class MovingAverageForecaster(ForecastProvider):
         self._threat_score = self._ewma(self._threat_score, min(1.0, max(0.0, summary)))
         self._pool_fill = self._ewma(self._pool_fill, float(observation["pool_fill"]))
         self._skr = self._ewma(self._skr, float(observation["skr"]))
-        self._hybrid_serve_rate = self._ewma(self._hybrid_serve_rate, float(observation["hybrid_serves"]))
+        self._hybrid_serve_rate = self._ewma(
+            self._hybrid_serve_rate, float(observation["hybrid_serves"])
+        )
 
     def get_threat_forecast(self) -> ThreatForecast:
         anchors = np.array(self._POSTURE_ANCHORS)

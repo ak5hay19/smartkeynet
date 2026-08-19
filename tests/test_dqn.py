@@ -21,11 +21,11 @@ import torch
 import yaml
 
 from agents.dqn import (
+    _FORECAST_STATE_DIM,
+    _OFF_STATE_DIM,
     DQNAgent,
     DQNConfig,
     QNetwork,
-    _FORECAST_STATE_DIM,
-    _OFF_STATE_DIM,
     flatten_state,
     load_dqn_config,
 )
@@ -198,7 +198,7 @@ def test_qnetwork_forward_batched():
 
 def test_load_dqn_config_matches_real_yaml():
     config_path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)["dqn"]
 
     config = load_dqn_config()
@@ -341,7 +341,9 @@ def _mixed_epsilon_config() -> DQNConfig:
 
 
 def _run_action_sequence(seed: int, n_steps: int = 50) -> list[int]:
-    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_mixed_epsilon_config(), seed=seed)
+    agent = DQNAgent(
+        state_dim=_OFF_STATE_DIM, has_forecast=False, config=_mixed_epsilon_config(), seed=seed
+    )
     state = _make_state(forecast=False)
     mask = _full_mask()
     return [int(agent.act(state, mask)) for _ in range(n_steps)]
@@ -366,10 +368,14 @@ def test_seed_none_leaves_ambient_random_state_untouched():
     state = _make_state(forecast=False)
     mask = _full_mask()
 
-    agent_a = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_mixed_epsilon_config(), seed=None)
+    agent_a = DQNAgent(
+        state_dim=_OFF_STATE_DIM, has_forecast=False, config=_mixed_epsilon_config(), seed=None
+    )
     seq_a = [int(agent_a.act(state, mask)) for _ in range(50)]
 
-    agent_b = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=_mixed_epsilon_config(), seed=None)
+    agent_b = DQNAgent(
+        state_dim=_OFF_STATE_DIM, has_forecast=False, config=_mixed_epsilon_config(), seed=None
+    )
     seq_b = [int(agent_b.act(state, mask)) for _ in range(50)]
 
     assert seq_a != seq_b
@@ -453,7 +459,9 @@ def test_double_dqn_target_still_respects_the_next_state_mask():
     there too -- masking only the target network would reintroduce the
     illegal-action leak the masking exists to prevent."""
     agent = DQNAgent(
-        state_dim=_OFF_STATE_DIM, has_forecast=False, config=DQNConfig(batch_size=4, n_step=1, double=True)
+        state_dim=_OFF_STATE_DIM,
+        has_forecast=False,
+        config=DQNConfig(batch_size=4, n_step=1, double=True),
     )
     state, next_state = _make_state(forecast=False), _make_state(forecast=False)
     only_reuse = np.zeros(N_ACTIONS, dtype=bool)
@@ -499,7 +507,7 @@ def test_learn_changes_network_weights():
     after = list(agent.q_network.parameters())
 
     assert "loss" in metrics
-    assert any(not torch.equal(b, a) for b, a in zip(before, after))
+    assert any(not torch.equal(b, a) for b, a in zip(before, after, strict=True))
 
 
 def test_learn_moves_q_values_toward_the_obviously_correct_answer():
@@ -511,7 +519,9 @@ def test_learn_moves_q_values_toward_the_obviously_correct_answer():
     agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=config)
 
     state = _make_state(forecast=False)
-    next_state = _make_state(forecast=False)  # irrelevant: gamma=0, done=True zeroes the bootstrap term
+    next_state = _make_state(
+        forecast=False
+    )  # irrelevant: gamma=0, done=True zeroes the bootstrap term
     mask = _full_mask()
 
     good_action = Action.SERVE_PQC
@@ -548,10 +558,14 @@ def test_save_then_load_produces_identical_q_values(tmp_path):
     checkpoint_path = tmp_path / "agent.pt"
     agent.save(str(checkpoint_path))
 
-    fresh_agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=DQNConfig(batch_size=4))
+    fresh_agent = DQNAgent(
+        state_dim=_OFF_STATE_DIM, has_forecast=False, config=DQNConfig(batch_size=4)
+    )
     fresh_agent.load(str(checkpoint_path))
 
-    probe = flatten_state(_make_state(forecast=False, pool_fill=0.9), has_forecast=False).unsqueeze(0)
+    probe = flatten_state(_make_state(forecast=False, pool_fill=0.9), has_forecast=False).unsqueeze(
+        0
+    )
     with torch.no_grad():
         q1 = agent.q_network(probe)
         q2 = fresh_agent.q_network(probe)
@@ -578,7 +592,7 @@ def test_dqn_agent_loss_trends_down_training_against_real_env_s1():
     torch.manual_seed(0)
 
     config_path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         full_config = yaml.safe_load(f)
 
     # The one place has_forecast is derived from: the same config-time
@@ -587,13 +601,17 @@ def test_dqn_agent_loss_trends_down_training_against_real_env_s1():
     has_forecast = full_config.get("use_foresight", "off") != "off"
 
     dqn_config = load_dqn_config()
-    dqn_config.epsilon_decay_steps = 1000  # short run -- reach low epsilon within budget, don't hardcode everything else
+    dqn_config.epsilon_decay_steps = (
+        1000  # short run -- reach low epsilon within budget, don't hardcode everything else
+    )
 
     env = SmartKeyNetEnv({**full_config, "seed": 0, "max_steps": 3000})
     state, info = env.reset(seed=0)
     mask = info["action_mask"]
 
-    state_dim = flatten_state(state, has_forecast).shape[0]  # derived from the real state, not assumed
+    state_dim = flatten_state(state, has_forecast).shape[
+        0
+    ]  # derived from the real state, not assumed
     agent = DQNAgent(state_dim=state_dim, has_forecast=has_forecast, config=dqn_config)
 
     losses: list[float] = []
@@ -611,7 +629,9 @@ def test_dqn_agent_loss_trends_down_training_against_real_env_s1():
         state = next_state
         mask = next_mask
 
-    assert len(losses) > 500  # learning actually ran for a meaningful stretch, not just a handful of steps
+    assert (
+        len(losses) > 500
+    )  # learning actually ran for a meaningful stretch, not just a handful of steps
 
     # What this asserts, and what it deliberately does NOT.
     #
@@ -644,3 +664,127 @@ def test_dqn_agent_loss_trends_down_training_against_real_env_s1():
     assert late_avg < 20.0 * early_avg, (
         f"loss appears to be diverging: early={early_avg:.4f}, late={late_avg:.4f}"
     )
+
+
+def _dummy_transition(reward: float = -1.0) -> object:
+    """A minimal replay transition for buffer-level tests.
+
+    Built directly rather than by stepping the env: these tests are about the
+    buffer's sampling maths, and a real rollout would couple them to
+    environment behaviour that has nothing to do with it.
+    """
+    from agents.dqn import _Transition
+
+    full_mask = np.ones(N_ACTIONS, dtype=bool)
+    return _Transition(
+        state=torch.zeros(_OFF_STATE_DIM),
+        action=0,
+        reward=reward,
+        next_state=torch.zeros(_OFF_STATE_DIM),
+        next_mask=full_mask,
+        mask=full_mask,
+        done=False,
+        n_steps=1,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Prioritised experience replay (spec §8.1 rung 5) -- off by default
+# ---------------------------------------------------------------------------
+
+
+def test_per_is_off_by_default():
+    """§S8's hyperparameter table says "PER | off initially", and §7.2 item 7
+    explains why: "PER + n-step + Double interacts badly if the importance
+    weights are wrong". Enabling it before the simpler rungs are known-good
+    turns one bug into three, so the default must stay off."""
+    assert DQNConfig().per is False
+    assert load_dqn_config().per is False
+
+
+def test_per_selects_the_prioritised_buffer():
+    from agents.dqn import _PrioritisedReplayBuffer, _ReplayBuffer
+
+    uniform = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=DQNConfig(per=False))
+    prioritised = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=DQNConfig(per=True))
+    assert isinstance(uniform._replay_buffer, _ReplayBuffer)
+    assert isinstance(prioritised._replay_buffer, _PrioritisedReplayBuffer)
+
+
+def test_prioritised_buffer_favours_high_td_error_transitions():
+    """The whole point of PER: a transition with a large TD error must be
+    sampled more often than one the network already predicts well."""
+    from agents.dqn import _PrioritisedReplayBuffer
+
+    buffer = _PrioritisedReplayBuffer(capacity=100, alpha=1.0)
+    for _ in range(10):
+        buffer.push(_dummy_transition())
+
+    # One transition is made far more surprising than the other nine.
+    buffer.update_priorities(np.arange(10), np.array([100.0] + [0.001] * 9))
+
+    draws = 0
+    trials = 200
+    for _ in range(trials):
+        _batch, indices, _weights = buffer.sample_with_weights(3, beta=0.4)
+        draws += int(0 in indices)
+    # Uniform sampling of 3 from 10 would hit index 0 about 30% of the time.
+    assert draws / trials > 0.8, f"high-TD-error transition drawn only {draws}/{trials} times"
+
+
+def test_importance_weights_are_bounded_by_one():
+    """Weights are normalised by the batch maximum, so they only ever scale a
+    gradient *down*. An unnormalised weight can exceed 1 and amplify the very
+    samples prioritisation already over-selects, which is one of the ways §7.2
+    warns PER destabilises training."""
+    from agents.dqn import _PrioritisedReplayBuffer
+
+    buffer = _PrioritisedReplayBuffer(capacity=100, alpha=0.6)
+    for _ in range(20):
+        buffer.push(_dummy_transition())
+    buffer.update_priorities(np.arange(20), np.random.default_rng(0).uniform(0.01, 50.0, 20))
+
+    _batch, _indices, weights = buffer.sample_with_weights(8, beta=0.4)
+    assert weights.max() <= 1.0 + 1e-6
+    assert (weights > 0.0).all()
+
+
+def test_per_beta_anneals_upward():
+    """§S8: beta goes 0.4 -> 1.0 over training. Prioritised sampling biases the
+    gradient; beta is how much of that bias is corrected, so it must reach 1.0
+    by the end, when the estimates matter most."""
+    agent = DQNAgent(
+        state_dim=_OFF_STATE_DIM,
+        has_forecast=False,
+        config=DQNConfig(per=True, epsilon_decay_steps=1000),
+    )
+    start = agent._current_per_beta()
+    agent._learn_calls = 1000
+    end = agent._current_per_beta()
+    assert start == pytest.approx(0.4)
+    assert end == pytest.approx(1.0)
+    assert start < end
+
+
+def test_learn_reports_the_spec_s8_instrumentation():
+    """§S8 lists the metrics that must be logged from step one, and is blunt
+    about the cost of not having them: "Without the per-term reward breakdown
+    and the action distribution, §7 is guesswork." Diagnosing the 2026-08-19
+    environment famine needed exactly these numbers."""
+    agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=DQNConfig(batch_size=4))
+    for _ in range(20):
+        agent._replay_buffer.push(_dummy_transition())
+
+    metrics = agent.learn()
+    for key in (
+        "loss",
+        "buffer_size",
+        "mean_q_chosen",
+        "max_q",
+        "td_error_mean",
+        "td_error_abs_mean",
+        "grad_norm",
+        "epsilon",
+    ):
+        assert key in metrics, f"§S8 requires `{key}` to be logged every learn step"
+        assert np.isfinite(metrics[key])

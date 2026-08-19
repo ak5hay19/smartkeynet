@@ -13,7 +13,8 @@ matches the DQN in evaluation, the project premise fails.
 from __future__ import annotations
 
 import random
-from typing import Callable, Protocol
+from collections.abc import Callable
+from typing import Protocol
 
 from env.contracts import Action, ActionMask, StateDict
 from env.masking import load_key_lifetime_config
@@ -138,8 +139,8 @@ class StaticThresholdPolicy:
 
     @staticmethod
     def grid_search(
-        candidate_thresholds: list[float], eval_fn: Callable[["StaticThresholdPolicy"], float]
-    ) -> "StaticThresholdPolicy":
+        candidate_thresholds: list[float], eval_fn: Callable[[StaticThresholdPolicy], float]
+    ) -> StaticThresholdPolicy:
         """Pick the threshold maximizing `eval_fn(StaticThresholdPolicy(t))`.
 
         Single-parameter sweep over `tau` only, kept for existing
@@ -208,5 +209,7 @@ class RandomPolicy:
     def act(self, state: StateDict, mask: ActionMask) -> Action:
         legal = [action for action in Action if mask[int(action)]]
         if not legal:
-            raise ValueError("no legal action in mask -- a valid mask must have at least one True entry")
+            raise ValueError(
+                "no legal action in mask -- a valid mask must have at least one True entry"
+            )
         return self._rng.choice(legal)

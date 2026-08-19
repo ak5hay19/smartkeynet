@@ -16,9 +16,9 @@ import pytest
 import yaml
 
 from env.contracts import Action, SensitivityClass, ThreatPosture
-from env.reward import RewardWeights, compute_reward
 from env.environment import SmartKeyNetEnv
 from env.masking import PolicyTable
+from env.reward import RewardWeights, compute_reward
 from env.scenarios import ScenarioError, build_scenario, require_trainable
 from metrics.reward_inputs import FORBIDDEN_FIELD_SUBSTRINGS, RewardInputs
 
@@ -171,9 +171,11 @@ def test_no_floor_violation_under_adversarial_fuzz():
             floor = int(state["policy_floor"])
             # adversarial: weakest legal action every time
             action = Action(int(np.flatnonzero(mask)[0]))
-            if action in (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID):
-                if int(action) < floor:
-                    total_violations += 1
+            if (
+                action in (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID)
+                and int(action) < floor
+            ):
+                total_violations += 1
             state, _r, _te, truncated, info = env.step(action)
             if truncated:
                 break
@@ -204,9 +206,7 @@ def test_pool_exhaustion_defers_and_never_downgrades():
         mask = info["action_mask"]
         floor = int(state["policy_floor"])
         action = Action(int(np.flatnonzero(mask)[0]))
-        assert not (
-            action in (Action.SERVE_CLASSICAL, Action.SERVE_PQC) and int(action) < floor
-        )
+        assert not (action in (Action.SERVE_CLASSICAL, Action.SERVE_PQC) and int(action) < floor)
         state, _r, _te, truncated, info = env.step(action)
         if info["regret_events"]:
             saw_deferral = True
@@ -351,8 +351,8 @@ def test_every_constant_has_a_source():
         if not source_keys:
             offenders.append(path)
 
-    assert not offenders, (
-        "constants without a non-empty `source` (Hard Rule 4): " + ", ".join(offenders)
+    assert not offenders, "constants without a non-empty `source` (Hard Rule 4): " + ", ".join(
+        offenders
     )
 
 
@@ -380,3 +380,83 @@ def test_uncited_cost_model_is_not_claimed_as_measured():
             f"docs/report.md claims '{phrase}' but {unmeasured} are flagged "
             "measured: false in configs/constants.yaml"
         )
+
+
+def test_cited_constants_are_the_ones_actually_used():
+    """Hard Rule 4's lint is worthless if it guards a file nothing reads.
+
+    For one session `configs/constants.yaml` existed, carried citations, was
+    walked by `test_every_constant_has_a_source` -- and was imported by
+    nothing. The values driving the simulator lived in `configs/default.yaml`
+    and as hardcoded dicts in `env/environment.py`. A citation attached to a
+    copy of a constant is not a citation on the constant.
+
+    This asserts the wiring: the cost model's tables must be the cited ones,
+    and the four constants duplicated across both config files must agree.
+    """
+    from env.constants import (
+        assert_consistent_with_default_config,
+        handshake_energy_mj,
+        handshake_latency_ms,
+    )
+    from env.environment import _ENERGY_MJ, _LATENCY_MS
+
+    assert_consistent_with_default_config()
+
+    cited_latency = handshake_latency_ms()
+    cited_energy = handshake_energy_mj()
+    assert _LATENCY_MS[Action.SERVE_HYBRID] == cited_latency["hybrid"]
+    assert _LATENCY_MS[Action.SERVE_PQC] == cited_latency["pqc"]
+    assert _LATENCY_MS[Action.SERVE_CLASSICAL] == cited_latency["classical"]
+    assert _LATENCY_MS[Action.REUSE] == cited_latency["reuse"]
+    assert _ENERGY_MJ[Action.SERVE_HYBRID] == cited_energy["hybrid"]
+
+
+def test_constants_consistency_guard_catches_drift(tmp_path):
+    """The guard must actually fire when the two files disagree -- a
+    consistency check that cannot fail is the same decoration as before."""
+    import yaml as _yaml
+
+    from env.constants import ConstantsError, assert_consistent_with_default_config
+
+    constants = _yaml.safe_load((REPO / "configs" / "constants.yaml").read_text(encoding="utf-8"))
+    constants["key_lifetime"]["max_key_age_steps"] = 12345  # drift
+    drifted = tmp_path / "constants.yaml"
+    drifted.write_text(_yaml.safe_dump(constants), encoding="utf-8")
+
+    with pytest.raises(ConstantsError, match="max_key_age_steps"):
+        assert_consistent_with_default_config(constants_path=drifted)
+
+
+def test_no_string_hash_is_used_as_a_random_seed():
+    """Python randomises string hashing per process (PYTHONHASHSEED), so
+    `hash("...")` as a seed makes results irreproducible *across runs* while
+    looking perfectly deterministic *within* one.
+
+    `env/threat_source.py` seeded its train/eval shuffle with
+    `abs(hash(posture.name))` until 2026-08-19. Consequence: the split of the
+    threat dataset differed on every interpreter launch, so identical code with
+    identical seeds produced different numbers -- two identical 300-step S3
+    rollouts gave 41 and 13 regret events. Every threat-driven result in the
+    project was affected, and `test_seed_reproducibility` did not catch it
+    because it compares two environments inside one process, where the hash
+    seed is fixed for the process's lifetime.
+
+    §11.4's seed-hygiene rule is that every stochastic component derives from
+    the run seed. A string hash is not derived from the run seed at all.
+    """
+    offenders: list[str] = []
+    for package in ("env", "agents", "forecaster", "attack", "metrics", "experiments"):
+        for source_file in (REPO / package).rglob("*.py"):
+            tree = ast.parse(source_file.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                function = node.func
+                if isinstance(function, ast.Name) and function.id == "hash":
+                    offenders.append(f"{source_file.relative_to(REPO)}:{node.lineno}")
+
+    assert not offenders, (
+        "builtin hash() used in library code -- it is per-process randomised for "
+        f"strings and must never seed an RNG: {offenders}"
+    )

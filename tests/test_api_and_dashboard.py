@@ -9,13 +9,17 @@ it -- in particular that the API never downgrades a deferred request.
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app, derive_data_key, reset_for_testing
-from dashboard.app import TIER_COLOURS, ReplayLog, build_frames, load_results
+from dashboard.app import TIER_COLOURS, beat_two_logs, load_results
+from dashboard.replay import ReplayEpisode, frames_from_events, load_episode
 from env.contracts import Action
+
+REPO = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
@@ -150,43 +154,118 @@ def test_a_deferred_request_is_refused_not_downgraded(client):
 # ---------------------------------------------------------------------------
 
 
-def test_build_frames_captures_a_replayable_episode():
+def _record(policy, scenario: str, n_steps: int, seed: int, tmp_path) -> ReplayEpisode:
+    """Record an episode and replay it back off disk.
+
+    Every dashboard test goes through the written log, never through a live
+    env, because that round trip *is* the property §S13 asks for.
+    """
+    from experiments.record_demo import record_episode
+
+    log_path = record_episode(
+        policy, scenario, tmp_path / f"{scenario}_{seed}.jsonl.gz", n_steps=n_steps, seed=seed
+    )
+    return load_episode(log_path, label=f"{scenario}/{seed}")
+
+
+def test_dashboard_render_module_imports_nothing_from_the_env(tmp_path):
+    """SMARTKEYNET_BUILD_SPEC.md §S13: the dashboard "reads
+    `events.jsonl.gz` -- never reaches into env internals".
+
+    Enforced by AST scan rather than review, because this boundary was
+    violated for most of the project's life and nothing failed. `app.py`
+    constructed a live `SmartKeyNetEnv` and read `_current_request`,
+    `_sessions`, `_policy_table._ratcheted_posture`, `_regret_log` and
+    `_deferral_queue` off it -- so the demo could not replay a recorded run,
+    was coupled to five private attributes, and left the §4.4 event schema
+    completely unexercised.
+    """
+    import ast
+
+    for module_name in ("dashboard/app.py", "dashboard/replay.py"):
+        tree = ast.parse((REPO / module_name).read_text(encoding="utf-8"))
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module)
+
+        offenders = [
+            name
+            for name in imported
+            if name.split(".")[0] in {"env", "agents", "forecaster", "experiments"}
+        ]
+        assert not offenders, (
+            f"{module_name} imports {offenders} -- the dashboard must render from the "
+            "event log alone (§S13)"
+        )
+
+
+def test_replay_reconstructs_an_episode_from_the_log_alone(tmp_path):
     from agents.baselines import GreedyRecommenderPolicy
 
-    log = build_frames(GreedyRecommenderPolicy(), scenario="S1", n_steps=120, seed=0)
-    assert isinstance(log, ReplayLog)
-    assert len(log.frames) > 0
-    assert len(log.pool_curve) == len(log.frames)
+    episode = _record(GreedyRecommenderPolicy(), "S1", 120, 0, tmp_path)
+    assert isinstance(episode, ReplayEpisode)
+    assert len(episode.frames) > 0
+    assert len(episode.pool_curve) == len(episode.frames)
 
-    for frame in log.frames:
+    for frame in episode.frames:
         assert 0.0 <= frame.pool_fill <= 1.0
-        assert frame.served_tier in TIER_COLOURS
+        assert frame.served_tier in TIER_COLOURS or frame.served_tier in {"REUSE", "REKEY"}
         assert frame.regret_events_total >= 0
 
 
-def test_regret_curve_is_monotone_non_decreasing():
+def test_replay_of_an_empty_log_yields_no_frames():
+    """A log with no serves must not crash the panels -- the demo has to come
+    up before any run exists."""
+    assert frames_from_events([]).frames == []
+
+
+def test_regret_curve_is_monotone_non_decreasing(tmp_path):
     """It is a cumulative count -- if it ever falls, the dashboard is
     misreporting the metric the demo's Beat 2 is built around."""
     from agents.baselines import AlwaysHybridPolicy
 
-    log = build_frames(AlwaysHybridPolicy(), scenario="S3", n_steps=300, seed=0)
-    assert log.regret_curve == sorted(log.regret_curve)
+    episode = _record(AlwaysHybridPolicy(), "S3", 300, 0, tmp_path)
+    assert episode.regret_curve == sorted(episode.regret_curve)
 
 
-def test_always_hybrid_drains_the_pool_further_than_a_frugal_policy():
+def test_overflow_curve_is_monotone_non_decreasing(tmp_path):
+    """Cumulative wasted key material, same reasoning."""
+    from agents.baselines import AlwaysPQCPolicy
+
+    episode = _record(AlwaysPQCPolicy(), "S1", 300, 0, tmp_path)
+    assert episode.overflow_curve == sorted(episode.overflow_curve)
+
+
+def test_always_hybrid_drains_the_pool_further_than_a_frugal_policy(tmp_path):
     """The comparison Demo Beat 2 is built on has to actually hold."""
-    from dashboard.app import build_beat_two
+    from agents.baselines import AlwaysHybridPolicy, StaticThresholdPolicy
 
-    frugal, villain = build_beat_two(n_steps=400, seed=0)
+    villain = _record(AlwaysHybridPolicy(), "S3", 400, 0, tmp_path)
+    frugal = _record(
+        StaticThresholdPolicy(pool_fill_threshold=0.5, min_hybrid_class=2, rekey_age_frac=0.9),
+        "S3",
+        400,
+        0,
+        tmp_path,
+    )
     assert min(villain.pool_curve) <= min(frugal.pool_curve)
     assert villain.regret_curve[-1] >= frugal.regret_curve[-1]
 
 
-def test_tier_histogram_totals_the_frame_count():
+def test_tier_histogram_totals_the_frame_count(tmp_path):
     from agents.baselines import GreedyRecommenderPolicy
 
-    log = build_frames(GreedyRecommenderPolicy(), scenario="S1", n_steps=150, seed=1)
-    assert sum(log.tier_histogram.values()) == len(log.frames)
+    episode = _record(GreedyRecommenderPolicy(), "S1", 150, 1, tmp_path)
+    assert sum(episode.tier_histogram.values()) == len(episode.frames)
+
+
+def test_beat_two_logs_returns_none_when_nothing_was_recorded(tmp_path):
+    """Rendering must not be able to start a simulation to fill a gap -- it
+    reports the gap instead."""
+    assert beat_two_logs(log_dir=tmp_path / "nonexistent") is None
 
 
 def test_missing_results_file_degrades_gracefully():

@@ -37,59 +37,84 @@ def load_key_lifetime_config(path: str | Path | None = None) -> dict[str, float]
     """
     if path is None:
         path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         config: dict[str, Any] = yaml.safe_load(f)
     return config["key_lifetime"]
 
 
 # ---------------------------------------------------------------------------
-# Placeholder (class x posture) -> floor table (Hard Rule 4: citable
-# artifacts only, no invented constants). Q-OPSEC's `synthetic_context_dataset`
-# calibration (PLAN.md "Datasets & Provenance" -> "Policy-table
-# calibration" row) hasn't happened yet -- that's Person A's future
-# job -- so this is a documented placeholder, not a final table.
-#
-# Grounding (no numeric thresholds invented -- only relative ordering,
-# which is what's citable at placeholder stage):
-#   - SERVE_CLASSICAL (T0, X25519/AES-256-GCM): floor for data with no
-#     confidentiality exposure to Harvest-Now-Decrypt-Later (S0 public/
-#     non-sensitive telemetry) under CALM/ELEVATED posture.
-#   - SERVE_PQC (T1, ML-KEM-768, NIST PGC Category 3): the default
-#     floor once either the data has any real confidentiality need
-#     (S1+) or the posture is HIGH -- PQC is the "free" workhorse
-#     (PLAN.md), so raising this floor costs nothing but interop
-#     with non-PQC-capable legacy endpoints (handled by `pqc_capable`
-#     at the request-generator level, not here).
-#   - SERVE_HYBRID (T2/T3, ML-KEM-768 XOR QKD via HKDF): reserved for
-#     where CNSA 2.0 / SP 800-57's "protect highest-sensitivity data
-#     soonest, longest-lived data strongest" posture and ETSI GS QKD
-#     014-delivered key material are actually warranted -- long-lived,
-#     highly regulated data (S2/S3) once threat posture is elevated,
-#     and S3 (patient-record-grade, decades-long lifetime) even before
-#     any threat elevation, per instruction: never below SERVE_PQC at
-#     CALM, escalating to SERVE_HYBRID under ELEVATED/HIGH.
-#
-# The one invariant that isn't a placeholder and must never regress:
-# floor is monotonically non-decreasing in both sensitivity_class and
-# threat_posture (verified by `PolicyTable.floor`'s docstring contract
-# and covered by tests/test_masking.py's monotonicity tests).
-_PLACEHOLDER_FLOOR_TABLE: dict[tuple[SensitivityClass, ThreatPosture], Action] = {
-    (SensitivityClass.S0, ThreatPosture.CALM): Action.SERVE_CLASSICAL,
-    (SensitivityClass.S0, ThreatPosture.ELEVATED): Action.SERVE_CLASSICAL,
-    (SensitivityClass.S0, ThreatPosture.HIGH): Action.SERVE_PQC,
-    (SensitivityClass.S1, ThreatPosture.CALM): Action.SERVE_CLASSICAL,
-    (SensitivityClass.S1, ThreatPosture.ELEVATED): Action.SERVE_PQC,
-    (SensitivityClass.S1, ThreatPosture.HIGH): Action.SERVE_PQC,
-    (SensitivityClass.S2, ThreatPosture.CALM): Action.SERVE_PQC,
-    (SensitivityClass.S2, ThreatPosture.ELEVATED): Action.SERVE_PQC,
-    (SensitivityClass.S2, ThreatPosture.HIGH): Action.SERVE_HYBRID,
-    (SensitivityClass.S3, ThreatPosture.CALM): Action.SERVE_PQC,
-    (SensitivityClass.S3, ThreatPosture.ELEVATED): Action.SERVE_HYBRID,
-    (SensitivityClass.S3, ThreatPosture.HIGH): Action.SERVE_HYBRID,
-}
+def load_policy_table_config(path: str | Path | None = None) -> dict[str, Any]:
+    """Parse `configs/policy_table.yaml`.
+
+    §S4 requires the (class x posture) -> floor table to be "loaded from YAML,
+    every cell carrying a citation comment". It was a dict literal in this
+    module until 2026-08-19; the move is what makes
+    `tests/test_masking.py::test_every_cell_has_a_citation` possible, because a
+    lint can walk a YAML file cell by cell in a way that reviewing a Python
+    dict cannot.
+    """
+    if path is None:
+        path = Path(__file__).resolve().parent.parent / "configs" / "policy_table.yaml"
+    with open(path, encoding="utf-8") as handle:
+        config: dict[str, Any] = yaml.safe_load(handle)
+    return config
 
 
-_LEGACY_ENDPOINT_FLOOR: Action = Action.SERVE_CLASSICAL
+def _build_floor_table(
+    config: dict[str, Any] | None = None,
+) -> dict[tuple[SensitivityClass, ThreatPosture], Action]:
+    """Turn the YAML table into the `(class, posture) -> Action` lookup.
+
+    Raises rather than defaulting on a missing cell: a silently absent cell
+    would fall back to some default floor, and a *lower* floor arrived at by
+    accident is precisely the Hard Rule 2 failure this layer exists to prevent.
+    """
+    config = config if config is not None else load_policy_table_config()
+    tier_names = config["tiers"]
+    table: dict[tuple[SensitivityClass, ThreatPosture], Action] = {}
+
+    for sensitivity_class in SensitivityClass:
+        class_block = config["table"].get(sensitivity_class.name)
+        if class_block is None:
+            raise ValueError(
+                f"configs/policy_table.yaml has no row for {sensitivity_class.name} -- "
+                "every class must have an explicit floor at every posture (Hard Rule 2)"
+            )
+        for posture in ThreatPosture:
+            cell = class_block.get(posture.name)
+            if cell is None:
+                raise ValueError(
+                    f"configs/policy_table.yaml has no cell for "
+                    f"({sensitivity_class.name}, {posture.name})"
+                )
+            table[(sensitivity_class, posture)] = Action[tier_names[cell["floor"]]]
+
+    return table
+
+
+_PLACEHOLDER_FLOOR_TABLE: dict[tuple[SensitivityClass, ThreatPosture], Action] = (
+    _build_floor_table()
+)
+"""The (class x posture) -> floor table, loaded from configs/policy_table.yaml.
+
+Still named "placeholder" because it is one: PLAN.md's "Datasets & Provenance"
+table lists a calibration against Q-OPSEC's `synthetic_context_dataset` as
+future work and it has not happened. What each cell cites is the *relative
+ordering* a standard justifies, not a calibrated numeric threshold -- see the
+YAML's own header, which is explicit about the distinction.
+
+The one invariant that is not a placeholder: the floor is monotonically
+non-decreasing in both sensitivity class and threat posture. That is what makes
+"threat signals can only raise floors" a theorem rather than a hope, and
+tests/test_masking.py checks it exhaustively over every cell.
+"""
+
+
+_LEGACY_ENDPOINT_FLOOR: Action = Action[
+    load_policy_table_config()["tiers"][
+        load_policy_table_config()["legacy_endpoint_floor"]["floor"]
+    ]
+]
 """Floor applied to flows terminating on non-PQC-capable endpoints.
 
 WHY THIS EXISTS AND WHY IT IS NOT A HARD RULE 2 VIOLATION. Read this
@@ -241,6 +266,11 @@ def compute_mask(
     max_key_age: float,
     pool_can_draw: bool,
     active_key_tier: Action | None = None,
+    steps_since_rekey: float | None = None,
+    min_rekey_interval: float = 0.0,
+    queue_non_empty: bool = False,
+    head_reservation: str = "none",
+    request_is_hybrid_mandatory: bool = False,
 ) -> ActionMask:
     """Build the boolean action mask for one request (Hard Rules 2, 5, 9).
 
@@ -249,6 +279,14 @@ def compute_mask(
       - `SERVE_HYBRID` is illegal if `not pool_can_draw` -- pool
         exhaustion routes the request to `env/deferral_queue.py`
         instead of masking in a downgrade (Hard Rule 9).
+      - `REKEY_NOW` is illegal while `steps_since_rekey < min_rekey_interval`
+        (§S4 rule 4, last line). Without it, rekey thrashing is reachable:
+        §7.3 lists "rekey thrashing" as a degenerate policy whose cause is
+        "`c_rekey_base` too low, or `min_rekey_interval` unset".
+      - Under `head_reservation: strict`, `SERVE_HYBRID` is illegal for a
+        *discretionary* request while the deferral queue is non-empty (§S2).
+        The default is `none` on purpose: the agent must be *able* to jump the
+        queue, or the regret metric measures nothing.
       - `REUSE` is illegal if `key_age >= max_key_age` (the SP
         800-57-derived cap `L`); this triggers a forced rekey instead,
         logged via `contracts.ForcedRekey` (Addition C).
@@ -321,6 +359,26 @@ def compute_mask(
     for action in Action:
         legal = int(action) >= int(effective_floor)
         if action is Action.SERVE_HYBRID and not pool_can_draw:
+            legal = False
+
+        # §S4 rule 4 (last line): no rekey inside the minimum interval.
+        if (
+            action is Action.REKEY_NOW
+            and steps_since_rekey is not None
+            and min_rekey_interval > 0.0
+            and steps_since_rekey < min_rekey_interval
+        ):
+            legal = False
+
+        # §S2 head-of-line reservation. `strict` stops a discretionary hybrid
+        # serve from consuming the key a queued higher-class request is waiting
+        # for. Off by default -- see the docstring.
+        if (
+            action is Action.SERVE_HYBRID
+            and head_reservation == "strict"
+            and queue_non_empty
+            and not request_is_hybrid_mandatory
+        ):
             legal = False
         if action is Action.REUSE and key_age >= max_key_age:
             legal = False

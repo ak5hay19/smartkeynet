@@ -43,7 +43,6 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-import numpy as np
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import FastAPI, HTTPException
@@ -292,7 +291,10 @@ def generate_data_key(request: GenerateDataKeyRequest) -> GenerateDataKeyRespons
             ),
         )
 
-    served = kms.env._sessions.get((request.tenant, request.service))
+    # NOTE: the served tier is derived from the action taken, not from the
+    # session snapshot -- a session lookup here was dead code (assigned, never
+    # read), and reading it would have been wrong anyway: `_apply_action` has
+    # already mutated the session, so it reflects the post-serve state.
     tier = (
         Action.SERVE_HYBRID
         if action is Action.SERVE_HYBRID

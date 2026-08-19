@@ -37,6 +37,7 @@ shape, so it drops straight into `experiments/harness.py`'s
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -69,7 +70,7 @@ def load_full_config(path: str | Path | None = None) -> dict[str, Any]:
     it too, not just tests."""
     if path is None:
         path = _DEFAULT_CONFIG_PATH
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -164,8 +165,21 @@ def train(
     state, info = env.reset(seed=training_cfg["seed"])
     mask = info["action_mask"]
 
-    state_dim = flatten_state(state, has_forecast).shape[0]  # derived from the real state, not assumed
+    state_dim = flatten_state(state, has_forecast).shape[
+        0
+    ]  # derived from the real state, not assumed
     dqn_config = load_dqn_config()
+    # Let `training_overrides` reach the agent's hyperparameters too, so a
+    # §7.1 fix-B sweep (PER on, wider net, higher gamma) is one call argument
+    # rather than an edit to configs/default.yaml -- which would silently
+    # change every other run.
+    agent_overrides = {
+        field.name: training_cfg[field.name]
+        for field in dataclasses.fields(dqn_config)
+        if field.name in training_cfg
+    }
+    if agent_overrides:
+        dqn_config = dataclasses.replace(dqn_config, **agent_overrides)
     # Same integer as env_config["seed"]/env.reset(seed=...) above --
     # safe to reuse: DQNAgent's seed only touches Python's/torch's
     # global RNG, while SmartKeyNetEnv/random_request_generator use
@@ -236,7 +250,9 @@ def train(
             reward_window = []
 
             eval_config = {**full_config, "max_steps": eval_max_steps}
-            eval_result = run_scenario(GreedyDQNPolicy(agent), scenario, eval_config, seed=eval_seed)
+            eval_result = run_scenario(
+                GreedyDQNPolicy(agent), scenario, eval_config, seed=eval_seed
+            )
             record.eval_snapshots.append((step, eval_result))
 
     checkpoint_path = training_cfg["checkpoint_path"]
@@ -303,7 +319,9 @@ def main() -> None:
     print(f"Training DQNAgent on S1 for {training_cfg['total_steps']} steps...")
     agent, record = train(full_config)
     print(f"Checkpoint saved to {record.checkpoint_path}")
-    print(f"Reward window averages over the run: {[round(r, 4) for r in record.reward_window_avgs]}")
+    print(
+        f"Reward window averages over the run: {[round(r, 4) for r in record.reward_window_avgs]}"
+    )
     print("Greedy-mode eval snapshots during training:")
     for step, result in record.eval_snapshots:
         print(f"  step {step}: {_format_result('DQN (greedy)', result)}")

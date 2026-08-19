@@ -152,7 +152,12 @@ def run_attack_episode(
     in_window_headroom: list[int] = []
     postures: list[int] = []
     floor_violations = 0
-    _ESTABLISHING = {Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID, Action.REKEY_NOW}
+    _ESTABLISHING = {
+        Action.SERVE_CLASSICAL,
+        Action.SERVE_PQC,
+        Action.SERVE_HYBRID,
+        Action.REKEY_NOW,
+    }
 
     for _ in range(n_steps):
         mask = info["action_mask"]
@@ -195,7 +200,7 @@ def run_attack_episode(
     # zero by construction -- PolicyTable has no downward path -- and it
     # is the machine-checked form of "protections can only ratchet up".
     posture_reversals = sum(
-        1 for earlier, later in zip(postures, postures[1:]) if later < earlier
+        1 for earlier, later in zip(postures, postures[1:], strict=False) if later < earlier
     )
 
     return AttackOutcome(
@@ -214,9 +219,7 @@ def run_attack_episode(
     )
 
 
-def train_soft_reward_agent(
-    config: dict[str, Any], n_steps: int, seed: int
-) -> SoftRewardAgent:
+def train_soft_reward_agent(config: dict[str, Any], n_steps: int, seed: int) -> SoftRewardAgent:
     """Pre-train the victim on the *unattacked* signal.
 
     It has to have learned a sensible threat-responsive policy before
@@ -287,7 +290,9 @@ def run_steering_attack(
     traces = dose_response_traces(attack_start, attack_end, doses)
 
     print(f"{'=' * 78}\nS5 STEERING ATTACK\n{'=' * 78}")
-    print(f"  substrate scenario : {_ATTACK_SCENARIO} (floors actively ratchet with the threat signal)")
+    print(
+        f"  substrate scenario : {_ATTACK_SCENARIO} (floors actively ratchet with the threat signal)"
+    )
     print(f"  attack window      : steps [{attack_start}, {attack_end})")
     print(f"  doses              : {doses}")
     print(f"  seeds              : {seeds}\n")
@@ -319,9 +324,7 @@ def run_steering_attack(
     for trace in traces:
         for name, (policy, learner) in agents.items():
             per_seed = [
-                run_attack_episode(
-                    policy, trace, config, n_steps, seed, name, learner=learner
-                )
+                run_attack_episode(policy, trace, config, n_steps, seed, name, learner=learner)
                 for seed in seeds
             ]
             averaged = AttackOutcome(
@@ -332,8 +335,12 @@ def run_steering_attack(
                 ],
                 mean_served_tier=float(np.mean([o.mean_served_tier for o in per_seed])),
                 mean_tier_in_window=float(np.mean([o.mean_tier_in_window for o in per_seed])),
-                mean_headroom_in_window=float(np.mean([o.mean_headroom_in_window for o in per_seed])),
-                n_establishing_in_window=int(np.sum([o.n_establishing_in_window for o in per_seed])),
+                mean_headroom_in_window=float(
+                    np.mean([o.mean_headroom_in_window for o in per_seed])
+                ),
+                n_establishing_in_window=int(
+                    np.sum([o.n_establishing_in_window for o in per_seed])
+                ),
                 mean_floor=float(np.mean([o.mean_floor for o in per_seed])),
                 max_floor=int(np.max([o.max_floor for o in per_seed])),
                 floor_violations=int(np.sum([o.floor_violations for o in per_seed])),
@@ -352,9 +359,7 @@ def run_steering_attack(
         "seeds": seeds,
         "n_steps": n_steps,
         "results": results,
-        "detectability": {
-            str(trace.dose): detectability_score(trace, n_steps) for trace in traces
-        },
+        "detectability": {str(trace.dose): detectability_score(trace, n_steps) for trace in traces},
     }
 
     print(f"{'=' * 78}\nHEADLINE\n{'=' * 78}")
@@ -378,7 +383,7 @@ def run_steering_attack(
     report["masked_floor_by_threat"] = masked_floors
 
     print("\n  THE MECHANISM -- tier vs reported threat (bin 0 = fully suppressed):")
-    print(f"    {'threat':>16s} " + " ".join(f"{b/10:4.1f}" for b in range(10)))
+    print(f"    {'threat':>16s} " + " ".join(f"{b / 10:4.1f}" for b in range(10)))
     print(f"    {'soft (analytic)':>16s} " + " ".join(f"{t:4d}" for t in analytic_tiers))
     print(f"    {'soft (learned)':>16s} " + " ".join(f"{t:4d}" for t in learned_tiers))
     print(f"    {'masked (floor)':>16s} " + " ".join(f"{f:4d}" for f in masked_floors))

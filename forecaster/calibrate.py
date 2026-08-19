@@ -61,7 +61,7 @@ def expected_calibration_error(
 
     edges = np.linspace(0.0, 1.0, n_bins + 1)
     error = 0.0
-    for low, high in zip(edges[:-1], edges[1:]):
+    for low, high in zip(edges[:-1], edges[1:], strict=False):
         in_bin = (confidences > low) & (confidences <= high)
         if not in_bin.any():
             continue
@@ -119,9 +119,7 @@ def calibrate_threat_head(
         ece=expected_calibration_error(before, labels),
         ece_after=expected_calibration_error(after, labels),
         temperature=temperature,
-        nll_before=float(
-            torch.nn.functional.cross_entropy(test_flat, test_labels).item()
-        ),
+        nll_before=float(torch.nn.functional.cross_entropy(test_flat, test_labels).item()),
         nll_after=float(
             torch.nn.functional.cross_entropy(test_flat / temperature, test_labels).item()
         ),

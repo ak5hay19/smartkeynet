@@ -33,9 +33,10 @@ from __future__ import annotations
 
 import math
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Protocol
+from typing import Any, Protocol
 
 import numpy as np
 import yaml
@@ -240,7 +241,9 @@ class PoolSim:
 
     def batches(self) -> tuple[RefillBatch, ...]:
         """Immutable snapshot of the lineage deque, oldest first."""
-        return tuple(RefillBatch(b.batch_id, b.refill_step, b.keys_remaining) for b in self._batches)
+        return tuple(
+            RefillBatch(b.batch_id, b.refill_step, b.keys_remaining) for b in self._batches
+        )
 
     # -----------------------------------------------------------------
     # Lifecycle
@@ -439,7 +442,7 @@ def load_pool_config(path: str | Path | None = None) -> dict[str, float]:
     """
     if path is None:
         path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         config: dict[str, Any] = yaml.safe_load(f)
     return config["pool"]
 
@@ -456,7 +459,7 @@ def load_qkd_config(path: str | Path | None = None) -> dict[str, float]:
     """
     if path is None:
         path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         config: dict[str, Any] = yaml.safe_load(f)
     return config["qkd"]
 
@@ -513,7 +516,7 @@ class QberDriftSchedule:
     @classmethod
     def for_episode(
         cls, n_steps: int, peak_qber: float, residual_frac: float = 0.25
-    ) -> "QberDriftSchedule":
+    ) -> QberDriftSchedule:
         """Build the canonical S3 shape: flat for the first third,
         degraded across the middle third (ramping to `peak_qber` over
         its first half, holding there for its second), then partial
@@ -566,11 +569,26 @@ class SyntheticSKRQBERTrace:
     was sourced for this project; this is that documented fallback.
 
     Generation procedure:
-      1. Baseline SKR per step is drawn i.i.d. Gaussian,
-         `skr ~ N(mean_skr_kbps, (skr_noise_frac * mean_skr_kbps)^2)`,
-         clipped to `[0, inf)`. See "Choosing `mean_skr_kbps`" below --
-         it is a *calibrated* quantity, and the calibration procedure,
-         not the bare number, is what is defensible.
+      1. Baseline SKR follows a **log-space Ornstein-Uhlenbeck process**,
+         which is the form SMARTKEYNET_BUILD_SPEC.md §S1 specifies:
+
+             x_{t+1}  = x_t + theta * (mu_x - x_t) * dt
+                            + sigma * sqrt(dt) * eps_t,   eps_t ~ N(0,1)
+             skr_raw_t = exp(x_t)
+
+         Working in log space keeps the rate strictly positive without a
+         clip, and mean reversion makes consecutive steps *correlated* --
+         which matters, because a forecaster has nothing to learn from an
+         i.i.d. sequence. This process was i.i.d. Gaussian until
+         2026-08-19, which quietly removed the only autocorrelation the
+         pool head of the forecaster could have exploited.
+
+         See "Choosing `mean_skr_kbps`" below -- it is a *calibrated*
+         quantity, and the calibration procedure, not the bare number, is
+         what is defensible. Note the log-normal correction applied to
+         `mu_x` in `__iter__`: without it `mean_skr_kbps` would not be the
+         process mean and the whole scarcity calibration would be
+         describing a different link than the one being simulated.
       2. Baseline QBER per step is drawn i.i.d. Gaussian,
          `qber ~ N(baseline_qber, qber_noise_std^2)`, clipped to
          `[0, 0.999]`.
@@ -649,8 +667,10 @@ class SyntheticSKRQBERTrace:
     """
 
     n_steps: int
-    mean_skr_kbps: float = 0.22
+    mean_skr_kbps: float = 0.10
     skr_noise_frac: float = 0.1
+    skr_ou_theta: float = 0.02
+    skr_ou_sigma: float = 0.02
     baseline_qber: float = 0.02
     qber_noise_std: float = 0.005
     qber_abort: float = 0.11
@@ -675,8 +695,32 @@ class SyntheticSKRQBERTrace:
         surviving_fraction = float(np.clip(1.0 - excess / headroom, 0.0, 1.0))
         return surviving_fraction**self.gate_kappa
 
+    def _ou_log_mean(self) -> float:
+        """`mu_x` for the log-space OU process, log-normal corrected.
+
+        A stationary OU process in log space has variance
+        `sigma^2 / (2 * theta)`, so `E[exp(x)] = exp(mu_x + sigma^2/(4*theta))`.
+        Taking `mu_x = log(mean_skr_kbps)` literally -- as the spec's formula
+        does -- therefore produces a process whose realised mean is *above*
+        the configured value by that factor, and `mean_skr_kbps` stops being
+        the mean.
+
+        That matters here more than it usually would: this project's entire
+        scarcity calibration (§11.2) is expressed as a ratio against the
+        refill rate, so a supply figure that silently disagrees with its own
+        config key invalidates the calibration. Subtracting the correction
+        makes `E[skr] == mean_skr_kbps` exactly.
+        """
+        stationary_variance = (self.skr_ou_sigma**2) / (2.0 * max(1e-9, self.skr_ou_theta))
+        return float(np.log(max(1e-12, self.mean_skr_kbps)) - stationary_variance / 2.0)
+
     def __iter__(self) -> Iterator[tuple[float, float]]:
         rng = np.random.default_rng(self.seed)
+        log_mean = self._ou_log_mean()
+        # Start at the stationary mean so episodes do not all begin with the
+        # same transient ramp, which would be a spurious signal every policy
+        # could exploit.
+        log_skr = log_mean
         for t in range(self.n_steps):
             in_spike = (
                 self.spike_start is not None
@@ -690,8 +734,114 @@ class SyntheticSKRQBERTrace:
                 qber += self.spike_magnitude
             qber = float(np.clip(qber, 0.0, 0.999))
 
-            skr = float(rng.normal(self.mean_skr_kbps, self.skr_noise_frac * self.mean_skr_kbps))
+            # log-space OU step (dt == 1 simulator step)
+            log_skr += self.skr_ou_theta * (log_mean - log_skr) + self.skr_ou_sigma * float(
+                rng.normal()
+            )
+            skr = float(np.exp(log_skr))
             skr *= self.reconciliation_gate(qber)
             skr = max(0.0, skr)
 
             yield skr, qber
+
+
+@dataclass
+class TraceSKRQBERSource:
+    """CV-QKD SKR/QBER trace loaded from CSV, with a train/eval split.
+
+    SMARTKEYNET_BUILD_SPEC.md §S1 specifies two interchangeable SKR sources
+    behind one interface: this trace mode and the documented synthetic
+    process above. It also specifies the rule that matters most about it:
+
+        "Split the trace: first 70% for training scenarios, last 30%
+        reserved for evaluation. Reusing the same trace segment for train
+        and eval is a silent leak that a reviewer will find."
+
+    That rule is why this class exists rather than a bare `pandas.read_csv`.
+    The split is enforced in the constructor -- `split="train"` cannot see
+    the evaluation tail, whatever offset is drawn -- so a leak requires
+    deliberately passing the wrong split rather than merely forgetting.
+
+    **Provenance.** No real published CV-QKD trace was sourced for this
+    capstone; PLAN.md's "Datasets & Provenance" section explicitly permits a
+    documented synthetic fallback, which is what `SyntheticSKRQBERTrace` is
+    and what every result in this repo uses. This loader exists so that
+    dropping in a real trace is a config change rather than a code change,
+    and `scripts/get_data.py` writes a synthetic CSV in the right shape so
+    the path is exercised. Do not describe results from this loader as
+    coming from a published testbed unless a published testbed CSV is
+    actually what was loaded.
+
+    Each episode cycles the trace from a random start offset inside its own
+    split, so episodes see different segments without ever crossing the
+    boundary.
+    """
+
+    trace_path: str | Path
+    n_steps: int
+    split: str = "train"
+    train_fraction: float = 0.70
+    seed: int = 0
+
+    _TRAIN_SPLIT: str = "train"
+    _EVAL_SPLIT: str = "eval"
+
+    def __post_init__(self) -> None:
+        if self.split not in (self._TRAIN_SPLIT, self._EVAL_SPLIT):
+            raise ValueError(
+                f"split must be {self._TRAIN_SPLIT!r} or {self._EVAL_SPLIT!r}, got {self.split!r}"
+            )
+        if not 0.0 < self.train_fraction < 1.0:
+            raise ValueError(f"train_fraction must be in (0, 1), got {self.train_fraction}")
+
+        rows = self._read_rows(Path(self.trace_path))
+        if not rows:
+            raise ValueError(f"trace {self.trace_path} contains no usable rows")
+
+        boundary = int(len(rows) * self.train_fraction)
+        if boundary <= 0 or boundary >= len(rows):
+            raise ValueError(
+                f"trace {self.trace_path} has only {len(rows)} rows -- too few to split "
+                f"{self.train_fraction:.0%}/{1 - self.train_fraction:.0%} without one side "
+                "being empty"
+            )
+        self._segment = rows[:boundary] if self.split == self._TRAIN_SPLIT else rows[boundary:]
+
+    @staticmethod
+    def _read_rows(path: Path) -> list[tuple[float, float]]:
+        """Parse `skr_kbps,qber` pairs. Kept to the stdlib `csv` module: this
+        is the only place the project would otherwise need pandas, and a
+        two-column reader is not worth the dependency."""
+        import csv
+
+        if not path.exists():
+            raise FileNotFoundError(
+                f"SKR/QBER trace not found: {path}. Generate a synthetic one in the "
+                "expected shape with `python -m data.get_data`, or point "
+                "`qkd.trace_path` at a real CV-QKD CSV."
+            )
+        rows: list[tuple[float, float]] = []
+        with open(path, encoding="utf-8", newline="") as handle:
+            # Skip `#` provenance headers before the CSV header row. The
+            # generated trace carries a five-line banner marking it synthetic,
+            # and real published traces routinely carry their own preamble --
+            # `DictReader` would otherwise read the first comment as the header.
+            uncommented = (line for line in handle if not line.lstrip().startswith("#"))
+            for record in csv.DictReader(uncommented):
+                try:
+                    rows.append((float(record["skr_kbps"]), float(record["qber"])))
+                except (KeyError, TypeError, ValueError) as error:
+                    raise ValueError(
+                        f"trace {path} must have numeric `skr_kbps` and `qber` columns"
+                    ) from error
+        return rows
+
+    @property
+    def segment_length(self) -> int:
+        return len(self._segment)
+
+    def __iter__(self) -> Iterator[tuple[float, float]]:
+        rng = np.random.default_rng(self.seed)
+        offset = int(rng.integers(0, len(self._segment)))
+        for step in range(self.n_steps):
+            yield self._segment[(offset + step) % len(self._segment)]

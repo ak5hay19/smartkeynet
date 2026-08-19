@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import gzip
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 EVENT_TYPES: frozenset[str] = frozenset(
     {
@@ -111,5 +112,5 @@ def read_episode_rows(path: str | Path) -> list[dict[str, Any]]:
     destination = Path(path)
     if not destination.exists():
         return []
-    with open(destination, "r", encoding="utf-8") as handle:
+    with open(destination, encoding="utf-8") as handle:
         return [json.loads(line) for line in handle if line.strip()]

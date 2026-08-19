@@ -26,7 +26,7 @@ import torch
 import torch.nn as nn
 import yaml
 
-from env.contracts import Action, ActionMask, N_ACTIONS, StateDict
+from env.contracts import N_ACTIONS, Action, ActionMask, StateDict
 
 # ---------------------------------------------------------------------------
 # State flattening (Addition A: vector length depends on use_foresight)
@@ -190,6 +190,31 @@ class DQNConfig:
     epsilon_decay_steps: int = 50_000
 
     # --- upgrade-ladder switches (SMARTKEYNET_BUILD_SPEC.md §8) ---
+    per: bool = False
+    """Prioritised experience replay (ladder rung 5).
+
+    **Default off, and the spec says to keep it off initially** (§S8's
+    hyperparameter table: "PER | off initially"). §7.2 item 7 explains why
+    that ordering matters: "PER + n-step + Double interacts badly if the
+    importance weights are wrong", so enabling it before the simpler ladder
+    rungs are known-good turns one bug into three.
+
+    Implemented as proportional prioritisation on |TD error| with importance
+    sampling, so it is available as a §7.1 fix-B lever without being on the
+    path by default.
+    """
+
+    per_alpha: float = 0.6
+    """Prioritisation exponent. 0 is uniform sampling, 1 is fully greedy on
+    |TD error|. 0.6 is the value §S8's table names."""
+
+    per_beta_start: float = 0.4
+    per_beta_end: float = 1.0
+    """Importance-sampling correction, annealed 0.4 -> 1.0 over training as
+    §S8's table specifies. Prioritised sampling biases the gradient; beta
+    controls how much of that bias is corrected, and annealing to 1.0 means
+    the bias is fully corrected by the end, when it matters most."""
+
     dueling: bool = True
     """Dueling architecture with legal-only advantage centring (spec §S8,
     ladder rung 3). Helps when many actions are near-substitutes, which
@@ -228,7 +253,7 @@ def load_dqn_config(path: str | Path | None = None) -> DQNConfig:
     Python literals wherever a `DQNAgent` is constructed."""
     if path is None:
         path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         config: dict[str, Any] = yaml.safe_load(f)
     return DQNConfig(**config["dqn"])
 
@@ -278,6 +303,68 @@ class _ReplayBuffer:
 
     def sample(self, batch_size: int) -> list[_Transition]:
         return random.sample(self._storage, batch_size)
+
+    def __len__(self) -> int:
+        return len(self._storage)
+
+
+@dataclass
+class _PrioritisedReplayBuffer:
+    """Proportional prioritised replay (spec §8.1 ladder rung 5).
+
+    Sampling probability is `p_i^alpha / sum_j p_j^alpha` with
+    `p_i = |TD error_i| + eps`, and each sampled transition carries an
+    importance-sampling weight `(N * P(i))^-beta`, normalised by the batch
+    maximum so weights only ever scale gradients down.
+
+    Kept deliberately simple -- a numpy array of priorities re-normalised per
+    sample, not a sum-tree. At this project's 50k buffer the O(N) draw is
+    microseconds and a sum-tree would be a second data structure to get wrong,
+    which §7.2 warns is exactly how PER breaks training.
+    """
+
+    capacity: int
+    alpha: float = 0.6
+    epsilon: float = 1e-6
+    _storage: list[_Transition] = field(default_factory=list)
+    _priorities: list[float] = field(default_factory=list)
+    _write_idx: int = 0
+    _max_priority: float = 1.0
+
+    def push(self, transition: _Transition) -> None:
+        # New experience enters at the highest priority seen, so every
+        # transition is guaranteed at least one visit before its priority is
+        # ever reduced by a measured TD error.
+        if len(self._storage) < self.capacity:
+            self._storage.append(transition)
+            self._priorities.append(self._max_priority)
+        else:
+            self._storage[self._write_idx] = transition
+            self._priorities[self._write_idx] = self._max_priority
+            self._write_idx = (self._write_idx + 1) % self.capacity
+
+    def sample_with_weights(
+        self, batch_size: int, beta: float
+    ) -> tuple[list[_Transition], np.ndarray, np.ndarray]:
+        priorities = np.asarray(self._priorities, dtype=np.float64) ** self.alpha
+        total = priorities.sum()
+        if total <= 0.0:
+            probabilities = np.full(len(self._storage), 1.0 / len(self._storage))
+        else:
+            probabilities = priorities / total
+
+        indices = np.random.default_rng().choice(
+            len(self._storage), size=batch_size, replace=False, p=probabilities
+        )
+        weights = (len(self._storage) * probabilities[indices]) ** (-beta)
+        weights = weights / weights.max()  # scale down only, never up
+        return [self._storage[int(i)] for i in indices], indices, weights.astype(np.float32)
+
+    def update_priorities(self, indices: np.ndarray, td_errors: np.ndarray) -> None:
+        for index, td_error in zip(indices, td_errors, strict=True):
+            priority = float(abs(td_error)) + self.epsilon
+            self._priorities[int(index)] = priority
+            self._max_priority = max(self._max_priority, priority)
 
     def __len__(self) -> int:
         return len(self._storage)
@@ -438,7 +525,11 @@ class DQNAgent:
         self.target_network.eval()
 
         self.optimizer = torch.optim.Adam(self.q_network.parameters(), lr=self.config.lr)
-        self._replay_buffer = _ReplayBuffer(capacity=_REPLAY_BUFFER_CAPACITY)
+        self._replay_buffer: _ReplayBuffer | _PrioritisedReplayBuffer = (
+            _PrioritisedReplayBuffer(capacity=_REPLAY_BUFFER_CAPACITY, alpha=self.config.per_alpha)
+            if self.config.per
+            else _ReplayBuffer(capacity=_REPLAY_BUFFER_CAPACITY)
+        )
         # observation normalisation (spec §3.2 `obs_norm: running_mean_std`)
         self.obs_rms = RunningMeanStd(state_dim)
         self.normalizer_frozen = False
@@ -468,7 +559,9 @@ class DQNAgent:
         """
         legal_indices = [i for i in range(N_ACTIONS) if mask[i]]
         if not legal_indices:
-            raise ValueError("no legal action in mask -- a valid mask must have at least one True entry")
+            raise ValueError(
+                "no legal action in mask -- a valid mask must have at least one True entry"
+            )
 
         epsilon = self._current_epsilon()
         self._act_calls += 1
@@ -570,7 +663,13 @@ class DQNAgent:
         accumulated_reward = 0.0
         discount = 1.0
         last = first
-        for n_accumulated, transition in enumerate(self._n_step_window, start=1):
+        # `n_accumulated` is read *after* the loop, not inside it: it records how
+        # many rewards were actually accumulated before a `done` broke the walk,
+        # which is what makes `gamma_n` correct for a truncated tail. Ruff's B007
+        # only inspects the loop body, so it flags this as unused.
+        for n_accumulated, transition in enumerate(  # noqa: B007
+            self._n_step_window, start=1
+        ):
             accumulated_reward += discount * transition.reward
             discount *= self.config.gamma
             last = transition
@@ -602,7 +701,16 @@ class DQNAgent:
         if len(self._replay_buffer) < self.config.batch_size:
             return {"loss": 0.0, "buffer_size": float(len(self._replay_buffer))}
 
-        batch = self._replay_buffer.sample(self.config.batch_size)
+        per_indices: np.ndarray | None = None
+        per_weights: torch.Tensor | None = None
+        if isinstance(self._replay_buffer, _PrioritisedReplayBuffer):
+            beta = self._current_per_beta()
+            batch, per_indices, weights_array = self._replay_buffer.sample_with_weights(
+                self.config.batch_size, beta
+            )
+            per_weights = torch.as_tensor(weights_array, dtype=torch.float32)
+        else:
+            batch = self._replay_buffer.sample(self.config.batch_size)
 
         states = torch.stack([t.state for t in batch])
         actions = torch.tensor([t.action for t in batch], dtype=torch.long)
@@ -649,7 +757,17 @@ class DQNAgent:
             )
             targets = rewards + discounts * next_q_max * (1.0 - dones)
 
-        loss = nn.functional.smooth_l1_loss(q_selected, targets, beta=self.config.huber_delta)
+        if per_weights is None:
+            loss = nn.functional.smooth_l1_loss(q_selected, targets, beta=self.config.huber_delta)
+        else:
+            # Importance-sampling weights correct the bias prioritised sampling
+            # introduces, so the per-sample losses must be weighted *before*
+            # reduction -- reducing first and scaling after would apply one
+            # average weight to the whole batch and correct nothing.
+            per_sample_loss = nn.functional.smooth_l1_loss(
+                q_selected, targets, beta=self.config.huber_delta, reduction="none"
+            )
+            loss = (per_sample_loss * per_weights).mean()
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -657,11 +775,46 @@ class DQNAgent:
             nn.utils.clip_grad_norm_(self.q_network.parameters(), self.config.grad_clip_norm)
         self.optimizer.step()
 
+        td_errors = (q_selected - targets).detach()
+        if per_indices is not None and isinstance(self._replay_buffer, _PrioritisedReplayBuffer):
+            self._replay_buffer.update_priorities(per_indices, td_errors.numpy())
+
         self._learn_calls += 1
         if self._learn_calls % self.config.target_update_every == 0:
             self.target_network.load_state_dict(self.q_network.state_dict())
 
-        return {"loss": float(loss.item()), "buffer_size": float(len(self._replay_buffer))}
+        # §S8's required instrumentation. The spec is blunt about why: "Without
+        # the per-term reward breakdown and the action distribution, §7 is
+        # guesswork" -- and diagnosing the 2026-08-19 environment famine took
+        # exactly these numbers.
+        gradient_norm = 0.0
+        for parameter in self.q_network.parameters():
+            if parameter.grad is not None:
+                gradient_norm += float(parameter.grad.detach().pow(2).sum().item())
+        gradient_norm = gradient_norm**0.5
+
+        return {
+            "loss": float(loss.item()),
+            "buffer_size": float(len(self._replay_buffer)),
+            "mean_q_chosen": float(q_selected.mean().item()),
+            "max_q": float(q_selected.max().item()),
+            "td_error_mean": float(td_errors.mean().item()),
+            "td_error_abs_mean": float(td_errors.abs().mean().item()),
+            "grad_norm": gradient_norm,
+            "epsilon": float(self._current_epsilon()),
+            "per_beta": float(self._current_per_beta()) if self.config.per else 0.0,
+        }
+
+    def _current_per_beta(self) -> float:
+        """Importance-sampling beta, annealed `per_beta_start` -> `per_beta_end`
+        across the epsilon-decay horizon (§S8's table)."""
+        if not self.config.per:
+            return 0.0
+        horizon = max(1, self.config.epsilon_decay_steps)
+        progress = min(1.0, self._learn_calls / horizon)
+        return self.config.per_beta_start + progress * (
+            self.config.per_beta_end - self.config.per_beta_start
+        )
 
     def save(self, path: str) -> None:
         torch.save(

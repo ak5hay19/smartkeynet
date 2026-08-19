@@ -1,0 +1,34 @@
+# Lint configuration (spec §S0 item 5).
+#
+# Deliberately not maximal. The spec asks for code written "the boring obvious
+# way", and a lint set that fights that style would be counterproductive: the
+# rules enabled here catch real defects (unused names, shadowed builtins,
+# mutable defaults, bare excepts) rather than enforcing a house style.
+
+line-length = 100
+target-version = "py312"
+
+exclude = [".venv", "build", "dist", "__pycache__", "data"]
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes -- unused imports/names, undefined names
+    "B",    # bugbear -- mutable defaults, bare except, loop-variable capture
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "I",    # isort
+]
+ignore = [
+    "E501",   # line length is checked by the formatter, not the linter
+    "B008",   # function call in default arg -- used deliberately for config loaders
+    "SIM108", # ternary-instead-of-if: the spec explicitly asks for the boring form
+]
+
+[lint.per-file-ignores]
+# Tests import fixtures and helpers that a linter reads as unused, and
+# deliberately construct odd values.
+"tests/*" = ["F401", "F811", "B011"]
+
+[format]
+quote-style = "double"

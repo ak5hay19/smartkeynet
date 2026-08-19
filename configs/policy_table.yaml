@@ -1,0 +1,127 @@
+# configs/policy_table.yaml
+#
+# The (sensitivity_class x threat_posture) -> minimum tier table. This is the
+# inviolable layer's data: `env/masking.py` masks out every action below the
+# floor this table returns, so these twelve cells ARE the security policy.
+#
+# SMARTKEYNET_BUILD_SPEC.md §S4: "A 4x4 lookup `(sensitivity_class, posture) ->
+# min_tier`, loaded from YAML, every cell carrying a citation comment." It was
+# a dict literal in `env/masking.py` until 2026-08-19. Moving it here is not
+# cosmetic: §S4 also asks for `test_every_cell_has_a_citation`, and a lint that
+# walks a YAML file can enforce a per-cell citation in a way that reviewing a
+# Python dict cannot.
+#
+# ---------------------------------------------------------------------------
+# HONEST STATUS: this is a documented PLACEHOLDER table, not a calibrated one.
+# ---------------------------------------------------------------------------
+# PLAN.md's "Datasets & Provenance" table lists a policy-table calibration
+# against Q-OPSEC's `synthetic_context_dataset` as future work, and it has not
+# happened. What is citable at placeholder stage is the *relative ordering* --
+# which standard says "protect this class more than that one", and which says
+# "raise protection when the threat rises" -- not any numeric threshold. So no
+# cell claims a number; each cites the artifact that justifies its position in
+# the ordering.
+#
+# THE INVARIANT THAT IS NOT A PLACEHOLDER. The floor must be monotonically
+# non-decreasing in both sensitivity_class and threat_posture. Together those
+# make the table a monotone lattice map, which is what turns "threat signals
+# can only raise floors" from a hope into a theorem (§S4). Enforced by
+# tests/test_masking.py's two monotonicity tests, exhaustively over all cells.
+#
+# Postures are the three in `env.contracts.ThreatPosture` (CALM, ELEVATED,
+# HIGH). The spec's §4.2 state vector reserves four posture slots against a
+# future CRITICAL; the table stays 4x3 until that class actually exists,
+# because inventing a CRITICAL row would be inventing policy.
+
+tiers:
+  # Tier names map to `env.contracts.Action`; the floor is a minimum tier, so
+  # every action at or above it stays legal.
+  classical: SERVE_CLASSICAL   # T0: X25519 + AES-256-GCM
+  pqc: SERVE_PQC               # T1: ML-KEM-768
+  hybrid: SERVE_HYBRID         # T2/T3: ML-KEM-768 combined with QKD key material
+
+table:
+  S0:
+    description: "public / non-sensitive telemetry"
+    CALM:
+      floor: classical
+      source: "No confidentiality exposure to Harvest-Now-Decrypt-Later, so
+        NIST SP 800-57 Part 1 Rev 5's protection-lifetime reasoning places no
+        PQC requirement here. Classical is sufficient."
+    ELEVATED:
+      floor: classical
+      source: "Same as CALM: an elevated posture does not retroactively make
+        public data confidential. Raising this floor would spend key material
+        and latency to protect data with nothing to protect."
+    HIGH:
+      floor: pqc
+      source: "CNSA 2.0 (NSA, Sep 2022) treats PQC key establishment as the
+        baseline for the migration period rather than a premium tier, so under
+        a high posture even low-sensitivity flows move to ML-KEM-768 (NIST FIPS
+        203, Category 3). Costs no QKD material -- PQC is the free workhorse."
+  S1:
+    description: "internal"
+    CALM:
+      floor: classical
+      source: "Internal-only data under a calm posture: SP 800-57's
+        cryptoperiod guidance turns on protection lifetime, and short-lived
+        internal traffic does not require PQC at rest-of-decade horizons."
+    ELEVATED:
+      floor: pqc
+      source: "BSI TR-02102-1 and ANSSI's PQC position both recommend moving
+        confidentiality-relevant key establishment to PQC (or hybrid) during
+        the migration window; an elevated posture is where that applies to
+        internal traffic."
+    HIGH:
+      floor: pqc
+      source: "Held at PQC rather than escalated to hybrid: QKD key material is
+        the scarce resource, and CNSA 2.0 does not require QKD for this class.
+        Escalating here would consume the pool that S2/S3 need."
+  S2:
+    description: "confidential"
+    CALM:
+      floor: pqc
+      source: "Confidential data has a long enough protection lifetime that
+        Harvest-Now-Decrypt-Later applies today, which is the core of the CNSA
+        2.0 and BSI TR-02102-1 migration argument. PQC is the floor even with
+        no threat elevation."
+    ELEVATED:
+      floor: pqc
+      source: "Monotonicity requires this to be at least the CALM floor; held
+        at PQC because the step to hybrid is reserved for a high posture, so
+        the pool is not drained by routine elevation."
+    HIGH:
+      floor: hybrid
+      source: "Under a high posture, confidential long-lived data is where ETSI
+        GS QKD 014-delivered key material combined with ML-KEM-768 is
+        warranted. Combining rather than replacing follows the hybrid guidance
+        in RFC 9370 and draft-ietf-tls-hybrid-design: security is at least that
+        of the stronger component."
+  S3:
+    description: "secret / regulated, decades-long protection lifetime"
+    CALM:
+      floor: pqc
+      source: "Never below PQC even at calm: SP 800-57 Part 1 Rev 5 ties
+        protection to the data's lifetime, not to current threat, and this
+        class's lifetime spans the plausible arrival of a cryptanalytically
+        relevant quantum computer."
+    ELEVATED:
+      floor: hybrid
+      source: "The highest-sensitivity class escalates to hybrid one posture
+        step earlier than S2, following CNSA 2.0's 'protect the
+        highest-sensitivity, longest-lived data soonest and strongest'
+        ordering."
+    HIGH:
+      floor: hybrid
+      source: "Already at the strongest tier the action space offers. T3
+        (hybrid with a shortened lifetime cap) is the same key material under a
+        tighter cryptoperiod, per SP 800-57's cryptoperiod guidance."
+
+legacy_endpoint_floor:
+  floor: classical
+  source: "Non-PQC-capable endpoints can only negotiate classical, so the floor
+    is pinned there to preserve liveness (spec §S4 masking rule 2). NOT a Hard
+    Rule 2 exemption: the request generator asserts such endpoints never carry
+    a class whose floor could exceed T0, so this can never lower a floor that
+    the policy table actually raised. The residual risk is a migration backlog,
+    which is exactly what S6 models."

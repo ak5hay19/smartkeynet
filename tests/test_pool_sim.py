@@ -10,10 +10,10 @@ generation procedure (mean rate + dialed-in QBER spike for S3).
 from __future__ import annotations
 
 import pathlib
-
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
 
+import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -288,11 +288,12 @@ def test_rejects_out_of_range_initial_fill_frac():
 
 
 def test_load_pool_config_matches_yaml_file():
-    import yaml
     from pathlib import Path
 
+    import yaml
+
     config_path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
     loaded = load_pool_config()
@@ -379,7 +380,7 @@ def test_qber_gate_is_monotone_and_vanishes_at_abort():
     qbers = [0.0, 0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.109, 0.11, 0.2]
     gates = [trace.reconciliation_gate(q) for q in qbers]
 
-    assert all(later <= earlier + 1e-12 for earlier, later in zip(gates, gates[1:]))
+    assert all(later <= earlier + 1e-12 for earlier, later in zip(gates, gates[1:], strict=False))
     assert gates[0] == pytest.approx(1.0)  # at/below baseline: no loss
     assert trace.reconciliation_gate(0.02) == pytest.approx(1.0)
     assert trace.reconciliation_gate(0.11) == pytest.approx(0.0)
@@ -457,7 +458,13 @@ def _binding_diagnostics(policy, scenario: str, seeds=(0, 1, 2), steps: int = 90
     empties, fulls, regrets, queue_peaks, queue_ends, overflows = [], [], [], [], [], []
     for seed in seeds:
         env = SmartKeyNetEnv(
-            {**base, "scenario": scenario, "max_steps": steps, "scenario_steps": steps + 200, "seed": seed}
+            {
+                **base,
+                "scenario": scenario,
+                "max_steps": steps,
+                "scenario_steps": steps + 200,
+                "seed": seed,
+            }
         )
         state, info = env.reset(seed=seed)
         levels, queue_lengths, regret_events = [], [], 0
@@ -728,3 +735,103 @@ def test_draw_lineage_accounts_for_exactly_the_keys_taken(draw_sizes):
         # FIFO: batch ids in a lineage are strictly increasing (oldest first)
         batch_ids = [batch_id for batch_id, _ in result.lineage]
         assert batch_ids == sorted(batch_ids)
+
+
+# ---------------------------------------------------------------------------
+# SKR process: log-space OU (spec §S1) and trace mode with the 70/30 split
+# ---------------------------------------------------------------------------
+
+
+def test_ou_process_preserves_the_configured_mean():
+    """`mean_skr_kbps` must actually be the process mean.
+
+    A stationary log-space OU process has `E[exp(x)] = exp(mu + sigma^2/(4*theta))`,
+    so taking `mu = log(mean_skr_kbps)` literally -- as the spec's formula does --
+    overshoots. That would be a quiet disaster here specifically: the entire
+    scarcity calibration (§11.2) is a ratio against this supply figure, so a
+    process whose mean disagrees with its own config key would invalidate it.
+    """
+    trace = SyntheticSKRQBERTrace(n_steps=100_000, mean_skr_kbps=0.10, seed=0)
+    values = np.array([skr for skr, _qber in trace])
+    # Within 5%: the small shortfall is the reconciliation gate, which bites
+    # whenever QBER noise pushes above baseline, not the OU correction.
+    assert values.mean() == pytest.approx(0.10, rel=0.05)
+    assert (values > 0.0).all()  # log space cannot go negative, with no clip
+
+
+def test_ou_process_is_autocorrelated_unlike_iid():
+    """Mean reversion is the point: an i.i.d. sequence has nothing for a
+    forecaster to learn, so the pool head could never beat persistence on it.
+    This process was i.i.d. Gaussian until 2026-08-19."""
+    trace = SyntheticSKRQBERTrace(n_steps=50_000, mean_skr_kbps=0.10, seed=1)
+    values = np.array([skr for skr, _qber in trace])
+    lag_one = float(np.corrcoef(values[:-1], values[1:])[0, 1])
+    assert lag_one > 0.5, f"lag-1 autocorrelation {lag_one:.3f} is too low to forecast"
+
+
+def test_ou_process_is_deterministic_under_seed():
+    first = list(SyntheticSKRQBERTrace(n_steps=500, seed=7))
+    second = list(SyntheticSKRQBERTrace(n_steps=500, seed=7))
+    assert first == second
+
+
+def _write_trace_csv(path, n_rows: int = 1000) -> None:
+    import csv as _csv
+
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write("# SYNTHETIC test trace\n")
+        writer = _csv.writer(handle)
+        writer.writerow(["step", "skr_kbps", "qber"])
+        for step in range(n_rows):
+            writer.writerow([step, f"{0.10 + step * 1e-6:.8f}", "0.02"])
+
+
+def test_trace_split_is_seventy_thirty_and_disjoint(tmp_path):
+    """§S1: "first 70% for training scenarios, last 30% reserved for
+    evaluation. Reusing the same trace segment for train and eval is a silent
+    leak that a reviewer will find."
+
+    The SKR values here increase monotonically, so the two segments are
+    trivially distinguishable and an overlap would be visible rather than
+    merely improbable.
+    """
+    from env.pool_sim import TraceSKRQBERSource
+
+    csv_path = tmp_path / "skr_qber.csv"
+    _write_trace_csv(csv_path, n_rows=1000)
+
+    train = TraceSKRQBERSource(trace_path=csv_path, n_steps=10, split="train", seed=0)
+    evaluation = TraceSKRQBERSource(trace_path=csv_path, n_steps=10, split="eval", seed=0)
+
+    assert train.segment_length == 700
+    assert evaluation.segment_length == 300
+    assert max(skr for skr, _ in train._segment) < min(skr for skr, _ in evaluation._segment)
+
+
+def test_trace_cycles_within_its_own_split(tmp_path):
+    """A long episode must wrap inside its split, never spill into the other."""
+    from env.pool_sim import TraceSKRQBERSource
+
+    csv_path = tmp_path / "skr_qber.csv"
+    _write_trace_csv(csv_path, n_rows=1000)
+
+    train = TraceSKRQBERSource(trace_path=csv_path, n_steps=5000, split="train", seed=3)
+    highest_train_skr = max(skr for skr, _ in train._segment)
+    for skr, _qber in train:
+        assert skr <= highest_train_skr
+
+
+def test_trace_rejects_an_unknown_split(tmp_path):
+    from env.pool_sim import TraceSKRQBERSource
+
+    csv_path = tmp_path / "skr_qber.csv"
+    _write_trace_csv(csv_path, n_rows=100)
+    with pytest.raises(ValueError, match="split"):
+        TraceSKRQBERSource(trace_path=csv_path, n_steps=10, split="both")
+
+
+def test_trace_missing_file_says_how_to_generate_one(tmp_path):
+    from env.pool_sim import TraceSKRQBERSource
+
+    with pytest.raises(FileNotFoundError, match="get_data"):
+        TraceSKRQBERSource(trace_path=tmp_path / "absent.csv", n_steps=10)

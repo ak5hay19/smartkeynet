@@ -201,7 +201,7 @@ class SmartKeyForecaster(nn.Module):
         )
 
     @classmethod
-    def load(cls, path: str | Path) -> "SmartKeyForecaster":
+    def load(cls, path: str | Path) -> SmartKeyForecaster:
         checkpoint = torch.load(path, map_location="cpu", weights_only=False)
         model = cls(
             hidden_size=checkpoint["hidden_size"],
@@ -243,7 +243,7 @@ class LSTMForecastProvider(ForecastProvider):
         self._last_pool: PoolForecast | None = None
 
     @classmethod
-    def from_checkpoint(cls, path: str | Path) -> "LSTMForecastProvider":
+    def from_checkpoint(cls, path: str | Path) -> LSTMForecastProvider:
         return cls(SmartKeyForecaster.load(path))
 
     def _padded_window(self) -> torch.Tensor:

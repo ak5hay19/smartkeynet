@@ -73,7 +73,7 @@ class RewardWeights:
     c_rekey_load_beta: float
 
     @classmethod
-    def from_config(cls, reward_config: dict[str, Any]) -> "RewardWeights":
+    def from_config(cls, reward_config: dict[str, Any]) -> RewardWeights:
         """Build from `configs/default.yaml`'s `reward:` block.
 
         The config's short names (`w_lat`, `w_en`, `w_fr`) predate this
@@ -92,9 +92,7 @@ class RewardWeights:
         )
 
 
-def compute_reward(
-    inputs: RewardInputs, weights: RewardWeights
-) -> tuple[float, dict[str, float]]:
+def compute_reward(inputs: RewardInputs, weights: RewardWeights) -> tuple[float, dict[str, float]]:
     """Total reward for one step, plus the per-term breakdown.
 
     The breakdown is not optional instrumentation. Spec §S5 point 1 and

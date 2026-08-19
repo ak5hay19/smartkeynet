@@ -50,9 +50,9 @@ from agents.baselines import (
     RandomPolicy,
     StaticThresholdPolicy,
 )
-from metrics.aggregate import bootstrap_ci, paired_difference
 from experiments.harness import run_scenario
 from experiments.train import GreedyDQNPolicy, load_full_config, train
+from metrics.aggregate import bootstrap_ci, paired_difference
 
 GATE_SCENARIOS: tuple[str, ...] = ("S1", "S3")
 """The two scenarios Gate W3 is defined over (split.md)."""
@@ -70,9 +70,24 @@ class PolicyScore:
     policy: str
     scenario: str
     rewards: list[float] = field(default_factory=list)
+    regret_events: list[int] = field(default_factory=list)
     exhaustion_events: list[int] = field(default_factory=list)
     floor_violations: list[int] = field(default_factory=list)
     p99_latencies: list[float] = field(default_factory=list)
+    overflow_keys: list[int] = field(default_factory=list)
+
+    @property
+    def mean_regret(self) -> float:
+        """The primary Gate W3 metric (§6). Lower is better."""
+        return float(np.mean(self.regret_events)) if self.regret_events else 0.0
+
+    @property
+    def mean_overflow(self) -> float:
+        """Wasted key material. Reported alongside regret because a policy can
+        drive regret to zero simply by never spending, and overflow is what
+        exposes that (§S1: "a good agent should show near-zero overflow *and*
+        near-zero regret")."""
+        return float(np.mean(self.overflow_keys)) if self.overflow_keys else 0.0
 
     @property
     def mean_reward(self) -> float:
@@ -115,9 +130,11 @@ def evaluate_policy(
     for seed in eval_seeds:
         result = run_scenario(policy, scenario, config, seed=seed)
         score.rewards.append(result.total_reward)
+        score.regret_events.append(result.episode_metrics.regret_events)
         score.exhaustion_events.append(result.pool_exhaustion_events)
         score.floor_violations.append(result.floor_violations)
         score.p99_latencies.append(result.p99_latency)
+        score.overflow_keys.append(result.pool_overflow_keys)
     return score
 
 
@@ -136,7 +153,7 @@ def tuned_threshold_for(
     max_key_age = float(config["key_lifetime"]["max_key_age_steps"])
 
     best_policy: StaticThresholdPolicy | None = None
-    best_reward = -np.inf
+    best_key: tuple[float, float] | None = None
 
     for tau in tau_grid:
         for c_min in c_min_grid:
@@ -147,21 +164,59 @@ def tuned_threshold_for(
                     rekey_age_frac=rho,
                     max_key_age=max_key_age,
                 )
-                rewards = [
-                    run_scenario(candidate, scenario, config, seed=seed).total_reward
-                    for seed in train_seeds
+                results = [
+                    run_scenario(candidate, scenario, config, seed=seed) for seed in train_seeds
                 ]
-                mean_reward = float(np.mean(rewards))
-                if mean_reward > best_reward:
-                    best_reward, best_policy = mean_reward, candidate
+                # Selected on REGRET EVENTS, the primary metric §6 names for
+                # Gate W3, with reward only as a tiebreak. This selected on
+                # total reward until 2026-08-19, which tuned the baseline for a
+                # different objective than the gate then judged it on -- and
+                # §9.7 is explicit that a scalar return must never be the
+                # headline, because it is reward-function-specific.
+                mean_regret = float(np.mean([r.episode_metrics.regret_events for r in results]))
+                mean_reward = float(np.mean([r.total_reward for r in results]))
+                candidate_key = (-mean_regret, mean_reward)
+                if best_key is None or candidate_key > best_key:
+                    best_key, best_policy = candidate_key, candidate
 
     assert best_policy is not None
+    _warn_if_grid_optimum_is_on_an_edge(best_policy, tau_grid, c_min_grid, rho_grid, scenario)
     return best_policy
+
+
+def _warn_if_grid_optimum_is_on_an_edge(
+    policy: StaticThresholdPolicy,
+    tau_grid: list[float],
+    c_min_grid: list[int],
+    rho_grid: list[float],
+    scenario: str,
+) -> None:
+    """§S7 test 4: "the selected `tau` should not sit at the edge of the grid.
+    If it does, **extend the grid** -- an edge optimum means you have not
+    actually tuned the baseline, and HR7 is violated in spirit."
+
+    Beating a baseline that is pinned to its grid boundary is a weak claim,
+    because the boundary, not the search, chose the parameter. Reported loudly
+    rather than raised: the run should still complete and say so.
+    """
+    edges: list[str] = []
+    if policy.pool_fill_threshold in (min(tau_grid), max(tau_grid)):
+        edges.append(f"tau={policy.pool_fill_threshold} (grid {min(tau_grid)}..{max(tau_grid)})")
+    if policy.min_hybrid_class in (min(c_min_grid), max(c_min_grid)):
+        edges.append(f"c_min={policy.min_hybrid_class}")
+    if policy.rekey_age_frac in (min(rho_grid), max(rho_grid)):
+        edges.append(f"rho={policy.rekey_age_frac}")
+    if edges:
+        print(
+            f"  WARNING [{scenario}]: threshold grid optimum sits on an edge: "
+            f"{', '.join(edges)}. §S7 test 4 says extend the grid -- an edge optimum "
+            "means the baseline is not actually tuned."
+        )
 
 
 def run_gate(
     n_train_seeds: int = 5,
-    n_eval_seeds: int = 5,
+    n_eval_seeds: int = 10,  # §9.6: 10 seeds for every number in the final table
     total_steps: int = 25_000,
     eval_max_steps: int = 2_000,
     config: dict[str, Any] | None = None,
@@ -210,62 +265,135 @@ def run_gate(
         dqn_rewards: list[float] = []
         dqn_score = PolicyScore(policy="dqn", scenario=scenario)
         for seed in train_seeds:
-            print(f"  training DQN on {scenario}, seed {seed} ({total_steps} steps) ...", flush=True)
+            print(
+                f"  training DQN on {scenario}, seed {seed} ({total_steps} steps) ...", flush=True
+            )
             agent, _record = train(
                 full_config=config,
                 training_overrides={
                     "seed": seed,
                     "total_steps": total_steps,
-                    "eval_every": max(1, total_steps),  # skip mid-run snapshots; we score at the end
+                    "eval_every": max(
+                        1, total_steps
+                    ),  # skip mid-run snapshots; we score at the end
                     "eval_max_steps": eval_max_steps,
                     "checkpoint_path": f"checkpoints/gate_w3_{scenario}_seed{seed}.pt",
                 },
                 scenario=scenario,
             )
-            per_seed = evaluate_policy(
-                GreedyDQNPolicy(agent), scenario, eval_config, eval_seeds
-            )
+            per_seed = evaluate_policy(GreedyDQNPolicy(agent), scenario, eval_config, eval_seeds)
             # one number per *training* seed: the mean over eval seeds
             dqn_rewards.append(per_seed.mean_reward)
             dqn_score.rewards.extend(per_seed.rewards)
+            dqn_score.regret_events.extend(per_seed.regret_events)
             dqn_score.exhaustion_events.extend(per_seed.exhaustion_events)
             dqn_score.floor_violations.extend(per_seed.floor_violations)
             dqn_score.p99_latencies.extend(per_seed.p99_latencies)
+            dqn_score.overflow_keys.extend(per_seed.overflow_keys)
             print(f"    seed {seed}: mean eval reward {per_seed.mean_reward:.1f}")
 
         scores["dqn"] = dqn_score
 
         print(
-            f"\n  {'policy':22s} {'IQM':>12s} {'95% CI':>26s} {'exhaust':>9s} {'viol':>6s}"
+            f"\n  {'policy':22s} {'regret':>8s} {'overflow':>9s} {'p99 ms':>8s} "
+            f"{'IQM reward':>12s} {'exhaust':>9s} {'viol':>6s}"
         )
-        for name in ("dqn", "static_threshold_tuned", "greedy_recommender", "always_pqc", "always_hybrid", "random"):
-            print(f"  {scores[name].summary_row()}")
+        for name in (
+            "dqn",
+            "static_threshold_tuned",
+            "greedy_recommender",
+            "always_pqc",
+            "always_hybrid",
+            "random",
+        ):
+            score = scores[name]
+            print(
+                f"  {score.policy:22s} {score.mean_regret:8.1f} {score.mean_overflow:9.1f} "
+                f"{float(np.mean(score.p99_latencies)):8.1f} {score.iqm.point:12.1f} "
+                f"{float(np.mean(score.exhaustion_events)):9.1f} "
+                f"{int(sum(score.floor_violations)):6d}"
+            )
+        print(
+            "  (primary metric is REGRET EVENTS, lower better -- §6. Reward is "
+            "descriptive only: §9.7 forbids a scalar return as the headline.)"
+        )
 
         # The claim is a PAIRED difference over shared seeds (spec §9 rule 4):
         # policies see identical arrival streams and SKR traces, so the
         # per-seed difference has far less variance than either policy's own
         # spread. A CI on the difference that excludes zero is the claim.
         threshold_score = scores["static_threshold_tuned"]
-        n_paired = min(len(dqn_score.rewards), len(threshold_score.rewards))
+        n_paired = min(len(dqn_score.regret_events), len(threshold_score.regret_events))
+        # Primary metric is regret events and LOWER is better, so the paired
+        # difference is taken as (threshold - dqn): a positive difference whose
+        # CI excludes zero means the DQN caused fewer regret events.
         difference = paired_difference(
+            [float(v) for v in threshold_score.regret_events[:n_paired]],
+            [float(v) for v in dqn_score.regret_events[:n_paired]],
+        )
+        reward_difference = paired_difference(
             dqn_score.rewards[:n_paired], threshold_score.rewards[:n_paired]
         )
-        beats = difference.point > 0 and difference.excludes(0.0)
+        beats_on_regret = difference.point > 0 and difference.excludes(0.0)
+
+        # §6 secondary constraints: p99 latency and pool exhaustion must not
+        # regress by more than 10%. A win on regret bought by a large latency
+        # regression is not a win.
+        threshold_p99 = float(np.mean(threshold_score.p99_latencies)) or 1.0
+        threshold_exhaust = float(np.mean(threshold_score.exhaustion_events))
+        dqn_p99 = float(np.mean(dqn_score.p99_latencies))
+        dqn_exhaust = float(np.mean(dqn_score.exhaustion_events))
+        p99_regression = (dqn_p99 - threshold_p99) / threshold_p99
+        exhaust_regression = (
+            (dqn_exhaust - threshold_exhaust) / threshold_exhaust
+            if threshold_exhaust > 0
+            else (0.0 if dqn_exhaust == 0 else float("inf"))
+        )
+        secondary_ok = p99_regression <= 0.10 and exhaust_regression <= 0.10
+        beats = beats_on_regret and secondary_ok
 
         print(
-            f"\n  DQN - threshold (paired, IQM): {difference.point:.1f} "
-            f"[{difference.low:.1f}, {difference.high:.1f}]"
+            f"\n  threshold - DQN regret events (paired, IQM): {difference.point:.1f} "
+            f"[{difference.low:.1f}, {difference.high:.1f}]   (positive = DQN better)"
         )
         print(
+            f"  reward difference (descriptive): {reward_difference.point:.1f} "
+            f"[{reward_difference.low:.1f}, {reward_difference.high:.1f}]"
+        )
+        print(
+            f"  secondary: p99 latency {p99_regression:+.1%}, pool exhaustion "
+            f"{exhaust_regression:+.1%} (each must be <= +10%) -> "
+            f"{'OK' if secondary_ok else 'REGRESSED'}"
+        )
+        if threshold_score.mean_regret == 0.0:
+            print(
+                "  NOTE: the tuned threshold caused ZERO regret events, so the primary\n"
+                "        metric cannot discriminate -- it achieves that by hoarding\n"
+                f"        ({threshold_score.mean_overflow:.0f} keys of overflow wasted vs "
+                f"{dqn_score.mean_overflow:.0f} for the DQN).\n"
+                "        Compare overflow and reward instead, and say so in the report."
+            )
+        print(
             f"  DQN {'BEATS' if beats else 'DOES NOT BEAT'} the tuned threshold on "
-            f"{scenario} (CI on the difference "
-            f"{'excludes' if difference.excludes(0.0) else 'includes'} zero)"
+            f"{scenario} (regret CI "
+            f"{'excludes' if difference.excludes(0.0) else 'includes'} zero"
+            f"{'' if secondary_ok else '; secondary metrics regressed'})"
         )
         report.setdefault("paired_difference", {})[scenario] = {
+            "primary_metric": "regret_events",
             "point": difference.point,
             "low": difference.low,
             "high": difference.high,
             "excludes_zero": bool(difference.excludes(0.0)),
+            "reward_difference_descriptive": {
+                "point": reward_difference.point,
+                "low": reward_difference.low,
+                "high": reward_difference.high,
+            },
+            "secondary_p99_regression": p99_regression,
+            "secondary_exhaustion_regression": exhaust_regression,
+            "secondary_within_10pct": bool(secondary_ok),
+            "threshold_regret_is_zero": bool(threshold_score.mean_regret == 0.0),
         }
         print(f"  per-training-seed DQN means: {[round(r, 1) for r in dqn_rewards]}")
 
@@ -281,6 +409,8 @@ def run_gate(
                     "mean_reward": score.mean_reward,
                     "std_reward": score.std_reward,
                     "median_reward": score.median_reward,
+                    "mean_regret_events": score.mean_regret,
+                    "mean_overflow_keys": score.mean_overflow,
                     "mean_exhaustion_events": float(np.mean(score.exhaustion_events)),
                     "total_floor_violations": int(sum(score.floor_violations)),
                     "mean_p99_latency": float(np.mean(score.p99_latencies)),
@@ -298,7 +428,7 @@ def run_gate(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Gate W3.")
     parser.add_argument("--train-seeds", type=int, default=5)
-    parser.add_argument("--eval-seeds", type=int, default=5)
+    parser.add_argument("--eval-seeds", type=int, default=10)
     parser.add_argument("--steps", type=int, default=25_000)
     parser.add_argument("--eval-max-steps", type=int, default=2_000)
     parser.add_argument("--out", type=str, default="results/gate_w3.json")

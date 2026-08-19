@@ -152,8 +152,13 @@ def test_state_length_is_identical_under_ewma_and_lstm():
             "threat_score": threat.threat_score,
             "threat_forecast": threat.horizon_scores,
             "posture_probs": list(threat.posture_probs) + [0.0],
-            "qber": 0.2, "skr": 1.0, "pool_fill": 0.5, "arrival_rate": 1.0,
-            "load": 0.1, "avg_latency": 0.01, "key_age": 0.02,
+            "qber": 0.2,
+            "skr": 1.0,
+            "pool_fill": 0.5,
+            "arrival_rate": 1.0,
+            "load": 0.1,
+            "avg_latency": 0.01,
+            "key_age": 0.02,
             "key_type_onehot": [0.0, 0.0, 1.0, 0.0],
             "request_class_onehot": [0.0, 0.0, 1.0, 0.0],
             "floor_onehot": [0.0, 1.0, 0.0, 0.0],
@@ -161,7 +166,8 @@ def test_state_length_is_identical_under_ewma_and_lstm():
             "queue_len_norm": 0.0,
             "queue_head_wait_norm": 0.0,
             "steps_since_rekey_norm": 0.02,
-            "sensitivity_class": 2, "policy_floor": 1,
+            "sensitivity_class": 2,
+            "policy_floor": 1,
             "pool_level_hat": pool.pool_level_hat,
             "skr_mean_hat": pool.skr_mean_hat,
             "skr_trend": 0.0,
@@ -189,7 +195,7 @@ def test_provider_parameters_are_frozen():
 
 
 def test_forecast_outputs_carry_no_gradient():
-    """"No gradient flow from DQN loss into forecaster" -- the outputs
+    """ "No gradient flow from DQN loss into forecaster" -- the outputs
     are plain floats, so the gradient path does not merely go unused,
     it does not exist."""
     provider = LSTMForecastProvider(SmartKeyForecaster())

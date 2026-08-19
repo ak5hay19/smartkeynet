@@ -13,8 +13,8 @@ directly.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
 
 import networkx as nx
 import numpy as np
@@ -34,7 +34,9 @@ structure, not in how much work arrives."""
 
 _TENANTS: tuple[str, ...] = ("hospital", "fintech", "logging", "iot-telemetry")
 _SERVICES: tuple[str, ...] = ("auth", "billing", "ingest", "export", "notify")
-_PQC_CAPABLE_PROB: float = 0.9  # most endpoints support PQC; the rest are legacy (pqc_capable=False)
+_PQC_CAPABLE_PROB: float = (
+    0.9  # most endpoints support PQC; the rest are legacy (pqc_capable=False)
+)
 _HYBRID_MANDATORY_PROB: float = 0.2
 
 
@@ -95,7 +97,9 @@ _TENANT_PROFILES: tuple[TenantProfile, ...] = (
     TenantProfile("fintech", (0.10, 0.30, 0.50, 0.10), relative_volume=1.0, legacy_fraction=0.02),
     TenantProfile("logistics", (0.30, 0.48, 0.20, 0.02), relative_volume=1.1, legacy_fraction=0.08),
     TenantProfile("telemetry", (0.50, 0.49, 0.01, 0.00), relative_volume=1.3, legacy_fraction=0.05),
-    TenantProfile("legacy_scada", (0.40, 0.60, 0.00, 0.00), relative_volume=0.6, legacy_fraction=0.60),
+    TenantProfile(
+        "legacy_scada", (0.40, 0.60, 0.00, 0.00), relative_volume=0.6, legacy_fraction=0.60
+    ),
 )
 """Realised rate-weighted class mix at `n_nodes=50`, averaged over 8
 seeds: **0.389 / 0.312 / 0.216 / 0.084**, against the spec's target of
@@ -296,7 +300,9 @@ def build_tenant_graph(
 
     # 3/4. edge attributes, grouped by owning tenant so classes can be
     #      assigned by stratified allocation rather than i.i.d. draws
-    edges_by_owner: dict[str, list[tuple[int, int]]] = {profile.name: [] for profile in _TENANT_PROFILES}
+    edges_by_owner: dict[str, list[tuple[int, int]]] = {
+        profile.name: [] for profile in _TENANT_PROFILES
+    }
     for source, target in edges:
         if graph.has_edge(source, target) or source == target:
             continue
@@ -307,7 +313,7 @@ def build_tenant_graph(
     for profile in _TENANT_PROFILES:
         owned_edges = edges_by_owner[profile.name]
         classes = _stratified_classes(len(owned_edges), profile.class_weights, rng)
-        for (source, target), sensitivity_class in zip(owned_edges, classes):
+        for (source, target), sensitivity_class in zip(owned_edges, classes, strict=True):
             pqc_capable = bool(rng.random() >= profile.legacy_fraction)
             if not pqc_capable:
                 sensitivity_class = min(sensitivity_class, int(_LEGACY_MAX_CLASS))
@@ -362,7 +368,9 @@ def _stratified_classes(
 
     # hand out the leftover slots to the largest fractional remainders
     shortfall = n_edges - sum(counts)
-    for class_index in sorted(range(len(counts)), key=lambda i: remainders[i], reverse=True)[:shortfall]:
+    for class_index in sorted(range(len(counts)), key=lambda i: remainders[i], reverse=True)[
+        :shortfall
+    ]:
         counts[class_index] += 1
 
     classes: list[int] = []
@@ -416,7 +424,7 @@ class RequestGenerator:
         self,
         graph: nx.Graph,
         seed: int | None = None,
-        tenant_flood: "TenantFlood | None" = None,
+        tenant_flood: TenantFlood | None = None,
     ) -> None:
         self._graph = graph
         self._seed = seed
@@ -504,8 +512,7 @@ class RequestGenerator:
         """
         step = 0
         while True:
-            for request in self.step(step):
-                yield request
+            yield from self.step(step)
             step += 1
 
 
@@ -617,7 +624,11 @@ def random_request_generator(
             period = load_spike["period_steps"]
             duration = load_spike["spike_duration_steps"]
             in_spike = (step % period) < duration
-            multiplier = load_spike["spike_rate_multiplier"] if in_spike else load_spike["low_rate_multiplier"]
+            multiplier = (
+                load_spike["spike_rate_multiplier"]
+                if in_spike
+                else load_spike["low_rate_multiplier"]
+            )
             rate = _ARRIVAL_RATE_PER_STEP * multiplier
         n_arrivals = int(rng.poisson(rate))
         for _ in range(n_arrivals):

@@ -21,7 +21,6 @@ import numpy as np
 import pytest
 import yaml
 
-from env.reward import ENERGY_REFERENCE_MJ, LATENCY_REFERENCE_MS
 from env.contracts import Action
 from env.environment import (
     _ACTION_TO_KEY_TYPE,
@@ -31,6 +30,7 @@ from env.environment import (
     IllegalActionError,
     SmartKeyNetEnv,
 )
+from env.reward import ENERGY_REFERENCE_MJ, LATENCY_REFERENCE_MS
 
 _TIER_ACTIONS = (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID)
 
@@ -81,7 +81,7 @@ def load_test_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     and shallow-merge any per-section overrides a test needs (e.g. a
     small pool to force scarcity)."""
     config_path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         config: dict[str, Any] = yaml.safe_load(f)
 
     if overrides:
@@ -134,7 +134,11 @@ def test_reset_produces_valid_initial_state_and_mask():
     assert 0.0 <= state["queue_head_wait_norm"] <= 1.0
     assert 0.0 <= state["steps_since_rekey_norm"] <= 1.0
     assert 0.0 <= state["pool_fill"] <= 1.0
-    assert state["policy_floor"] in (int(Action.SERVE_CLASSICAL), int(Action.SERVE_PQC), int(Action.SERVE_HYBRID))
+    assert state["policy_floor"] in (
+        int(Action.SERVE_CLASSICAL),
+        int(Action.SERVE_PQC),
+        int(Action.SERVE_HYBRID),
+    )
     assert isinstance(state["regret_event_recent"], bool)
 
 
@@ -229,7 +233,9 @@ def test_hybrid_mandatory_request_with_uncoverable_pool_never_reaches_agent():
             # must actually be able to cover it right now
             assert env._pool_sim.can_draw(env._bits_per_hybrid_draw)
 
-        _action, (state, reward, terminated, truncated, info) = take_random_valid_step(env, rng, info)
+        _action, (state, reward, terminated, truncated, info) = take_random_valid_step(
+            env, rng, info
+        )
         if info["regret_events"]:
             saw_regret_event = True
 
@@ -474,7 +480,9 @@ def test_gate_full_s1_episode_random_valid_policy_zero_floor_violations():
     floor_violations = 0
     for _ in range(250):
         floor = env._current_floor
-        action, (state, reward, terminated, truncated, info) = take_random_valid_step(env, rng, info)
+        action, (state, reward, terminated, truncated, info) = take_random_valid_step(
+            env, rng, info
+        )
 
         if action in _TIER_ACTIONS and int(action) < int(floor):
             floor_violations += 1
@@ -502,7 +510,9 @@ def test_gate_regret_events_logged_and_deferred_request_eventually_served():
     # that is in fact behaving correctly.
     for _ in range(900):
         floor = env._current_floor
-        action, (state, reward, terminated, truncated, info) = take_random_valid_step(env, rng, info)
+        action, (state, reward, terminated, truncated, info) = take_random_valid_step(
+            env, rng, info
+        )
 
         if action in _TIER_ACTIONS and int(action) < int(floor):
             floor_violations += 1
@@ -515,7 +525,24 @@ def test_gate_regret_events_logged_and_deferred_request_eventually_served():
     assert total_regret_events > 0  # exhaustion was actually forced at least once
     peak_queue_len = max(queue_len_history)
     assert peak_queue_len > 0  # something actually got queued
-    assert queue_len_history[-1] < peak_queue_len  # and later drained -- i.e., served
+    # ...and the queue actually drains at some point, i.e. deferred requests
+    # do get served rather than waiting forever.
+    #
+    # This asserted `queue_len_history[-1] < peak_queue_len` until 2026-08-19,
+    # i.e. that the queue was below its peak *at the final step*. That became
+    # wrong when the SKR process gained mean reversion: a log-space OU process
+    # with theta = 0.02 has a correlation time of ~50 steps, so a low-SKR
+    # drought can persist to the end of the episode and legitimately leave the
+    # queue at its high-water mark. Draining is the property under test; when
+    # it happens is a property of the trace.
+    drained_at_some_point = any(
+        later < earlier
+        for earlier, later in zip(queue_len_history, queue_len_history[1:], strict=False)
+    )
+    assert drained_at_some_point, (
+        "the deferral queue never shrank across the whole episode -- deferred "
+        "requests are never being served (Hard Rule 9 says defer, not abandon)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -570,13 +597,19 @@ def test_load_spike_enabled_raises_observed_load_during_the_window():
     out_window_loads: list[float] = []
     for _ in range(1500):
         step_now = env._step_count
-        in_window = (step_now % _LOAD_SPIKE_CFG["period_steps"]) < _LOAD_SPIKE_CFG["spike_duration_steps"]
+        in_window = (step_now % _LOAD_SPIKE_CFG["period_steps"]) < _LOAD_SPIKE_CFG[
+            "spike_duration_steps"
+        ]
         (in_window_loads if in_window else out_window_loads).append(state["load"])
 
-        _action, (state, reward, terminated, truncated, info) = take_random_valid_step(env, rng, info)
+        _action, (state, reward, terminated, truncated, info) = take_random_valid_step(
+            env, rng, info
+        )
 
     assert in_window_loads and out_window_loads
-    assert sum(in_window_loads) / len(in_window_loads) > sum(out_window_loads) / len(out_window_loads)
+    assert sum(in_window_loads) / len(in_window_loads) > sum(out_window_loads) / len(
+        out_window_loads
+    )
     # the mechanism this diagnostic exists to test: `load` should
     # genuinely recede during cooldown, not just be permanently pinned
     # at its cap once the first spike hits.

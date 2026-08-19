@@ -134,13 +134,20 @@ summarized here for anyone reading the code cold):
 from __future__ import annotations
 
 from collections import deque
-from pathlib import Path
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Iterator
+from pathlib import Path
+from typing import Any
 
 import gymnasium as gym
 import numpy as np
 
+from env.constants import (
+    assert_consistent_with_default_config,
+    handshake_energy_mj,
+    handshake_latency_ms,
+    key_bits,
+)
 from env.contracts import (
     N_ACTIONS,
     Action,
@@ -159,20 +166,20 @@ from env.contracts import (
 from env.deferral_queue import DeferralQueue
 from env.forecast_provider import MovingAverageForecaster
 from env.masking import PolicyTable, compute_mask, effective_floor_for
-from env.pool_sim import PoolSim, SyntheticSKRQBERTrace
-from env.reward import (
-    RewardWeights,
-    assert_weights_are_sane,
-    compute_reward,
-)
-from metrics.reward_inputs import RewardInputs
+from env.pool_sim import PoolSim, SyntheticSKRQBERTrace, TraceSKRQBERSource
 from env.request_generator import (
     RequestGenerator,
     build_tenant_graph,
     random_request_generator,
 )
+from env.reward import (
+    RewardWeights,
+    assert_weights_are_sane,
+    compute_reward,
+)
 from env.scenarios import ScenarioSpec, build_scenario
-
+from metrics.event_log import EventLog
+from metrics.reward_inputs import RewardInputs
 
 _ARRIVAL_RATE_REFERENCE = 1.0
 """Reference arrival rate for `arrival_rate_norm` (spec §4.2). Matches
@@ -232,24 +239,29 @@ class _SessionKeyState:
 # hasn't happened yet. REKEY_NOW is deliberately absent: its cost is
 # always looked up via whichever tier it resolves to (see
 # `_resulting_key_type`), never as its own entry.
-_LATENCY_MS: dict[Action, float] = {
-    # Handshake latency per tier, in milliseconds. These were dimensionless
-    # multipliers (0.2/1.0/1.2/1.5) until 2026-08-19, which made the reward's
-    # `w_lat` weight silently carry a unit conversion and left `avg_latency_norm`
-    # -- documented as "EWMA latency / 100 ms" -- two orders of magnitude off.
-    # Expressed against the spec's 100 ms reference they are the same numbers
-    # times 100, so every recorded reward is unchanged.
-    Action.REUSE: 20.0,  # cache hit, no handshake
-    Action.SERVE_CLASSICAL: 100.0,  # X25519 keygen + DH
-    Action.SERVE_PQC: 120.0,  # ML-KEM-768 keygen + encaps + decaps
-    Action.SERVE_HYBRID: 150.0,  # PQC + HKDF over the concatenated secret + ETSI delivery RTT
-}
-_ENERGY_MJ: dict[Action, float] = {  # per-tier energy in mJ, against ENERGY_REFERENCE_MJ = 1.0
-    Action.REUSE: 0.1,
-    Action.SERVE_CLASSICAL: 1.0,
-    Action.SERVE_PQC: 1.3,
-    Action.SERVE_HYBRID: 1.6,
-}
+def _cost_table(per_tier: dict[str, float]) -> dict[Action, float]:
+    """Map `constants.yaml`'s tier names onto the actions that incur them."""
+    return {
+        Action.REUSE: per_tier["reuse"],
+        Action.SERVE_CLASSICAL: per_tier["classical"],
+        Action.SERVE_PQC: per_tier["pqc"],
+        Action.SERVE_HYBRID: per_tier["hybrid"],
+    }
+
+
+_LATENCY_MS: dict[Action, float] = _cost_table(handshake_latency_ms())
+"""Per-tier handshake latency in ms, LOADED FROM configs/constants.yaml.
+
+These were hardcoded here (as dimensionless 0.2/1.0/1.2/1.5 multipliers until
+2026-08-19, then as ms literals) which meant the cost model was the one part
+of the simulator with no cited source at all -- exactly what Hard Rule 4
+exists to prevent. They now come from the citation-bearing file, whose entry
+is explicit that this is an ordinal model and NOT measured on the evaluation
+host.
+"""
+
+_ENERGY_MJ: dict[Action, float] = _cost_table(handshake_energy_mj())
+"""Per-tier energy in mJ, from configs/constants.yaml. Ordinal, not measured."""
 _ACTION_TO_KEY_TYPE: dict[Action, KeyType] = {
     Action.SERVE_CLASSICAL: KeyType.CLASSICAL,
     Action.SERVE_PQC: KeyType.PQC,
@@ -271,6 +283,11 @@ class SmartKeyNetEnv(gym.Env):
     S5's adversarial trace lives in `attack/` and S6's migration
     schedule wiring are both future sessions' work.
     """
+
+    _EVAL_SPLIT: str = "eval"
+    """Scenarios marked `eval_only` (S5, S6) read the held-out 30% of the
+    trace. Tying the split to the scenario's own eval-only flag means the two
+    cannot disagree."""
 
     _TRACE_N_STEPS = 200_000
     """Generously large so a realistic episode never exhausts the
@@ -310,7 +327,26 @@ class SmartKeyNetEnv(gym.Env):
         self._pool_capacity = float(config["pool"]["capacity_bits"])
         self._pool_initial_fill_frac = float(config["pool"]["initial_fill_frac"])
         self._bits_per_hybrid_draw = float(config["pool"]["bits_per_hybrid_draw"])
+        # Whole keys per hybrid establishment -- the unit the pool and the
+        # §4.4 event log both speak in (spec `hybrid_draw_keys`).
+        queue_cfg = config.get("queue", {})
+        self._head_reservation = str(queue_cfg.get("head_reservation", "none"))
+        if self._head_reservation not in ("none", "strict"):
+            raise ValueError(
+                f"queue.head_reservation must be 'none' or 'strict', got {self._head_reservation!r}"
+            )
+        self._sla_max_steps = int(queue_cfg.get("sla_max_steps", 100))
+        self._min_rekey_interval = float(
+            config.get("key_lifetime", {}).get("min_rekey_interval_steps", 0.0)
+        )
+
+        self._keys_per_hybrid_draw = max(1, int(round(self._bits_per_hybrid_draw / key_bits())))
         self._max_key_age = float(config["key_lifetime"]["max_key_age_steps"])
+        # Hard Rule 4: the cited constants must still describe the values in
+        # use. Checked here rather than in review, because the two config
+        # files duplicate four numbers between them.
+        assert_consistent_with_default_config()
+
         self._reward_cfg = config["reward"]
         self._reward_weights = RewardWeights.from_config(self._reward_cfg)
         assert_weights_are_sane(self._reward_weights)
@@ -343,9 +379,7 @@ class SmartKeyNetEnv(gym.Env):
         if self._threat_source_name == "rt_iot2022":
             from env.threat_source import RTIoT2022ThreatSource, fit_graded_threat_scorer
 
-            self._threat_source = RTIoT2022ThreatSource(
-                split=self._threat_split, seed=self._seed
-            )
+            self._threat_source = RTIoT2022ThreatSource(split=self._threat_split, seed=self._seed)
             # Always fitted on the TRAIN pool, whichever split the episode
             # samples from -- fitting on eval flows would leak.
             self._threat_scorer = fit_graded_threat_scorer(
@@ -373,6 +407,19 @@ class SmartKeyNetEnv(gym.Env):
 
         self._step_count = -1
         self._decision_count = 0
+        # §4.4 event log. One per episode, written to events.jsonl.gz by the
+        # harness. The dashboard consumes ONLY this -- see dashboard/replay.py
+        # -- so it can replay any recorded run offline and cannot slow
+        # training down by reaching into the env.
+        self._episode_index = getattr(self, "_episode_index", -1) + 1
+        self._event_log = EventLog(episode=self._episode_index)
+        self._pool_keys_before_refill: int | None = None
+        self._resolved_waits: dict[str, int] = {}
+        # One `floor_change` per cohort per episode, not one per request that
+        # happens to hit the raised floor -- the event describes the schedule
+        # firing, not each consequence of it.
+        self._floor_changes_logged: set[str] = set()
+        self._last_threat_score: float = 0.0
         self._latency_sum = 0.0
         self._latency_count = 0
         self._latency_samples = []
@@ -418,7 +465,9 @@ class SmartKeyNetEnv(gym.Env):
         )
         self._last_pool_state = self._pool_sim.reset()
         self._deferral_queue = DeferralQueue()
-        self._policy_table = PolicyTable()  # fresh every episode -- sticky ratchet must not carry over
+        self._policy_table = (
+            PolicyTable()
+        )  # fresh every episode -- sticky ratchet must not carry over
         self._forecaster = self._build_forecaster()
         self._request_stream = self._build_request_stream(episode_seed)
         self._peeked_arrival = None
@@ -431,6 +480,19 @@ class SmartKeyNetEnv(gym.Env):
 
         self._step_count = -1
         self._decision_count = 0
+        # §4.4 event log. One per episode, written to events.jsonl.gz by the
+        # harness. The dashboard consumes ONLY this -- see dashboard/replay.py
+        # -- so it can replay any recorded run offline and cannot slow
+        # training down by reaching into the env.
+        self._episode_index = getattr(self, "_episode_index", -1) + 1
+        self._event_log = EventLog(episode=self._episode_index)
+        self._pool_keys_before_refill: int | None = None
+        self._resolved_waits: dict[str, int] = {}
+        # One `floor_change` per cohort per episode, not one per request that
+        # happens to hit the raised floor -- the event describes the schedule
+        # firing, not each consequence of it.
+        self._floor_changes_logged: set[str] = set()
+        self._last_threat_score: float = 0.0
         self._latency_sum = 0.0
         self._latency_count = 0
         self._latency_samples = []
@@ -524,6 +586,38 @@ class SmartKeyNetEnv(gym.Env):
 
         return state, reward, terminated, truncated, info
 
+    def _emit_defer_onset(self, event: RegretEvent, request: Request) -> None:
+        """§4.4 `defer_onset` -- which **is** the regret event.
+
+        Emitted once per request at deferral onset, never once per waiting
+        step: §S2 test 2 calls that miscount "the single most common", and it
+        would inflate the headline regret figure by the queue's dwell time.
+        """
+        self._event_log.emit(
+            "defer_onset",
+            event["step"],
+            request_id=event["request_id"],
+            tenant=event["tenant"],
+            sensitivity_class=int(event["sensitivity_class"]),
+            floor=int(event["policy_floor"]),
+            keys_required=int(self._keys_per_hybrid_draw),
+            pool_keys=int(self._pool_sim.level),
+            queue_position=len(self._deferral_queue),
+        )
+
+    @property
+    def event_log(self) -> EventLog:
+        """This episode's §4.4 event log.
+
+        The dashboard reads the written log, never this object or any other
+        env attribute (§S13). Exposed so the harness can persist it.
+        """
+        return self._event_log
+
+    def write_event_log(self, path: str | Path) -> Path:
+        """Persist the episode's events to gzipped JSONL."""
+        return self._event_log.write(path)
+
     @property
     def pool_overflow_keys(self) -> int:
         """Keys the QKD link produced this episode that the pool was too
@@ -613,6 +707,20 @@ class SmartKeyNetEnv(gym.Env):
         `SyntheticSKRQBERTrace`'s own defaults, which are the same
         calibrated values, so a slimmed-down test config still runs.
         """
+        # `qkd.source: trace` loads a CSV instead, with the split §S1 demands:
+        # training scenarios see the first 70% and evaluation the last 30%, so
+        # "reusing the same trace segment for train and eval" -- which the spec
+        # calls "a silent leak that a reviewer will find" -- cannot happen by
+        # forgetting, only by deliberately passing the wrong split.
+        if str(self._qkd_cfg.get("source", "synthetic")) == "trace":
+            return TraceSKRQBERSource(
+                trace_path=self._qkd_cfg["trace_path"],
+                n_steps=self._TRACE_N_STEPS,
+                split=self._EVAL_SPLIT if self._scenario.eval_only else "train",
+                train_fraction=float(self._qkd_cfg.get("train_fraction", 0.70)),
+                seed=episode_seed,
+            )
+
         defaults = SyntheticSKRQBERTrace(n_steps=1)
         return SyntheticSKRQBERTrace(
             n_steps=self._TRACE_N_STEPS,
@@ -622,6 +730,8 @@ class SmartKeyNetEnv(gym.Env):
             qber_noise_std=float(self._qkd_cfg.get("qber_noise_std", defaults.qber_noise_std)),
             qber_abort=float(self._qkd_cfg.get("qber_abort", defaults.qber_abort)),
             gate_kappa=float(self._qkd_cfg.get("gate_kappa", defaults.gate_kappa)),
+            skr_ou_theta=float(self._qkd_cfg.get("skr_ou_theta", defaults.skr_ou_theta)),
+            skr_ou_sigma=float(self._qkd_cfg.get("skr_ou_sigma", defaults.skr_ou_sigma)),
             drift=self._scenario.qber_drift,
             seed=episode_seed,
         )
@@ -707,6 +817,29 @@ class SmartKeyNetEnv(gym.Env):
             # 1. advance the pool by one tick
             self._last_pool_state = self._pool_sim.step()
             self._step_count += 1
+            self._event_log.emit(
+                "pool_refill",
+                self._step_count,
+                keys_added=int(self._last_pool_state.keys - self._pool_keys_before_refill)
+                if self._pool_keys_before_refill is not None
+                else int(self._last_pool_state.keys),
+                skr_kbps=float(self._last_pool_state.skr),
+                qber=float(self._last_pool_state.qber),
+                pool_keys_after=int(self._last_pool_state.keys),
+                overflow_keys=int(self._last_pool_state.overflow_keys),
+                # Additive beyond §4.4's listed payload: without capacity the
+                # dashboard cannot turn `pool_keys_after` into a fill fraction
+                # without importing the env, which §S13 forbids.
+                pool_capacity_keys=int(self._last_pool_state.capacity_keys),
+            )
+            self._pool_keys_before_refill = int(self._last_pool_state.keys)
+            if self._last_pool_state.keys == 0:
+                self._event_log.emit(
+                    "pool_exhausted",
+                    self._step_count,
+                    pool_keys=0,
+                    pending_hybrid_mandatory=len(self._deferral_queue),
+                )
 
             # age every tracked session by one tick, not just the one
             # being decided (design decision 2)
@@ -716,12 +849,29 @@ class SmartKeyNetEnv(gym.Env):
             # 2. age waiting requests
             deferred_steps = self._deferral_queue.tick(self._step_count)
             deferred_steps_this_call.extend(deferred_steps)
+            for deferred in deferred_steps:
+                self._event_log.emit(
+                    "defer_step",
+                    self._step_count,
+                    request_id=deferred["request_id"],
+                    wait_steps_so_far=int(deferred["steps_waited"]),
+                )
 
             # 3. requests the pool can now cover rejoin the pending queue,
             #    with priority over brand-new arrivals this tick
             servable = self._deferral_queue.pop_servable(self._pool_sim.can_draw)
             for queued in servable:
                 self._pending_requests.appendleft(queued.request)
+                self._resolved_waits[queued.request["request_id"]] = int(
+                    self._step_count - queued.step_enqueued
+                )
+                self._event_log.emit(
+                    "defer_resolved",
+                    self._step_count,
+                    request_id=queued.request["request_id"],
+                    total_wait_steps=int(self._step_count - queued.step_enqueued),
+                    keys_drawn=int(self._keys_per_hybrid_draw),
+                )
 
             # 4. forecast update, using signal accumulated since the
             #    last observation (see module docstring point 6 for
@@ -740,13 +890,16 @@ class SmartKeyNetEnv(gym.Env):
             # 6/7. try pending requests until one is ready for a decision
             while self._pending_requests:
                 request = self._pending_requests.popleft()
-                if request["hybrid_mandatory"] and not self._pool_sim.can_draw(self._bits_per_hybrid_draw):
+                if request["hybrid_mandatory"] and not self._pool_sim.can_draw(
+                    self._bits_per_hybrid_draw
+                ):
                     event = self._deferral_queue.enqueue(
                         request, self._bits_per_hybrid_draw, self._step_count, self._pool_sim.fill
                     )
                     self._regret_log.append(event)
                     regret_events_this_call.append(event)
                     self._last_regret_step = self._step_count
+                    self._emit_defer_onset(event, request)
                     continue
 
                 result = self._prepare_decision(request)
@@ -815,8 +968,7 @@ class SmartKeyNetEnv(gym.Env):
                 self._current_load(),
                 min(
                     1.0,
-                    self._scenario.threat_boost_at(self._step_count)
-                    / self._MAX_THREAT_BOOST,
+                    self._scenario.threat_boost_at(self._step_count) / self._MAX_THREAT_BOOST,
                 ),
             ]
         if self._steering_trace is not None:
@@ -864,9 +1016,7 @@ class SmartKeyNetEnv(gym.Env):
         elevated_weight = 1.0 - abs(2.0 * intensity - 1.0)
         high_weight = max(0.0, 2.0 * intensity - 1.0)
 
-        sampled = self._threat_source.sample_mixture(
-            calm_weight, elevated_weight, high_weight
-        )
+        sampled = self._threat_source.sample_mixture(calm_weight, elevated_weight, high_weight)
         threat_score = self._threat_scorer.score(sampled)
         return [float(value) for value in sampled] + [threat_score]
 
@@ -926,7 +1076,20 @@ class SmartKeyNetEnv(gym.Env):
         self._current_posture = current_posture
 
         # design decision 7: exercise the sticky ratchet every decision
+        posture_before_ratchet = self._policy_table._ratcheted_posture
         self._policy_table.ratchet_up(current_posture)
+        if self._policy_table._ratcheted_posture is not posture_before_ratchet:
+            # §4.4 requires `raised` to be true whenever source == "forecast".
+            # It is unconditionally true here because `ratchet_up` is a
+            # one-way door -- which is the machine-checked half of Hard Rule 2.
+            self._event_log.emit(
+                "posture_change",
+                self._step_count,
+                old=int(posture_before_ratchet),
+                new=int(self._policy_table._ratcheted_posture),
+                source="forecast" if self._forecaster is not None else "current_step",
+                raised=int(self._policy_table._ratcheted_posture) > int(posture_before_ratchet),
+            )
         floor = self._policy_table.floor(
             SensitivityClass(request["sensitivity_class"]),
             current_posture,
@@ -939,7 +1102,18 @@ class SmartKeyNetEnv(gym.Env):
         # than the guarantee itself.
         cohort_floor = self._scenario.floor_overrides_at(self._step_count).get(request["tenant"])
         if cohort_floor is not None:
-            floor = Action(max(int(floor), int(cohort_floor)))
+            raised_floor = Action(max(int(floor), int(cohort_floor)))
+            if raised_floor is not floor and request["tenant"] not in self._floor_changes_logged:
+                self._event_log.emit(
+                    "floor_change",
+                    self._step_count,
+                    tenant_cohort=str(request["tenant"]),
+                    old_floor=int(floor),
+                    new_floor=int(raised_floor),
+                    source="migration_schedule",
+                )
+                self._floor_changes_logged.add(request["tenant"])
+            floor = raised_floor
 
         # `REKEY_NOW` on a cold-start session adopts the floor's tier, and
         # masking-gap-1 below gates it on the pool -- both must use the
@@ -955,8 +1129,15 @@ class SmartKeyNetEnv(gym.Env):
             max_key_age=self._max_key_age,
             pool_can_draw=pool_can_draw_hybrid,
             active_key_tier=(
-                _KEY_TYPE_TO_SERVE_ACTION[session.key_type] if session.key_type is not None else None
+                _KEY_TYPE_TO_SERVE_ACTION[session.key_type]
+                if session.key_type is not None
+                else None
             ),
+            steps_since_rekey=session.key_age,
+            min_rekey_interval=self._min_rekey_interval,
+            queue_non_empty=len(self._deferral_queue) > 0,
+            head_reservation=self._head_reservation,
+            request_is_hybrid_mandatory=bool(request["hybrid_mandatory"]),
         )
 
         # Masking gap #1 (discovered via testing, not anticipated by
@@ -1000,6 +1181,13 @@ class SmartKeyNetEnv(gym.Env):
             )
             self._regret_log.append(event)
             self._last_regret_step = self._step_count
+            # Masking gap #2 is the *second* place a request can be deferred,
+            # and it was missing its event until the golden fixture caught the
+            # mismatch (34 regret-log entries against 20 `defer_onset` events).
+            # A log that under-reports regret would have quietly understated
+            # the headline metric everywhere the dashboard or any log-based
+            # analysis reads it.
+            self._emit_defer_onset(event, request)
             return event
 
         key_type_onehot = [0.0, 0.0, 0.0]
@@ -1049,6 +1237,9 @@ class SmartKeyNetEnv(gym.Env):
                 else 0.0
             )
 
+        # Cached for the §4.4 serve event; the dashboard reconstructs the
+        # threat/floor panel from the log alone (§S13).
+        self._last_threat_score = float(threat_score)
         state = StateDict(
             threat_score=threat_score,
             threat_forecast=threat_forecast_vec,
@@ -1082,7 +1273,9 @@ class SmartKeyNetEnv(gym.Env):
 
         return state, mask
 
-    def _resulting_key_type(self, action: Action, session: _SessionKeyState, floor: Action) -> KeyType | None:
+    def _resulting_key_type(
+        self, action: Action, session: _SessionKeyState, floor: Action
+    ) -> KeyType | None:
         if action in _ACTION_TO_KEY_TYPE:
             return _ACTION_TO_KEY_TYPE[action]
         if action is Action.REKEY_NOW:
@@ -1147,7 +1340,9 @@ class SmartKeyNetEnv(gym.Env):
         # (design decision 11).
         keys_consumed = bits_consumed / self._bits_per_hybrid_draw
 
-        cost_action = _KEY_TYPE_TO_SERVE_ACTION[new_key_type] if action is Action.REKEY_NOW else action
+        cost_action = (
+            _KEY_TYPE_TO_SERVE_ACTION[new_key_type] if action is Action.REKEY_NOW else action
+        )
         latency_ms = _LATENCY_MS[cost_action]
         energy_mj = _ENERGY_MJ[cost_action]
 
@@ -1172,6 +1367,32 @@ class SmartKeyNetEnv(gym.Env):
             "normalised_load": load,
         }
 
+        wait_steps = self._resolved_waits.pop(request["request_id"], 0)
+        self._event_log.emit(
+            "serve",
+            self._step_count,
+            request_id=request["request_id"],
+            tenant=request["tenant"],
+            sensitivity_class=int(request["sensitivity_class"]),
+            floor=int(floor) if floor is not None else -1,
+            action=int(action),
+            tier_served=int(cost_action),
+            latency_ms=float(latency_ms),
+            energy_mj=float(energy_mj),
+            keys_drawn=int(keys_consumed),
+            was_deferred=bool(wait_steps > 0),
+            wait_steps=int(wait_steps),
+            # Additive: the dashboard's Beat 1 panel plots the threat signal
+            # against the floor it produced, and neither is otherwise
+            # recoverable from the log. Logging a security signal is not a
+            # Hard Rule 1 concern -- HR1 constrains the *reward*, and the
+            # reward cannot see this file.
+            threat_score=float(self._last_threat_score),
+            posture=int(self._policy_table._ratcheted_posture),
+            queue_depth=len(self._deferral_queue),
+            regret_events_total=len(self._regret_log),
+        )
+
         info: dict[str, Any] = {}
         if is_rekey and reuse_masked_due_to_age:
             forced_event = ForcedRekey(
@@ -1183,6 +1404,14 @@ class SmartKeyNetEnv(gym.Env):
                 * (1.0 + self._reward_weights.c_rekey_load_beta * load),
             )
             self._forced_rekey_log.append(forced_event)
+            self._event_log.emit(
+                "forced_rekey",
+                self._step_count,
+                request_id=request["request_id"],
+                age_at_force=float(age_before_action),
+                lifetime_cap=float(self._max_key_age),
+                cost=float(forced_event["cost"]),
+            )
             info["forced_rekey"] = forced_event
 
         return outcome, info

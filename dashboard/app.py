@@ -9,8 +9,17 @@ pool gauge, threat forecast strip, live regret counter, latency chart.
 
 Implementation is Plotly Dash (PLAN.md tech stack lists it as
 negotiable; Dash keeps everything in Python, so the dashboard reads the
-same `SmartKeyNetEnv` the experiments do rather than a re-implementation
-of it in JavaScript that could silently drift).
+same event log the experiments write rather than a re-implementation of the
+simulator in JavaScript that could silently drift).
+
+**This module imports nothing from `env/` or `agents/`, by design.**
+SMARTKEYNET_BUILD_SPEC.md §S13 requires the dashboard to read
+`events.jsonl.gz` and "never reach into env internals" -- so that it can
+replay any recorded run, works offline in the viva, and cannot slow training
+down. Until 2026-08-19 this file constructed a live `SmartKeyNetEnv` and read
+five private attributes off it, which broke all three of those properties.
+Recording lives in `experiments/record_demo.py`; this file only renders.
+`tests/test_api_and_dashboard.py` AST-scans it to keep the boundary honest.
 
 ---------------------------------------------------------------------
 The four beats, and which panel carries each
@@ -39,16 +48,10 @@ the callbacks are thin wrappers over it.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
-from agents.baselines import AlwaysHybridPolicy, StaticThresholdPolicy
-from env.contracts import Action, KeyType
-from env.environment import SmartKeyNetEnv
-from experiments.train import load_full_config
+from dashboard.replay import ReplayEpisode, load_episode
 
 TIER_COLOURS: dict[str, str] = {
     "CLASSICAL": "#9e9e9e",  # grey
@@ -59,135 +62,33 @@ TIER_COLOURS: dict[str, str] = {
 """PLAN.md §6 Beat 1: "edges flash coloured by key type served (grey
 classical / amber PQC / green hybrid)"."""
 
-_KEY_TYPE_NAMES: dict[KeyType, str] = {
-    KeyType.CLASSICAL: "CLASSICAL",
-    KeyType.PQC: "PQC",
-    KeyType.HYBRID: "HYBRID",
-}
+_TIER_DISPLAY_ORDER: tuple[str, ...] = ("CLASSICAL", "PQC", "HYBRID", "REUSE")
+"""Display order for the tier histogram. Names come from the event log's
+`tier_served` field via `dashboard.replay`, not from `env.contracts.KeyType`
+-- importing the env's enums here is the first step back to importing the
+env, which §S13 forbids."""
 
 
-@dataclass
-class Frame:
-    """One step of replayable dashboard state."""
+def beat_two_logs(
+    log_dir: str | Path = "results/demo_logs",
+) -> tuple[ReplayEpisode, ReplayEpisode] | None:
+    """Load Beat 2's two recorded episodes, or None if they were never
+    recorded.
 
-    step: int
-    pool_fill: float
-    skr: float
-    qber: float
-    threat_score: float
-    posture: int
-    floor: int
-    tenant: str
-    served_tier: str
-    latency: float
-    regret_events_total: int
-    queue_depth: int
+    Returning None rather than recording on demand is deliberate: rendering
+    must not be able to start a simulation, or the decoupling §S13 asks for is
+    only a convention. Record with:
 
-
-@dataclass
-class ReplayLog:
-    """A full episode's frames for one policy, plus its label."""
-
-    label: str
-    frames: list[Frame] = field(default_factory=list)
-
-    @property
-    def pool_curve(self) -> list[float]:
-        return [frame.pool_fill for frame in self.frames]
-
-    @property
-    def regret_curve(self) -> list[int]:
-        return [frame.regret_events_total for frame in self.frames]
-
-    @property
-    def tier_histogram(self) -> dict[str, int]:
-        counts = {"CLASSICAL": 0, "PQC": 0, "HYBRID": 0, "NONE": 0}
-        for frame in self.frames:
-            counts[frame.served_tier] += 1
-        return counts
-
-
-def build_frames(
-    policy: Any,
-    scenario: str = "S1",
-    n_steps: int = 800,
-    seed: int = 0,
-    config: dict[str, Any] | None = None,
-) -> ReplayLog:
-    """Drive one episode and capture everything the panels need.
-
-    The dashboard replays a captured episode rather than stepping the
-    environment live inside a callback. Two reasons, both practical:
-    a Dash callback that mutated a shared environment would produce
-    different data for every connected browser, and a recorded episode
-    can be scrubbed backwards -- which the demo needs, because Beat 2's
-    whole point is pointing at the moment the agent *started*
-    conserving.
+        .venv/bin/python -m experiments.record_demo
     """
-    config = config if config is not None else load_full_config()
-    env_config = {
-        **config,
-        "scenario": scenario,
-        "seed": seed,
-        "max_steps": n_steps,
-        "scenario_steps": n_steps,
-    }
-    env = SmartKeyNetEnv(env_config)
-    state, info = env.reset(seed=seed)
-
-    log = ReplayLog(label=f"{type(policy).__name__} / {scenario}")
-    for _ in range(n_steps):
-        mask = info["action_mask"]
-        request = env._current_request
-        tenant_service = (request["tenant"], request["service"])
-        floor = int(state["policy_floor"])
-        action = policy.act(state, mask)
-
-        state, _reward, _terminated, truncated, info = env.step(action)
-
-        session = env._sessions.get(tenant_service)
-        served = (
-            _KEY_TYPE_NAMES[session.key_type]
-            if session is not None and session.key_type is not None
-            else "NONE"
-        )
-
-        log.frames.append(
-            Frame(
-                step=env._step_count,
-                pool_fill=float(state["pool_fill"]),
-                skr=float(state["skr"]),
-                qber=float(state["qber"]),
-                threat_score=float(state["threat_score"]),
-                posture=int(env._policy_table._ratcheted_posture),
-                floor=floor,
-                tenant=str(request["tenant"]),
-                served_tier=served,
-                latency=float(state["avg_latency"]),
-                regret_events_total=len(env._regret_log),
-                queue_depth=len(env._deferral_queue),
-            )
-        )
-        if truncated:
-            break
-
-    return log
-
-
-def build_beat_two(n_steps: int = 800, seed: int = 0) -> tuple[ReplayLog, ReplayLog]:
-    """Beat 2: the budgeting agent against the always-hybrid villain on
-    S3, which is the comparison that produces two diverging pool curves
-    and two very different regret counters."""
-    config = load_full_config()
-    frugal = StaticThresholdPolicy(
-        pool_fill_threshold=0.7,
-        min_hybrid_class=2,
-        rekey_age_frac=0.9,
-        max_key_age=float(config["key_lifetime"]["max_key_age_steps"]),
-    )
+    directory = Path(log_dir)
+    frugal_path = directory / "beat2_frugal.jsonl.gz"
+    villain_path = directory / "beat2_villain.jsonl.gz"
+    if not frugal_path.exists() or not villain_path.exists():
+        return None
     return (
-        build_frames(frugal, "S3", n_steps, seed, config),
-        build_frames(AlwaysHybridPolicy(), "S3", n_steps, seed, config),
+        load_episode(frugal_path, label="tuned threshold / S3"),
+        load_episode(villain_path, label="always-hybrid / S3"),
     )
 
 
@@ -221,7 +122,13 @@ def create_app() -> Any:
 
     app = Dash(__name__, title="SmartKeyNet")
 
-    frugal, villain = build_beat_two()
+    beat_two = beat_two_logs()
+    if beat_two is None:
+        raise SystemExit(
+            "no demo logs found -- record them first:\n"
+            "    .venv/bin/python -m experiments.record_demo"
+        )
+    frugal, villain = beat_two
     steering = load_results("results/steering_attack.json")
     gate = load_results("results/gate_w3.json")
 
@@ -257,9 +164,7 @@ def create_app() -> Any:
     tier_figure = go.Figure()
     for log in (frugal, villain):
         histogram = log.tier_histogram
-        tier_figure.add_trace(
-            go.Bar(x=list(histogram), y=list(histogram.values()), name=log.label)
-        )
+        tier_figure.add_trace(go.Bar(x=list(histogram), y=list(histogram.values()), name=log.label))
     tier_figure.update_layout(
         title="Beat 1 — served-tier mix",
         template="plotly_dark",
@@ -289,8 +194,7 @@ def create_app() -> Any:
         )
         steering_figure.update_layout(
             title=(
-                "Beat 3 — the steering attack: security isn't in our reward, "
-                "so it isn't for sale"
+                "Beat 3 — the steering attack: security isn't in our reward, so it isn't for sale"
             ),
             xaxis_title="reported threat (bin 0 = fully suppressed)",
             yaxis_title="tier  (0 classical / 1 PQC / 2 hybrid)",
@@ -340,7 +244,9 @@ def create_app() -> Any:
             )
         )
 
-    app.layout = html.Div(children, style={"backgroundColor": "#111", "color": "#eee", "padding": "24px"})
+    app.layout = html.Div(
+        children, style={"backgroundColor": "#111", "color": "#eee", "padding": "24px"}
+    )
     return app
 
 

@@ -33,8 +33,9 @@ distribution fixed and independent of whatever the agent later becomes.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 import torch
@@ -46,7 +47,7 @@ from agents.baselines import (
     RandomPolicy,
     StaticThresholdPolicy,
 )
-from env.contracts import Action, ForecastObservation, ThreatPosture
+from env.contracts import ForecastObservation
 from env.environment import SmartKeyNetEnv
 from forecaster.model import HORIZONS, THREAT_HORIZON_STEPS, WINDOW, observation_to_features
 
@@ -203,9 +204,7 @@ def build_datasets(
         for t in range(WINDOW - 1, n - longest_horizon - 1):
             window_rows.append(log.features[t - WINDOW + 1 : t + 1])
 
-            threat_rows.append(
-                [log.postures[t + k + 1] for k in range(THREAT_HORIZON_STEPS)]
-            )
+            threat_rows.append([log.postures[t + k + 1] for k in range(THREAT_HORIZON_STEPS)])
 
             pool_target: list[float] = []
             for horizon in HORIZONS:

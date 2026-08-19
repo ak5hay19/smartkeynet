@@ -6,6 +6,37 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    # SMARTKEYNET_BUILD_SPEC.md §S0 item 5: "CI: GitHub Action on PR running
+    # `ruff`, `mypy --strict` on `env/` and `agents/`, and `pytest -m 'not slow'`".
+    # Only pytest ran until 2026-08-19, so neither lint gate existed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lint tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy
+          pip install -r requirements.txt
+
+      - name: ruff
+        run: ruff check .
+
+      - name: ruff format check
+        run: ruff format --check .
+
+      - name: mypy --strict on env/ and agents/
+        # Scoped to the two packages the spec names: these carry the contracts
+        # and the inviolable layer, where a type error is a security defect
+        # rather than an inconvenience.
+        run: mypy --strict env agents
+
   pytest:
     runs-on: ubuntu-latest
     steps:
@@ -21,5 +52,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run pytest
-        run: pytest -v
+      - name: Run fast tests
+        run: pytest -v -m "not slow"
+
+      - name: Run slow tests
+        run: pytest -v -m "slow"
+
+  floor-violations:
+    # §3.3: "`floor_violations` must be `0` in every row for the masked agent.
+    # Ship a CI check that greps all results for a nonzero value and fails the
+    # build." This is the paper's central claim, so it fails the build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail on any nonzero floor_violations in committed results
+        run: |
+          if grep -rEn '"floor_violations"[[:space:]]*:[[:space:]]*[1-9]' results/ 2>/dev/null; then
+            echo "::error::a committed results row reports floor_violations != 0"
+            exit 1
+          fi
+          echo "no nonzero floor_violations in results/"

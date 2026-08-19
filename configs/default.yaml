@@ -107,6 +107,16 @@ pool:
 #     explicitly permits this "if the generation procedure is stated +
 #     rate ranges cited"). ---
 qkd:
+  source: synthetic   # synthetic | trace. `trace` reads `trace_path` and honours the
+                      # 70/30 train/eval split (spec §S1); `synthetic` is the documented
+                      # fallback every reported result uses (PLAN.md Datasets & Provenance).
+  trace_path: data/cvqkd/skr_qber.csv
+  train_fraction: 0.70
+  skr_ou_theta: 0.02   # OU mean-reversion rate. 1/theta = 50 steps correlation time, so a
+                        # low-SKR drought persists long enough to be worth forecasting.
+  skr_ou_sigma: 0.02   # OU volatility in log space. Stationary sd of log-SKR is
+                        # sigma/sqrt(2*theta) = 0.1, i.e. ~10% CV -- matching the i.i.d.
+                        # noise level this process replaced, so the recalibration holds.
   mean_skr_kbps: 0.10
   # RECALIBRATED 2026-08-19 from 0.025 (SMARTKEYNET_BUILD_SPEC.md §7.1 fix A,
   # which ranks supply/demand knobs as legitimate design and asks for every
@@ -149,7 +159,13 @@ qkd:
 
 # --- env/masking.py (Hard Rule 2, 4, 5) ---
 key_lifetime:
-  max_key_age_steps: 500  # SP 800-57-derived cap L; forced rekey at/above this (Addition C)
+  max_key_age_steps: 500
+  min_rekey_interval_steps: 5
+  # §S4 masking rule 4 (last line): REKEY_NOW is illegal within this many steps
+  # of the last rekey. §7.3 lists "rekey thrashing" as a degenerate policy whose
+  # causes are "`c_rekey_base` too low, or `min_rekey_interval` unset" -- this
+  # closes the second one, so the agent cannot re-establish keys every step to
+  # farm the freshness bonus.  # SP 800-57-derived cap L; forced rekey at/above this (Addition C)
 
 # --- env/environment.py reward (PLAN.md §4; Hard Rule 1 -- no security term, ever) ---
 reward:
@@ -210,6 +226,14 @@ dqn:
   # Upgrade-ladder switches (spec §8), enabled 2026-08-15 after the first honest Gate W3
   # run had the tuned threshold beating a vanilla DQN with high seed variance -- spec
   # §7.1's "Fix B: the agent is underfitting". See agents/dqn.py for what each buys.
+  per: false         # rung 5 -- PRIORITISED REPLAY, OFF BY DEFAULT.
+  # §S8's table says "PER | off initially", and §7.2 item 7 says why: "PER +
+  # n-step + Double interacts badly if the importance weights are wrong", so
+  # turning it on before the simpler rungs are known-good turns one bug into
+  # three. Implemented and tested so it is available as a §7.1 fix-B lever.
+  per_alpha: 0.6
+  per_beta_start: 0.4
+  per_beta_end: 1.0
   double: true       # rung 2 -- "always worth it"
   n_step: 3          # rung 4 -- "the highest-value rung for this problem"
   huber_delta: 1.0   # r_starve dwarfs the other terms; MSE turns one starvation step into a gradient spike
@@ -234,7 +258,13 @@ baselines:
   # and `rho` grids were added 2026-08-15 along with the missing REUSE/rekey half of
   # the rule -- until then this baseline re-keyed on every single decision, which made
   # it a strawman the DQN beat by an order of magnitude for entirely the wrong reason.
-  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]  # tau: pool-fill threshold
+  static_threshold_grid: [0.0, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
+  # EXTENDED 2026-08-19. The spec's grid is {0.1..0.9}; the search hit tau=0.1 on
+  # S1 and tau=0.9 on S3 -- both boundaries. §S7 test 4: "the selected tau should
+  # not sit at the edge of the grid. If it does, extend the grid -- an edge
+  # optimum means you have not actually tuned the baseline, and HR7 is violated
+  # in spirit." Beating a baseline pinned to its boundary is a weak claim,
+  # because the boundary chose the parameter rather than the search.  # tau: pool-fill threshold
   static_threshold_class_grid: [0, 1, 2, 3]        # c_min: minimum sensitivity class allowed to spend the pool
   static_threshold_rekey_frac_grid: [0.5, 0.7, 0.9]  # rho: rekey once key_age >= rho * L
 
@@ -264,3 +294,32 @@ training:
   eval_max_steps: 250    # episode length per eval snapshot -- mirrors experiments/harness.py's own
                           # _DEFAULT_MAX_STEPS convention
   checkpoint_path: checkpoints/dqn_s1.pt  # *.pt is gitignored (see .gitignore "Model checkpoints")
+
+# --- env/deferral_queue.py (spec §S2) ---
+queue:
+  head_reservation: none   # none | strict
+  # `strict` masks SERVE_HYBRID for *discretionary* requests while the deferral
+  # queue is non-empty, so a discretionary spend cannot consume the key a queued
+  # higher-class request is waiting for.
+  #
+  # DEFAULT IS `none` ON PURPOSE. §S2: "the agent *must be able to make the
+  # mistake* for the regret metric to mean anything." With `strict` on, regret
+  # measures only environmental scarcity and nothing about the policy. `strict`
+  # is run as a one-paragraph mini-ablation in the report instead: it is the
+  # trivial fix, and the report states what it costs everyone else in latency.
+  sla_max_steps: 100
+  # Deferrals waiting longer than this emit `sla_breach`. A breach is a
+  # reportable availability failure, NEVER a licence to downgrade (Hard Rule 9)
+  # -- there is no code path that lowers a floor on breach.
+
+# --- statistical protocol (spec §9) ---
+seeds:
+  train: [0, 1, 2, 3, 4]
+  eval: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109]
+  attack: [200, 201, 202, 203, 204, 205, 206, 207, 208, 209]
+  # §9.6: "5 during development, 10 for every number that appears in the final
+  # table. Training seeds and evaluation seeds are disjoint sets, declared in
+  # the config." Disjoint by construction here: train seeds are 0-4, eval seeds
+  # start at 100, attack seeds at 200, so adding a seed to one set can never
+  # silently overlap another.
+  eval_seeds_headline: 10

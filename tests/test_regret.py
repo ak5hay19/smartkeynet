@@ -29,7 +29,9 @@ def make_deferred_step(step: int, request_id: str, steps_waited: int) -> Deferre
 
 
 def make_forced_rekey(step: int, request_id: str) -> ForcedRekey:
-    return ForcedRekey(step=step, request_id=request_id, key_age_at_rekey=500.0, load_at_rekey=0.5, cost=1.5)
+    return ForcedRekey(
+        step=step, request_id=request_id, key_age_at_rekey=500.0, load_at_rekey=0.5, cost=1.5
+    )
 
 
 # ---------------------------------------------------------------------------

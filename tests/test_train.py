@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from agents.dqn import DQNAgent, _OFF_STATE_DIM, DQNConfig
+from agents.dqn import _OFF_STATE_DIM, DQNAgent, DQNConfig
 from env.contracts import N_ACTIONS
 from experiments.harness import ScenarioResult
 from experiments.train import GreedyDQNPolicy, load_full_config, train
@@ -134,7 +134,9 @@ def test_greedy_policy_is_deterministic_unlike_stochastic_training_act():
     while `DQNAgent.act()` itself (epsilon=1 here, to make the
     contrast unambiguous) is genuinely stochastic across repeated
     calls with that same state/mask."""
-    stochastic_config = DQNConfig(epsilon_start=1.0, epsilon_end=1.0, epsilon_decay_steps=1, batch_size=4)
+    stochastic_config = DQNConfig(
+        epsilon_start=1.0, epsilon_end=1.0, epsilon_decay_steps=1, batch_size=4
+    )
     agent = DQNAgent(state_dim=_OFF_STATE_DIM, has_forecast=False, config=stochastic_config)
 
     state = _make_state()
@@ -145,7 +147,9 @@ def test_greedy_policy_is_deterministic_unlike_stochastic_training_act():
     assert len(greedy_actions) == 1  # deterministic: same state -> same action, every time
 
     stochastic_actions = {agent.act(state, mask) for _ in range(50)}
-    assert len(stochastic_actions) > 1  # genuinely stochastic under epsilon=1, unlike the greedy wrapper
+    assert (
+        len(stochastic_actions) > 1
+    )  # genuinely stochastic under epsilon=1, unlike the greedy wrapper
 
 
 def test_greedy_policy_never_mutates_agent_act_call_counter():

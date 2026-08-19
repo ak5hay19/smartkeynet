@@ -80,7 +80,9 @@ def test_update_smooths_rather_than_snapping_to_newest_value():
 
 
 def test_higher_alpha_reacts_faster_than_lower_alpha():
-    obs_sequence = [make_observation(threat_features=[0.0])] * 3 + [make_observation(threat_features=[10.0])]
+    obs_sequence = [make_observation(threat_features=[0.0])] * 3 + [
+        make_observation(threat_features=[10.0])
+    ]
 
     slow = MovingAverageForecaster(alpha=0.1)
     fast = MovingAverageForecaster(alpha=0.9)
@@ -93,7 +95,9 @@ def test_higher_alpha_reacts_faster_than_lower_alpha():
 
 def test_alpha_one_snaps_directly_to_latest_observation():
     forecaster = MovingAverageForecaster(alpha=1.0)
-    forecaster.update(make_observation(threat_features=[0.0], pool_fill=500.0, skr=20.0, hybrid_serves=4))
+    forecaster.update(
+        make_observation(threat_features=[0.0], pool_fill=500.0, skr=20.0, hybrid_serves=4)
+    )
 
     pool = forecaster.get_pool_forecast()
     assert pool.pool_level_hat[0] == pytest.approx(500.0)
@@ -135,8 +139,12 @@ def test_posture_probs_shift_toward_high_as_threat_score_rises():
 
 def test_pool_forecast_horizons_are_flat_held():
     forecaster = MovingAverageForecaster(alpha=0.4)
-    forecaster.update(make_observation(threat_features=[0.0], pool_fill=123.0, skr=45.0, hybrid_serves=2))
-    forecaster.update(make_observation(threat_features=[0.0], pool_fill=200.0, skr=50.0, hybrid_serves=3))
+    forecaster.update(
+        make_observation(threat_features=[0.0], pool_fill=123.0, skr=45.0, hybrid_serves=2)
+    )
+    forecaster.update(
+        make_observation(threat_features=[0.0], pool_fill=200.0, skr=50.0, hybrid_serves=3)
+    )
 
     pool = forecaster.get_pool_forecast()
     assert pool.pool_level_hat[0] == pool.pool_level_hat[1] == pool.pool_level_hat[2]

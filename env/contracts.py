@@ -22,9 +22,10 @@ and no forecaster logic. See:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Sequence, TypedDict
+from typing import TypedDict
 
 import numpy as np
 
@@ -131,7 +132,9 @@ class Request(TypedDict):
     service: str
     sensitivity_class: int  # SensitivityClass value
     pqc_capable: bool  # False => legacy endpoint; SERVE_CLASSICAL may be the only option
-    hybrid_mandatory: bool  # True => must eventually be served >= SERVE_HYBRID, or deferred (Hard Rule 9)
+    hybrid_mandatory: (
+        bool  # True => must eventually be served >= SERVE_HYBRID, or deferred (Hard Rule 9)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +160,9 @@ class StateDict(TypedDict):
 
     # --- threat (PLAN.md §4 state spec) ---
     threat_score: float
-    threat_forecast: Sequence[float]  # length k=5: next-k-step threat signal (Addition A threat head)
+    threat_forecast: Sequence[
+        float
+    ]  # length k=5: next-k-step threat signal (Addition A threat head)
     posture_probs: Sequence[float]  # length 4: {normal, elevated, high, critical}
 
     # --- QKD pool physics (env/pool_sim.py) ---
@@ -213,7 +218,9 @@ class ForecastObservation(TypedDict):
     pool_fill: float
     arrivals_per_class: Sequence[int]  # indexed by SensitivityClass
     hybrid_serves: int  # hybrid serves this step
-    threat_features: Sequence[float]  # raw network features -> LSTM threat head (RT-IoT2022-derived)
+    threat_features: Sequence[
+        float
+    ]  # raw network features -> LSTM threat head (RT-IoT2022-derived)
 
 
 @dataclass

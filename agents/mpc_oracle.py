@@ -74,7 +74,7 @@ class MPCOracle:
     env: Any = None
     horizon: int = HORIZON
 
-    def bind(self, env: Any) -> "MPCOracle":
+    def bind(self, env: Any) -> MPCOracle:
         """Attach the environment whose future this oracle may inspect.
 
         Separate from construction so the harness can build the policy before
@@ -163,9 +163,7 @@ class MPCOracle:
         # floor" cannot drift from the environment's.
         intensity = min(1.0, max_boost / self.env._MAX_THREAT_BOOST)
         future_posture = ThreatPosture(int(min(2, round(intensity * 2))))
-        future_floor = int(
-            PolicyTable().floor(sensitivity_class, future_posture)
-        )
+        future_floor = int(PolicyTable().floor(sensitivity_class, future_posture))
         return max(current_floor, future_floor)
 
     def _lifetime_cap(self) -> float:

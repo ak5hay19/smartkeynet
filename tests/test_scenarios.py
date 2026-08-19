@@ -15,9 +15,9 @@ import numpy as np
 import pytest
 import yaml
 
+from agents.baselines import StaticThresholdPolicy
 from env.contracts import Action, ThreatPosture
 from env.environment import SmartKeyNetEnv
-from agents.baselines import StaticThresholdPolicy
 from env.scenarios import (
     FloorChange,
     ScenarioError,
@@ -30,7 +30,7 @@ from env.scenarios import (
 
 def load_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     config_path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         config: dict[str, Any] = yaml.safe_load(f)
     for key, value in (overrides or {}).items():
         if isinstance(value, dict) and isinstance(config.get(key), dict):
@@ -415,7 +415,12 @@ def test_s6_raises_the_targeted_cohorts_floors_in_the_environment():
     """End-to-end: the scheduled cohorts see higher floors late in the
     episode than early, and untargeted cohorts do not."""
     config = load_config(
-        {"scenario": "S6", "scenario_steps": 2500, "use_foresight": "off", "request_source": "graph"}
+        {
+            "scenario": "S6",
+            "scenario_steps": 2500,
+            "use_foresight": "off",
+            "request_source": "graph",
+        }
     )
     env = SmartKeyNetEnv(config)
     state, info = env.reset(seed=0)
@@ -464,9 +469,9 @@ def test_ramped_window_builds_gradually_so_escalation_is_forecastable():
 
     assert window.intensity_at(499) == pytest.approx(0.0)
     assert window.intensity_at(500) == pytest.approx(0.0)
-    assert window.intensity_at(560) == pytest.approx(1.5, rel=0.02)   # halfway up
-    assert window.intensity_at(620) == pytest.approx(3.0)             # full intensity
-    assert window.intensity_at(800) == pytest.approx(3.0)             # sustained
+    assert window.intensity_at(560) == pytest.approx(1.5, rel=0.02)  # halfway up
+    assert window.intensity_at(620) == pytest.approx(3.0)  # full intensity
+    assert window.intensity_at(800) == pytest.approx(3.0)  # sustained
     assert window.intensity_at(1040) == pytest.approx(1.5, rel=0.02)  # ramping out
     assert window.intensity_at(1100) == pytest.approx(0.0)
 

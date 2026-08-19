@@ -34,7 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 def load_test_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     """Load the real `configs/default.yaml` and shallow-merge overrides --
     mirrors tests/test_environment.py's helper so nothing is hardcoded."""
-    with open(REPO / "configs" / "default.yaml", "r", encoding="utf-8") as f:
+    with open(REPO / "configs" / "default.yaml", encoding="utf-8") as f:
         config: dict[str, Any] = yaml.safe_load(f)
     if overrides:
         for key, value in overrides.items():
@@ -150,7 +150,9 @@ def test_each_term_sign(field_name, low, high, should_increase):
 def test_freshness_is_the_only_bonus():
     weights = default_weights()
     _, terms = compute_reward(
-        base_inputs(key_age_steps=0, qkd_keys_consumed=1, did_rekey=True, deferred_critical_steps=1),
+        base_inputs(
+            key_age_steps=0, qkd_keys_consumed=1, did_rekey=True, deferred_critical_steps=1
+        ),
         weights,
     )
     assert terms["freshness"] > 0.0

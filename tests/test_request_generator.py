@@ -123,7 +123,13 @@ def test_graph_is_deterministic_under_seed():
 
     def signature(graph):
         return sorted(
-            (u, v, attrs["sensitivity_class"], round(attrs["traffic_rate"], 9), attrs["pqc_capable"])
+            (
+                u,
+                v,
+                attrs["sensitivity_class"],
+                round(attrs["traffic_rate"], 9),
+                attrs["pqc_capable"],
+            )
             for u, v, attrs in graph.edges(data=True)
         )
 
@@ -332,7 +338,9 @@ def test_flood_target_carries_no_hybrid_mandatory_flows():
     source of hybrid-mandatory demand (that is S3's question)."""
     graph = build_tenant_graph(n_nodes=50, seed=0)
     telemetry_classes = {
-        attrs["sensitivity_class"] for _, _, attrs in graph.edges(data=True) if attrs["tenant"] == "telemetry"
+        attrs["sensitivity_class"]
+        for _, _, attrs in graph.edges(data=True)
+        if attrs["tenant"] == "telemetry"
     }
     assert max(telemetry_classes) < int(_HYBRID_MANDATORY_MIN_CLASS)
 

@@ -12,10 +12,15 @@ be comparable from day one, not bolted on after the agent looks good.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
+from datetime import UTC
+from pathlib import Path
 from typing import Any
 
 import numpy as np
+import yaml
 
 from agents.baselines import Policy
 from env.contracts import Action, KeyType
@@ -246,9 +251,9 @@ def run_scenario(
     total_served = sum(served_tier_counts)
     if total_served:
         served_tier_hist = tuple(count / total_served for count in served_tier_counts)
-        mean_served_tier = sum(
-            tier * count for tier, count in enumerate(served_tier_counts)
-        ) / total_served
+        mean_served_tier = (
+            sum(tier * count for tier, count in enumerate(served_tier_counts)) / total_served
+        )
     else:
         served_tier_hist = (0.0, 0.0, 0.0, 0.0)
         mean_served_tier = 0.0
@@ -285,3 +290,191 @@ def run_grid(
             for seed in seeds:
                 results.append(run_scenario(policy, scenario, config, seed))
     return results
+
+
+# ---------------------------------------------------------------------------
+# §S12 run plumbing: reproducibility metadata, the HR7 guard, results schema
+# ---------------------------------------------------------------------------
+
+MANDATORY_BASELINES: frozenset[str] = frozenset(
+    {"always_pqc", "always_hybrid", "static_threshold", "random"}
+)
+"""The four baselines PLAN.md Hard Rule 7 makes mandatory. §2.6 turns "we
+forgot the baselines" from a review item into an impossibility: the harness
+refuses to write a DQN results file unless all four are present in the same
+run, on the same scenarios and seeds."""
+
+
+class DirtyWorkingTreeError(Exception):
+    """Raised when a results run is attempted on uncommitted changes."""
+
+
+class MissingBaselinesError(Exception):
+    """Raised when DQN results would be written without the four mandatory
+    baselines (Hard Rule 7, spec §2.6)."""
+
+
+def _git(*args: str) -> str | None:
+    """Run a git command, returning None outside a repository."""
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=Path(__file__).resolve().parent.parent,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, ValueError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
+
+
+def git_sha() -> str | None:
+    return _git("rev-parse", "HEAD")
+
+
+def working_tree_is_dirty() -> bool:
+    status = _git("status", "--porcelain")
+    return bool(status)  # None (not a repo) is falsy: nothing to be dirty about
+
+
+def config_hash(config: dict[str, Any]) -> str:
+    """Stable SHA-256 over the fully-resolved config.
+
+    `sort_keys` and `default=str` make this stable across dict ordering and
+    across any non-JSON value that ends up in a config, so the same config
+    always hashes the same -- which is the entire point of recording it.
+    """
+    import hashlib
+
+    payload = json.dumps(config, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def build_meta(config: dict[str, Any], allow_dirty: bool = False) -> dict[str, Any]:
+    """Assemble `meta.json` (spec §3.3) and enforce the clean-tree rule.
+
+    §S12: the harness "writes `git_sha`, `config_hash`, package versions into
+    `meta.json`; refuses to run on a dirty working tree unless `--allow-dirty`".
+    Without this, a results directory cannot be traced back to the code that
+    produced it, and §S12's `test_run_is_reproducible_from_meta` has nothing to
+    re-run from.
+    """
+    import platform
+    import socket
+    from datetime import datetime
+
+    if working_tree_is_dirty() and not allow_dirty:
+        raise DirtyWorkingTreeError(
+            "refusing to write results from a dirty working tree -- the run could not "
+            "be reproduced from its recorded git_sha. Commit first, or pass "
+            "--allow-dirty to record results you accept are unreproducible."
+        )
+
+    package_versions: dict[str, str] = {}
+    for package in ("numpy", "torch", "networkx", "gymnasium", "pyyaml", "hypothesis"):
+        try:
+            import importlib.metadata as metadata
+
+            package_versions[package] = metadata.version(package)
+        except Exception:  # noqa: BLE001 - a missing optional package is not an error here
+            package_versions[package] = "absent"
+
+    return {
+        "git_sha": git_sha(),
+        "git_dirty": working_tree_is_dirty(),
+        "config_hash": config_hash(config),
+        "hostname": socket.gethostname(),
+        "platform": platform.platform(),
+        "python": platform.python_version(),
+        "package_versions": package_versions,
+        "wall_time_utc": datetime.now(UTC).isoformat(),
+    }
+
+
+def assert_baselines_present(policy_names: Iterable[str]) -> None:
+    """Hard Rule 7 guard (spec §2.6)."""
+    present = {name.lower() for name in policy_names}
+    if not any("dqn" in name for name in present):
+        return  # no agent results, nothing to guard
+    missing = sorted(MANDATORY_BASELINES - present)
+    if missing:
+        raise MissingBaselinesError(
+            f"refusing to write DQN results without the mandatory baselines: {missing}. "
+            "Hard Rule 7 requires the agent to be reported alongside all four, on the "
+            "same scenarios and seeds (spec §2.6)."
+        )
+
+
+def episode_row(result: ScenarioResult, policy: str, episode: int = 0) -> dict[str, Any]:
+    """One `episodes.jsonl` row in the exact §3.3 key order.
+
+    §3.3 calls these "fixed keys -- the dashboard, the plots and the report
+    table all read this and nothing else", which is only true if something
+    actually emits them.
+    """
+    metrics = result.episode_metrics
+    return {
+        "policy": policy,
+        "scenario": result.scenario,
+        "seed": result.seed,
+        "episode": episode,
+        "return": result.total_reward,
+        "p50_latency_ms": result.p50_latency_ms,
+        "p99_latency_ms": result.p99_latency_ms,
+        "regret_events": metrics.regret_events,
+        "deferred_critical_steps": metrics.deferred_critical_steps,
+        "pool_exhaustion_events": result.pool_exhaustion_events,
+        "pool_overflow_keys": result.pool_overflow_keys,
+        "rekeys_per_100_requests": metrics.rekeys_per_100_requests,
+        "forced_rekey_ratio": metrics.forced_rekey_ratio,
+        "discretionary_hybrid_serves": metrics.discretionary_hybrid_serves,
+        "floor_violations": result.floor_violations,
+        "mean_served_tier": result.mean_served_tier,
+        "served_tier_hist": list(result.served_tier_hist),
+        "reward_terms": dict(result.reward_terms),
+    }
+
+
+def write_run(
+    out_dir: str | Path,
+    results: dict[str, list[ScenarioResult]],
+    config: dict[str, Any],
+    allow_dirty: bool = False,
+) -> Path:
+    """Write a §3.3 results directory: `config.yaml`, `meta.json`,
+    `episodes.jsonl`.
+
+    Order matters: the HR7 baseline guard and the dirty-tree guard both run
+    *before* anything is written, so a refused run leaves no half-written
+    directory behind for someone to mistake for a real one.
+    """
+    assert_baselines_present(results.keys())
+    meta = build_meta(config, allow_dirty=allow_dirty)
+
+    directory = Path(out_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+
+    with open(directory / "config.yaml", "w", encoding="utf-8") as handle:
+        yaml.safe_dump(config, handle, sort_keys=True, default_flow_style=False)
+    with open(directory / "meta.json", "w", encoding="utf-8") as handle:
+        json.dump(meta, handle, indent=2, sort_keys=True)
+    with open(directory / "episodes.jsonl", "w", encoding="utf-8") as handle:
+        for policy, policy_results in results.items():
+            for episode, result in enumerate(policy_results):
+                handle.write(json.dumps(episode_row(result, policy, episode)) + "\n")
+
+    if any(row_has_violation(r) for policy_results in results.values() for r in policy_results):
+        raise AssertionError(
+            "a results row has floor_violations != 0 -- §3.3 requires zero in every row "
+            "for a masked policy, and CI fails the build on a nonzero value"
+        )
+    return directory
+
+
+def row_has_violation(result: ScenarioResult) -> bool:
+    return int(result.floor_violations) != 0

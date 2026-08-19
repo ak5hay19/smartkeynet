@@ -88,6 +88,13 @@ from env.contracts import ThreatPosture
 
 DEFAULT_CSV = Path("data/raw/rt_iot2022/RT_IOT2022.csv")
 
+_SHUFFLE_SEED_BASE = 90_210
+"""Fixed base for the per-posture shuffle seed. Any constant works; what
+matters is that it is a constant and that the per-posture offset is the
+posture's integer value, so the split is identical on every machine and every
+process. See the comment at its use site for the bug this replaced."""
+
+
 POSTURE_CLASSES: dict[ThreatPosture, tuple[str, ...]] = {
     ThreatPosture.CALM: ("Thing_Speak", "MQTT_Publish", "Wipro_bulb"),
     ThreatPosture.ELEVATED: (
@@ -193,7 +200,9 @@ class RTIoT2022ThreatSource:
         row = pool[self._rng.integers(0, len(pool))]
         return self._stats.standardise(row)
 
-    def sample_mixture(self, calm_weight: float, elevated_weight: float, high_weight: float) -> np.ndarray:
+    def sample_mixture(
+        self, calm_weight: float, elevated_weight: float, high_weight: float
+    ) -> np.ndarray:
         """Draw from a *mixture* of postures.
 
         This is what the environment actually calls. A real escalation is not
@@ -249,7 +258,21 @@ def _load_pools(
 
         # Shuffle before splitting: the file is grouped by class, so
         # contiguous rows are near-duplicates from the same capture segment.
-        shuffle_rng = np.random.default_rng(abs(hash(posture.name)) % (2**32))
+        # Seeded from the posture's ORDINAL, never from `hash(posture.name)`.
+        #
+        # Python randomises string hashing per process (PYTHONHASHSEED), so the
+        # previous form drew a different shuffle seed on every interpreter
+        # launch -- which meant the train/eval split of the threat data, and
+        # therefore every threat-driven number in this project, differed
+        # between runs of identical code with identical seeds. Two identical
+        # 300-step S3 rollouts produced 41 and 13 regret events.
+        #
+        # Nothing caught it: `test_seed_reproducibility` compares two envs
+        # inside ONE process, where the hash seed is fixed for the process's
+        # lifetime, so the property it checks was real but strictly weaker than
+        # the property that matters. The golden fixture caught it immediately,
+        # because a fixture is compared across processes by construction.
+        shuffle_rng = np.random.default_rng(_SHUFFLE_SEED_BASE + int(posture))
         shuffle_rng.shuffle(raw)
 
         cut = int(len(raw) * _TRAIN_FRACTION)
@@ -351,9 +374,7 @@ class ThreatScorer:
         return float(1.0 / (1.0 + np.exp(-(projection - self.midpoint) / self.scale)))
 
 
-def _fit_fisher(
-    negative: np.ndarray, positive: np.ndarray
-) -> tuple[np.ndarray, float, float]:
+def _fit_fisher(negative: np.ndarray, positive: np.ndarray) -> tuple[np.ndarray, float, float]:
     """Closed-form Fisher discriminant plus a sigmoid calibration."""
     mean_negative = negative.mean(axis=0)
     mean_positive = positive.mean(axis=0)
@@ -371,7 +392,7 @@ def _fit_fisher(
 
 
 def fit_graded_threat_scorer(
-    source: "RTIoT2022ThreatSource", n_samples: int = 4000
+    source: RTIoT2022ThreatSource, n_samples: int = 4000
 ) -> GradedThreatScorer:
     """Fit both discriminants on `source`'s TRAINING pools."""
     benign = np.array([source.sample(ThreatPosture.CALM) for _ in range(n_samples)])
@@ -391,7 +412,7 @@ def fit_graded_threat_scorer(
     )
 
 
-def fit_threat_scorer(source: "RTIoT2022ThreatSource", n_samples: int = 4000) -> ThreatScorer:
+def fit_threat_scorer(source: RTIoT2022ThreatSource, n_samples: int = 4000) -> ThreatScorer:
     """Fit the discriminant on `source`'s training pools.
 
     Benign = CALM class flows. Threat = ELEVATED and HIGH pooled, because the

@@ -228,7 +228,9 @@ def test_random_policy_roughly_uniform_over_legal_actions():
 
     expected = n / len(Action)
     for action, count in counts.items():
-        assert abs(count - expected) < expected * 0.2, f"{action} drawn {count}/{n} times, expected ~{expected}"
+        assert abs(count - expected) < expected * 0.2, (
+            f"{action} drawn {count}/{n} times, expected ~{expected}"
+        )
 
 
 def test_random_policy_single_legal_action_always_returned():
@@ -249,14 +251,18 @@ def test_random_policy_single_legal_action_always_returned():
 
 
 def test_reuses_a_fresh_key_instead_of_rekeying():
-    policy = StaticThresholdPolicy(pool_fill_threshold=0.5, rekey_age_frac=0.9, max_key_age=MAX_KEY_AGE)
+    policy = StaticThresholdPolicy(
+        pool_fill_threshold=0.5, rekey_age_frac=0.9, max_key_age=MAX_KEY_AGE
+    )
     mask = _mask(*list(Action))
     state = _dummy_state(pool_fill=1.0, key_age=0.1 * MAX_KEY_AGE)
     assert policy.act(state, mask) == Action.REUSE
 
 
 def test_rekeys_once_the_key_passes_the_age_fraction():
-    policy = StaticThresholdPolicy(pool_fill_threshold=0.5, rekey_age_frac=0.9, max_key_age=MAX_KEY_AGE)
+    policy = StaticThresholdPolicy(
+        pool_fill_threshold=0.5, rekey_age_frac=0.9, max_key_age=MAX_KEY_AGE
+    )
     mask = _mask(*list(Action))
 
     just_under = _dummy_state(pool_fill=1.0, key_age=0.9 * MAX_KEY_AGE - 1)
@@ -268,7 +274,9 @@ def test_rekeys_once_the_key_passes_the_age_fraction():
 
 def test_never_reuses_when_reuse_is_masked_however_fresh_the_key():
     """The mask always wins over the policy's own preference."""
-    policy = StaticThresholdPolicy(pool_fill_threshold=0.5, rekey_age_frac=0.9, max_key_age=MAX_KEY_AGE)
+    policy = StaticThresholdPolicy(
+        pool_fill_threshold=0.5, rekey_age_frac=0.9, max_key_age=MAX_KEY_AGE
+    )
     mask = _mask(Action.SERVE_PQC, Action.SERVE_HYBRID, Action.REKEY_NOW)
     state = _dummy_state(pool_fill=1.0, key_age=0.0)
     assert policy.act(state, mask) != Action.REUSE
@@ -316,7 +324,10 @@ def test_greedy_recommender_prefers_reuse_then_cheapest_tier():
     state = _dummy_state()
 
     assert policy.act(state, _mask(*list(Action))) == Action.REUSE
-    assert policy.act(state, _mask(Action.SERVE_CLASSICAL, Action.SERVE_HYBRID)) == Action.SERVE_CLASSICAL
+    assert (
+        policy.act(state, _mask(Action.SERVE_CLASSICAL, Action.SERVE_HYBRID))
+        == Action.SERVE_CLASSICAL
+    )
     assert policy.act(state, _mask(Action.SERVE_PQC, Action.SERVE_HYBRID)) == Action.SERVE_PQC
     # hybrid is the last resort: it is the only action that pays w_qkd
     assert policy.act(state, _mask(Action.SERVE_HYBRID)) == Action.SERVE_HYBRID

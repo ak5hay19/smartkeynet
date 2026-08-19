@@ -13,8 +13,8 @@ to cover it. It is never served below its floor.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 from env.contracts import Action, DeferredCriticalStep, RegretEvent, Request
 
@@ -72,6 +72,21 @@ class DeferralQueue:
             policy_floor=int(Action.SERVE_HYBRID),
             pool_fill_at_onset=pool_fill_at_onset,
         )
+
+    def sla_breaches(self, sla_max_steps: int) -> list[QueuedRequest]:
+        """Queued requests that have waited past the SLA.
+
+        §S2: "if r.wait_steps > sla_max_steps: emit sla_breach  # still NEVER
+        downgraded". A breach is a reportable availability failure, not a
+        licence to serve below the floor -- there is deliberately no code path
+        here that changes a request's floor or removes it from the queue.
+        """
+        return [queued for queued in self._queued if queued.steps_waited > sla_max_steps]
+
+    @property
+    def max_wait_steps(self) -> int:
+        """Longest wait currently in the queue (§S2 metrics list)."""
+        return max((queued.steps_waited for queued in self._queued), default=0)
 
     def tick(self, step: int) -> list[DeferredCriticalStep]:
         """Advance one step: age every queued request by one step.

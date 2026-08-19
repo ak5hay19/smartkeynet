@@ -138,9 +138,7 @@ def run_ablation(
 
             for agent in agents:
                 for seed in eval_seeds:
-                    result = run_scenario(
-                        GreedyDQNPolicy(agent), scenario, eval_config, seed=seed
-                    )
+                    result = run_scenario(GreedyDQNPolicy(agent), scenario, eval_config, seed=seed)
                     rewards.append(result.total_reward)
                     regrets.append(result.pool_exhaustion_events)
                     latencies.append(result.p99_latency)
@@ -177,7 +175,9 @@ def run_ablation(
     report["lstm_beats_off_on_s3_regret"] = bool(lstm_regret < off_regret)
     report["lstm_beats_ewma_on_s3_regret"] = bool(lstm_regret < ewma_regret)
 
-    print(f"  S3 regret events -- off {off_regret:.2f}  ewma {ewma_regret:.2f}  lstm {lstm_regret:.2f}")
+    print(
+        f"  S3 regret events -- off {off_regret:.2f}  ewma {ewma_regret:.2f}  lstm {lstm_regret:.2f}"
+    )
     print(
         "  Addition A success criterion (LSTM measurably reduces S3 regret vs off): "
         f"{'MET' if report['lstm_beats_off_on_s3_regret'] else 'NOT MET'}"

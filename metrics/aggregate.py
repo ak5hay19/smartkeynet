@@ -75,8 +75,7 @@ def bootstrap_ci(
 
     rng = np.random.default_rng(seed)
     resampled = [
-        statistic(rng.choice(array, size=array.size, replace=True))
-        for _ in range(n_resamples)
+        statistic(rng.choice(array, size=array.size, replace=True)) for _ in range(n_resamples)
     ]
     tail = (1.0 - confidence) / 2.0
     return Estimate(
@@ -106,7 +105,9 @@ def paired_difference(
         raise ValueError(
             f"paired comparison needs matching seed counts, got {array_a.shape} and {array_b.shape}"
         )
-    return bootstrap_ci(array_a - array_b, n_resamples=n_resamples, confidence=confidence, seed=seed)
+    return bootstrap_ci(
+        array_a - array_b, n_resamples=n_resamples, confidence=confidence, seed=seed
+    )
 
 
 def holm_bonferroni(p_values: list[float], alpha: float = 0.05) -> list[bool]:

@@ -1,0 +1,13 @@
+# configs/scenarios/s1.yaml
+#
+# Base config.
+#
+# Scenario mechanics live in `env/scenarios.py::build_scenario`, which is what
+# `configs/default.yaml`'s `scenario:` key selects. These per-scenario files
+# exist because SMARTKEYNET_BUILD_SPEC.md §3.1 lists them in the repo layout
+# and §S6 requires each scenario to be "config only, no new code". They layer
+# over `configs/default.yaml` -- merge, do not replace.
+#
+# train/eval: train
+scenario: S1
+eval_only: false

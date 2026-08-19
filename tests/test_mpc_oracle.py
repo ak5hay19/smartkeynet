@@ -8,11 +8,11 @@ produces the foresight-value gap the §7.1 diagnosis tree asks for.
 from __future__ import annotations
 
 import itertools
+from pathlib import Path
 
 import numpy as np
 import pytest
 import yaml
-from pathlib import Path
 
 from agents.mpc_oracle import HORIZON, MPCOracle
 from env.contracts import N_ACTIONS, Action
@@ -59,10 +59,10 @@ def test_cheating_is_confined_to_one_method():
     source = inspect.getsource(MPCOracle)
     total_env_reads = source.count("self.env.")
     audited = (
-        MPCOracle.peek_future,        # future demand and refill -- the cheat
+        MPCOracle.peek_future,  # future demand and refill -- the cheat
         MPCOracle.peek_future_floor,  # the floor the horizon will reach -- the cheat
-        MPCOracle._current_pool_keys, # present pool level, which causal policies see too
-        MPCOracle._lifetime_cap,      # the SP 800-57 cap, given to every policy
+        MPCOracle._current_pool_keys,  # present pool level, which causal policies see too
+        MPCOracle._lifetime_cap,  # the SP 800-57 cap, given to every policy
     )
     accounted = sum(inspect.getsource(method).count("self.env.") for method in audited)
     # Every environment access lives in one of three audited methods. `bind`

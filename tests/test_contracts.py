@@ -9,8 +9,8 @@ against.
 import numpy as np
 
 from env.contracts import (
-    Action,
     N_ACTIONS,
+    Action,
     Request,
     StateDict,
     valid_actions,

@@ -62,9 +62,7 @@ def test_graded_score_is_monotone_along_the_intrusion_lifecycle(scorer, train_so
     attack 0.873 -- indistinguishable -- which is why the scorer composes
     two discriminants rather than one."""
     means = {
-        posture: float(
-            np.mean([scorer.score(train_source.sample(posture)) for _ in range(400)])
-        )
+        posture: float(np.mean([scorer.score(train_source.sample(posture)) for _ in range(400)]))
         for posture in ThreatPosture
     }
     assert means[ThreatPosture.CALM] < means[ThreatPosture.ELEVATED]
@@ -80,9 +78,7 @@ def test_score_generalises_to_unseen_flows(scorer, train_source, eval_source):
         train_mean = float(
             np.mean([scorer.score(train_source.sample(posture)) for _ in range(400)])
         )
-        eval_mean = float(
-            np.mean([scorer.score(eval_source.sample(posture)) for _ in range(400)])
-        )
+        eval_mean = float(np.mean([scorer.score(eval_source.sample(posture)) for _ in range(400)]))
         assert abs(train_mean - eval_mean) < 0.1, f"{posture.name} does not generalise"
 
 
@@ -195,9 +191,7 @@ def test_real_features_drive_the_full_posture_progression():
     for _ in range(2300):
         mask = info["action_mask"]
         postures_seen.add(int(env._current_posture))
-        state, _r, _te, _tr, info = env.step(
-            Action(int(rng.choice(np.flatnonzero(mask))))
-        )
+        state, _r, _te, _tr, info = env.step(Action(int(rng.choice(np.flatnonzero(mask)))))
 
     assert postures_seen == {
         int(ThreatPosture.CALM),
@@ -213,9 +207,7 @@ def test_eval_split_never_samples_training_flows():
     from experiments.train import load_full_config
 
     config = load_full_config()
-    config.update(
-        {"threat_source": "rt_iot2022", "threat_split": "eval", "max_steps": 20}
-    )
+    config.update({"threat_source": "rt_iot2022", "threat_split": "eval", "max_steps": 20})
     env = SmartKeyNetEnv(config)
     env.reset(seed=0)
     assert env._threat_source.split == "eval"

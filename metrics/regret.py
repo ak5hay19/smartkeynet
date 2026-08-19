@@ -26,6 +26,16 @@ class EpisodeMetrics:
     rekeys_per_100_requests: float
     forced_rekey_ratio: float  # forced / total rekeys
     discretionary_hybrid_serves: int
+    max_wait_steps: int = 0
+    """Longest any single deferred request waited. A mean wait hides the
+    tail, and the tail is what an SLA is written against (§S2)."""
+    sla_breaches: int = 0
+    """Deferrals that waited past `sla_max_steps`. Reported because Hard Rule 9
+    trades a downgrade for a delay, and this is the size of that trade."""
+    attributed_fraction: float = 0.0
+    """`attributed_keys / regret_keys` -- how much of the episode's regret is
+    traceable to the agent's own discretionary spending, as opposed to the
+    environment simply not having enough key material (§S2)."""
 
 
 def compute_episode_metrics(
@@ -35,6 +45,9 @@ def compute_episode_metrics(
     total_rekeys: int,
     total_requests: int,
     discretionary_hybrid_serves: int,
+    max_wait_steps: int = 0,
+    sla_breaches: int = 0,
+    attributed_fraction: float = 0.0,
 ) -> EpisodeMetrics:
     """Aggregate one episode's event log into `EpisodeMetrics`.
 
@@ -44,9 +57,7 @@ def compute_episode_metrics(
     per queued request) -- these are deliberately different counters
     even though they're both driven by the same underlying deferrals.
     """
-    rekeys_per_100_requests = (
-        (total_rekeys / total_requests) * 100.0 if total_requests > 0 else 0.0
-    )
+    rekeys_per_100_requests = (total_rekeys / total_requests) * 100.0 if total_requests > 0 else 0.0
     forced_rekey_ratio = len(forced_rekeys) / total_rekeys if total_rekeys > 0 else 0.0
 
     return EpisodeMetrics(
@@ -54,6 +65,9 @@ def compute_episode_metrics(
         deferred_critical_steps=len(deferred_steps),
         rekeys_per_100_requests=rekeys_per_100_requests,
         forced_rekey_ratio=forced_rekey_ratio,
+        max_wait_steps=max_wait_steps,
+        sla_breaches=sla_breaches,
+        attributed_fraction=attributed_fraction,
         discretionary_hybrid_serves=discretionary_hybrid_serves,
     )
 
