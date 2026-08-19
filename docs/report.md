@@ -409,67 +409,86 @@ Worth recording, because both produced *confidently wrong* results:
 
 ---
 
-## 7. Experiment E-A — foresight costs availability
+## 7. Experiment E-A — foresight helps, once the world is forecastable
 
 ```bash
-.venv/bin/python -m experiments.ea_ablation --train-seeds 3 --eval-seeds 5
+.venv/bin/python -m experiments.ea_ablation --train-seeds 2 --eval-seeds 5
 ```
 
 Success criterion, set in advance: *LSTM foresight measurably reduces regret
 events on S3 versus `off`.*
 
-| `use_foresight` | S3 regret events | S3 reward |
-|---|---|---|
-| **off** | **317.2** | −1,835,846 |
-| ewma | 639.2 | −4,901,421 |
-| lstm | 682.7 | −5,623,790 |
+| `use_foresight` | S3 regret events | S3 reward | S6 regret events (held out) |
+|---|---|---|---|
+| off | 31.5 | −98,769 | **3.1** |
+| ewma | 37.6 | −56,920 | 1.0 |
+| **lstm** | **8.4** | **−5,825** | 16.9 |
 
-**NOT MET**, and by a wide margin in the wrong direction. This is the
-project's most interesting negative result, because the forecaster is not
-broken — it is *accurate*.
+**MET on S3**: the LSTM cuts regret events by **73%** against `off`.
 
-### The forecaster works. That is the problem.
+### This was a null result until the SKR process was fixed, and that is the finding
 
-Trained on real RT-IoT2022 flow features (§3A), the threat head reaches
-**0.976–0.989 balanced accuracy** — against 0.334 (exact chance for three
-classes) on the synthetic signal it was previously given. It genuinely
-detects reconnaissance and attack traffic.
+Earlier runs of this same ablation reported `off` and `ewma` as
+indistinguishable with the LSTM *worse* than both. The cause was not the model.
+It was that `SyntheticSKRQBERTrace` drew SKR **i.i.d. Gaussian** rather than as
+the log-space Ornstein–Uhlenbeck process the build spec specifies. An i.i.d.
+sequence has no temporal structure, so there was nothing for a pool-head
+forecaster to learn, and `test_beats_persistence_baseline` failed exactly as it
+should have.
 
-And detection is what costs us. The chain is short and entirely mechanical:
+Restoring the specified OU process took lag-1 autocorrelation of the SKR series
+from ≈0 to **0.79**, and the ablation reversed. The causal chain is short:
 
-1. The threat head correctly identifies elevated traffic.
-2. The policy table raises the floor for affected classes.
-3. `PolicyTable`'s ratchet is **one-way** — a raised floor never falls.
-4. More flows now require hybrid keys than the QKD link can fund.
-5. Requests are deferred rather than downgraded (Hard Rule 9), and deferral
-   is precisely what a regret event counts.
+1. i.i.d. supply → the best possible forecast is the mean → the LSTM's pool
+   head cannot beat persistence → foresight features carry no information →
+   E-A null.
+2. Mean-reverting supply with a ~50-step correlation time → a low-SKR drought
+   is *predictable several steps ahead* → the agent can stop spending before
+   the pool empties rather than after → 73% fewer deferrals.
 
-So better threat detection produces **more** regret events, not fewer. The
-security/availability tension is not a caveat here; it is the measurement.
+The honest reading is that **the earlier null result was a property of a
+mis-specified environment, not a finding about forecasting.** It is stated here
+rather than quietly replaced, because "our ablation was null" and "our ablation
+was null because our supply process had no autocorrelation" are very different
+claims, and only the second is true.
 
-### The single-false-positive result
+### Two caveats that stop this being oversold
 
-The sharpest illustration came from the benign baseline. On S1 with real
-traffic the instantaneous posture reads CALM on **1,199 of 1,200 steps** —
-one benign IoT flow has scan-like features and reads ELEVATED (threat score
-peaks at 0.277 against a 0.107 mean).
+**EWMA does not help — it is slightly worse than `off` (37.6 vs 31.5).** So the
+result is not "foresight helps"; it is "a *model* that captures the supply
+process's autocorrelation helps, and a moving average does not". That is a
+narrower claim than Addition A's framing, and it is the one the numbers support.
 
-That one step raises the floor **for the remainder of the episode**, because
-the ratchet has no downward path.
+**On the held-out S6 migration scenario the LSTM is markedly worse** (16.9
+regret events against 3.1 for `off`). S6 is eval-only by Hard Rule 8, so the
+forecaster has never seen migration dynamics, and its confident anticipation of
+a supply pattern that no longer applies actively hurts. A reviewer should read
+the S3 win as scenario-specific rather than general, and any deployment claim
+should be scoped to conditions resembling training.
 
-This is a direct consequence of the property that makes the architecture
-steering-proof. §6 shows suppression cannot walk a floor back down; the same
-one-way design means a lone false positive cannot be walked back either. The
-mechanism that defeats an adversary is the mechanism that amplifies a false
-alarm. Both follow from one line of the policy table, and an operator
-deploying this would need to know it.
+**Variance is high and the seed count is low.** Five evaluation seeds with a
+per-seed standard deviation of 9,576 on a mean of −5,825 is not enough to put a
+tight interval on the reward difference; the regret-event ordering is the
+robust part. §9.6 asks for 10 seeds on any number that reaches a final table,
+and this ablation has not yet been re-run at that width.
 
-A hysteresis window (require *k* consecutive elevated readings before
-ratcheting) would blunt the false-positive cost, at the price of delaying
-genuine escalations by *k* steps — and delay is exactly what a sustained
-suppression attack buys. That trade-off is stated rather than resolved: it
-depends on the relative cost of an unprotected window versus a starved one,
-which is an operator's judgement, not ours.
+### The security/availability tension is still real
+
+The mechanism described in earlier drafts has not gone away: the threat head is
+accurate, the policy table's ratchet is one-way, and better detection therefore
+raises floors that never fall. On S1 with real RT-IoT2022 traffic the
+instantaneous posture reads CALM on 1,199 of 1,200 steps — a single benign IoT
+flow with scan-like features reads ELEVATED and raises the floor for the rest
+of the episode.
+
+That is a direct consequence of the property that makes the architecture
+steering-proof: §6 shows suppression cannot walk a floor back down, and the
+same one-way door means a false positive cannot be walked back either. The
+difference now is that on a forecastable supply process the agent can *budget
+around* the raised floor instead of simply drowning under it, which is what the
+73% regret reduction measures.
+
+---
 
 ## 8. Answering the examiner
 
@@ -500,7 +519,73 @@ test-guarded.
 
 ---
 
-## 9. Limitations
+## 9. Three defects that invalidated earlier numbers
+
+Every number in the previous draft of this report was produced under at least
+the first of these. They are documented rather than silently corrected, because
+a reader's trust in the remaining numbers depends on knowing what was wrong and
+how it was found.
+
+### 9.1 Results were not reproducible across processes
+
+`env/threat_source.py` seeded the train/eval shuffle of the RT-IoT2022 feature
+pools with `abs(hash(posture.name))`. **Python randomises string hashing per
+process**, so that seed differed on every interpreter launch. Two identical
+300-step S3 rollouts — same code, same config, same seed — produced **41 and 13
+regret events**. `threat_source: rt_iot2022` is the default, so every
+threat-driven figure in the project was affected.
+
+*Why nothing caught it.* `test_seed_reproducibility` constructs two
+environments and compares their trajectories — but does so **inside one
+process**, where `PYTHONHASHSEED` is fixed for the process's lifetime. The
+property it checks is real and worth checking; it is simply strictly weaker
+than the property that matters for a reported result.
+
+*What caught it.* The golden fixture, on its first run — because a fixture is
+stored on disk and compared in a *later* process, which is precisely the
+comparison the in-process test cannot make. This is the argument for golden
+tests in one paragraph.
+
+*Fix.* Seeded from the posture's ordinal, plus an AST test
+(`test_no_string_hash_is_used_as_a_random_seed`) that fails if builtin `hash()`
+appears anywhere in library code.
+
+### 9.2 The event log under-reported regret by 41%
+
+The environment defers a request at two sites: when a hybrid-mandatory arrival
+cannot be covered, and when masking leaves no legal action. Only the first
+emitted the `defer_onset` event. Since §4.4 defines `defer_onset` as *being*
+the regret event, every log-based consumer — including the dashboard — saw 20
+events where the internal counter had 34.
+
+Also caught by the golden fixture, which cross-checks the two counters. There
+is now an explicit invariant test that they agree in both directions: too few
+means the log understates the headline metric, too many means the
+"once per request, not once per waiting step" miscount has returned.
+
+### 9.3 Gate W3 was scored on the wrong metric
+
+`experiments/gate_w3.py` both grid-searched the threshold baseline and ran its
+paired comparison on **total reward**. The build spec names **regret events**
+as W3's primary metric, and separately warns never to headline a scalar return
+because it is reward-function-specific and not comparable across agents with
+different reward functions.
+
+So the baseline was tuned for one objective and judged on another. The gate now
+selects and compares on regret events, checks the secondary constraints (p99
+latency and pool exhaustion within +10%), and reports reward as descriptive
+only.
+
+The same fix surfaced a second problem: the grid optimum sits at a **grid
+boundary** on both scenarios. The grid was extended past both edges, and the
+search now reports how many configurations *tie* on the primary metric —
+because an edge optimum among many ties means the parameter is unidentified,
+which is a different problem from a grid that is too narrow, and calls for a
+different remedy.
+
+---
+
+## 10. Limitations
 
 Stated plainly, because several are load-bearing:
 
@@ -533,7 +618,7 @@ Stated plainly, because several are load-bearing:
 
 ---
 
-## 10. Reproducing everything
+## 11. Reproducing everything
 
 ```bash
 python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
@@ -550,7 +635,7 @@ Results land in `results/*.json`; every table above reads from those files.
 
 ---
 
-## 11. Conclusion
+## 12. Conclusion
 
 The contribution that survives scrutiny is **security as constraint, not
 reward**, demonstrated against a live steering attack on a reproduced

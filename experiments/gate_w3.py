@@ -154,6 +154,7 @@ def tuned_threshold_for(
 
     best_policy: StaticThresholdPolicy | None = None
     best_key: tuple[float, float] | None = None
+    primary_scores: list[float] = []
 
     for tau in tau_grid:
         for c_min in c_min_grid:
@@ -176,11 +177,33 @@ def tuned_threshold_for(
                 mean_regret = float(np.mean([r.episode_metrics.regret_events for r in results]))
                 mean_reward = float(np.mean([r.total_reward for r in results]))
                 candidate_key = (-mean_regret, mean_reward)
+                primary_scores.append(mean_regret)
                 if best_key is None or candidate_key > best_key:
                     best_key, best_policy = candidate_key, candidate
 
     assert best_policy is not None
-    _warn_if_grid_optimum_is_on_an_edge(best_policy, tau_grid, c_min_grid, rho_grid, scenario)
+
+    # How many grid points tie on the primary metric? If most of them do, the
+    # parameter is UNIDENTIFIED rather than badly bounded, and "extend the
+    # grid" is the wrong remedy -- the metric simply cannot discriminate here.
+    # Distinguishing the two matters: an edge optimum among ties is not the
+    # HR7 problem §S7 test 4 is warning about, and reporting it as one would
+    # be misleading in the opposite direction.
+    best_primary = min(primary_scores) if primary_scores else 0.0
+    n_tied = sum(1 for score in primary_scores if score == best_primary)
+    print(
+        f"  grid: {n_tied}/{len(primary_scores)} configurations tie at the best "
+        f"regret score ({best_primary:.1f})"
+    )
+    if n_tied > len(primary_scores) // 2:
+        print(
+            "  NOTE: the primary metric does not discriminate between most grid points "
+            "on this scenario, so the selected parameters are effectively arbitrary "
+            "among the tied set (chosen by the reward tiebreak). Report the tie, not a "
+            "tuned value."
+        )
+    else:
+        _warn_if_grid_optimum_is_on_an_edge(best_policy, tau_grid, c_min_grid, rho_grid, scenario)
     return best_policy
 
 

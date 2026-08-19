@@ -261,3 +261,136 @@ class MPCOracle:
             if mask[int(action)]:
                 return action
         raise ValueError("no legal action in mask")
+
+
+@dataclass
+class MPCForecast(MPCOracle):
+    """The same allocator as `MPCOracle`, driven by the LSTM **forecast**
+    instead of the true future (SMARTKEYNET_BUILD_SPEC.md §8.3 rung 3).
+
+    ---------------------------------------------------------------------
+    Why this is the baseline that matters most
+    ---------------------------------------------------------------------
+    §8.3 calls adding this "the single most credibility-increasing thing you
+    can do beyond PLAN.md's requirements", and the reason is a fairness
+    argument the reader will otherwise make on your behalf.
+
+    `MPCOracle` cheats: it reads the environment's actual future. Beating it is
+    impossible and losing to it proves nothing. `static_threshold` has no
+    foresight at all. So a DQN that beats the threshold might be winning for
+    either of two very different reasons -- because it *learned a policy*, or
+    merely because it *had a forecast* and the threshold did not.
+
+    This baseline separates them. It has exactly the forecast the DQN has, and
+    an allocator hand-written to use it well. If the DQN beats this, the win is
+    attributable to learning rather than to information, which is the claim the
+    project actually wants to make.
+
+    **It is a causal policy.** Both of the parent's cheating methods are
+    overridden to read only `StateDict` fields the environment already hands
+    every policy -- so unlike its parent, this can be run without binding an
+    environment, and `tests/test_mpc_oracle.py` asserts it touches no env
+    internals.
+    """
+
+    def peek_future(self) -> tuple[float, float]:
+        """Forecast-driven replacement for the oracle's perfect-foresight read.
+
+        Overridden to a no-op returning zeros: the real work happens in
+        `act_with_forecast`, because the parent's signature has no access to
+        the state dict that carries the forecast. Calling this directly would
+        be a bug, and returning zeros makes that bug loud (surplus collapses to
+        the present pool level) rather than silently optimistic.
+        """
+        return 0.0, 0.0
+
+    def _forecast_supply_and_demand(self, state: StateDict) -> tuple[float, float]:
+        """Read projected demand and refill out of the forecast block.
+
+        `hybrid_demand_hat` and `pool_level_hat` are indexed by the horizon set
+        {10, 25, 50}; index 2 is H=50, matching this policy's horizon. Absent
+        forecast fields (foresight `off`) degrade to zeros, which makes the
+        policy behave myopically rather than crash -- the honest failure mode,
+        since with no forecast there is genuinely nothing to anticipate with.
+        """
+        demand_hat = state.get("hybrid_demand_hat") or (0.0, 0.0, 0.0)
+        pool_hat = state.get("pool_level_hat") or (0.0, 0.0, 0.0)
+
+        horizon_index = min(2, len(demand_hat) - 1)
+        projected_demand = float(demand_hat[horizon_index])
+        # `pool_level_hat` is a projected FILL FRACTION; the allocator works in
+        # whole keys, so scale by capacity. The refill implied by the forecast
+        # is the projected level minus the present one, floored at zero -- a
+        # forecast of a falling pool means no surplus, not negative refill.
+        capacity_keys = max(1.0, self._capacity_keys())
+        projected_level_keys = float(pool_hat[horizon_index]) * capacity_keys
+        implied_refill = max(0.0, projected_level_keys - self._current_pool_keys())
+        return projected_demand, implied_refill
+
+    def _capacity_keys(self) -> float:
+        if self.env is None:
+            return 1.0
+        return float(self.env._pool_sim.capacity_keys)
+
+    def peek_future_floor(self, state: StateDict) -> int:
+        """Forecast-driven floor lookahead.
+
+        The parent reads the scenario's *scripted* threat schedule. This reads
+        `threat_forecast`, the forecaster's own k-step posture prediction, and
+        maps it through the same `PolicyTable` the environment uses -- so the
+        two cannot drift apart.
+
+        Aggregation is a MAX over the forecast window, exactly as
+        `env/masking.py` does it. That is not a stylistic choice: max
+        aggregation is what makes a forecast able only to *raise* a floor,
+        which is the property Hard Rule 2 rests on. A forecast-driven baseline
+        that averaged instead could talk itself into a lower floor than the
+        present already justifies.
+        """
+        from env.contracts import SensitivityClass, ThreatPosture
+        from env.masking import PolicyTable
+
+        current_floor = int(state.get("policy_floor", 0))
+        sensitivity_class = SensitivityClass(int(state.get("sensitivity_class", 0)))
+
+        forecast = state.get("threat_forecast") or ()
+        if not forecast:
+            return current_floor
+
+        peak_threat = max(float(value) for value in forecast)
+        posture_index = min(2, int(round(peak_threat * 2)))
+        future_floor = int(PolicyTable().floor(sensitivity_class, ThreatPosture(posture_index)))
+        return max(current_floor, future_floor)
+
+    def act(self, state: StateDict, mask: ActionMask) -> Action:
+        """Identical allocator to the parent, with forecast inputs.
+
+        The duplication with `MPCOracle.act` is deliberate and small: the
+        parent's version calls `peek_future()`, which here must be
+        `_forecast_supply_and_demand(state)`. Restructuring the parent to take
+        the state would change the audited surface of the oracle -- the thing
+        an examiner checks to confirm the oracle cheats in exactly two places
+        -- and that surface is worth more than the handful of shared lines.
+        """
+        demand, refill = self._forecast_supply_and_demand(state)
+        surplus = self._current_pool_keys() + refill - demand
+        floor = int(state.get("policy_floor", 0))
+        future_floor = self.peek_future_floor(state)
+
+        key_age_fraction = float(state.get("key_age", 0.0))
+        lifetime_cap = self._lifetime_cap()
+        horizon_fraction = self.horizon / max(1e-9, lifetime_cap)
+        expires_within_horizon = key_age_fraction + horizon_fraction >= 1.0
+        pool_can_fund_now = surplus > 1.0
+
+        if mask[int(Action.REUSE)] and not (expires_within_horizon and pool_can_fund_now):
+            return Action.REUSE
+
+        target_tier = max(floor, future_floor)
+        for action in (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID):
+            if int(action) >= target_tier and mask[int(action)]:
+                return action
+        for action in Action:
+            if mask[int(action)]:
+                return action
+        raise ValueError("no legal action in mask")

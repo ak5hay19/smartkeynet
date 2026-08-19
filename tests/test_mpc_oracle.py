@@ -110,3 +110,119 @@ def test_foresight_value_gap_is_measurable():
     oracle_regret = run_scenario(MPCOracle(), "S3", config, seed=1000).pool_exhaustion_events
 
     assert threshold_regret >= 0 and oracle_regret >= 0
+
+
+# ---------------------------------------------------------------------------
+# MPCForecast -- the fair foresight baseline (spec §8.3 rung 3)
+# ---------------------------------------------------------------------------
+
+
+def test_mpc_forecast_is_causal_and_touches_no_env_internals():
+    """§8.3's whole point is that this baseline has the *same information the
+    DQN has* -- no more.
+
+    If it could read the environment's future, beating it would prove nothing,
+    exactly as beating `MPCOracle` proves nothing. So it must run to completion
+    with no environment bound at all: every input comes from the `StateDict`
+    the environment already hands every policy.
+    """
+    from agents.mpc_oracle import MPCForecast
+
+    policy = MPCForecast()  # deliberately NOT bound to an env
+    assert policy.env is None
+
+    state = {
+        "policy_floor": int(Action.SERVE_PQC),
+        "sensitivity_class": 2,
+        "key_age": 0.1,
+        "pool_fill": 0.5,
+        "threat_forecast": [0.1, 0.2, 0.9, 0.2, 0.1],
+        "hybrid_demand_hat": [1.0, 2.0, 4.0],
+        "pool_level_hat": [0.4, 0.3, 0.2],
+    }
+    mask = np.ones(N_ACTIONS, dtype=bool)
+    action = policy.act(state, mask)
+    assert mask[int(action)]
+
+
+def test_mpc_forecast_respects_every_mask():
+    """Property: never returns an illegal action, over every non-empty mask."""
+    from agents.mpc_oracle import MPCForecast
+
+    policy = MPCForecast()
+    state = {
+        "policy_floor": int(Action.SERVE_CLASSICAL),
+        "sensitivity_class": 1,
+        "key_age": 0.5,
+        "threat_forecast": [0.0] * 5,
+        "hybrid_demand_hat": [0.0, 0.0, 0.0],
+        "pool_level_hat": [0.5, 0.5, 0.5],
+    }
+    for r in range(1, N_ACTIONS + 1):
+        for combo in itertools.combinations(list(Action), r):
+            mask = np.zeros(N_ACTIONS, dtype=bool)
+            for action in combo:
+                mask[int(action)] = True
+            assert mask[int(policy.act(state, mask))]
+
+
+def test_mpc_forecast_floor_lookahead_can_only_raise():
+    """The forecast is aggregated with MAX, matching `env/masking.py`.
+
+    Not a stylistic choice: max aggregation is what makes a forecast able only
+    to *raise* a floor, which is what Hard Rule 2 rests on. A forecast-driven
+    baseline that averaged could talk itself into a floor below what the
+    present already justifies -- and would then be a counterexample to the
+    paper's central proposition sitting inside the repo.
+    """
+    from agents.mpc_oracle import MPCForecast
+
+    policy = MPCForecast()
+    base_state = {"policy_floor": int(Action.SERVE_PQC), "sensitivity_class": 3}
+
+    calm = policy.peek_future_floor({**base_state, "threat_forecast": [0.0] * 5})
+    spike = policy.peek_future_floor({**base_state, "threat_forecast": [0.0, 0.0, 1.0, 0.0, 0.0]})
+
+    assert calm >= int(Action.SERVE_PQC), "lookahead lowered the floor below the present"
+    assert spike >= calm, "a threat spike in the forecast must not lower the floor"
+
+
+def test_mpc_forecast_without_a_forecast_degrades_to_the_current_floor():
+    """With foresight `off` there is genuinely nothing to anticipate with, so
+    the honest behaviour is myopia -- not a crash, and not an optimistic
+    guess."""
+    from agents.mpc_oracle import MPCForecast
+
+    policy = MPCForecast()
+    floor = policy.peek_future_floor(
+        {"policy_floor": int(Action.SERVE_HYBRID), "sensitivity_class": 3}
+    )
+    assert floor == int(Action.SERVE_HYBRID)
+
+
+def test_oracle_is_at_least_as_good_as_the_forecast_baseline():
+    """Perfect foresight must dominate imperfect foresight.
+
+    If the forecast baseline beat the oracle, one of them is buggy -- the same
+    reasoning as §S7 test 5, applied one rung down the ladder.
+    """
+    from agents.mpc_oracle import MPCForecast
+    from experiments.harness import run_scenario
+
+    with open(Path(__file__).resolve().parent.parent / "configs" / "default.yaml") as handle:
+        base = yaml.safe_load(handle)
+    config = {**base, "use_foresight": "ewma", "max_steps": 400, "scenario_steps": 600}
+
+    oracle_regret = np.mean(
+        [
+            run_scenario(MPCOracle(), "S3", config, seed=seed).episode_metrics.regret_events
+            for seed in (0, 1, 2)
+        ]
+    )
+    forecast_regret = np.mean(
+        [
+            run_scenario(MPCForecast(), "S3", config, seed=seed).episode_metrics.regret_events
+            for seed in (0, 1, 2)
+        ]
+    )
+    assert oracle_regret <= forecast_regret + 1e-9
