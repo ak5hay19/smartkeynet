@@ -164,7 +164,8 @@ class ThreatFeatureStats:
     std: np.ndarray
 
     def standardise(self, raw: np.ndarray) -> np.ndarray:
-        return (raw - self.mean) / self.std
+        standardised: np.ndarray = (np.asarray(raw, dtype=np.float64) - self.mean) / self.std
+        return standardised
 
 
 class RTIoT2022ThreatSource:

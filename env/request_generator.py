@@ -230,7 +230,7 @@ def build_tenant_graph(
     n_nodes: int = 10,
     seed: int | None = None,
     total_arrival_rate: float = _ARRIVAL_RATE_PER_STEP,
-) -> nx.Graph:
+) -> nx.Graph[int]:
     """Build the synthetic tenant/service graph (PLAN.md "Datasets &
     Provenance" -> "Tenant graph" row: NetworkX synthetic, documented
     generator).
@@ -275,7 +275,7 @@ def build_tenant_graph(
         )
 
     rng = np.random.default_rng(seed)
-    graph = nx.Graph()
+    graph: nx.Graph[int] = nx.Graph()
 
     # 1. nodes, round-robin across tenants
     nodes_by_tenant: dict[str, list[int]] = {profile.name: [] for profile in _TENANT_PROFILES}
@@ -380,7 +380,7 @@ def _stratified_classes(
     return classes
 
 
-def _assert_graph_is_consistent(graph: nx.Graph) -> None:
+def _assert_graph_is_consistent(graph: nx.Graph[int]) -> None:
     """Generation-time invariants (SMARTKEYNET_BUILD_SPEC.md §S3's
     "Consistency assertion at generation time"). Raises `ValueError`
     rather than `assert` so the check survives `python -O`."""
@@ -422,7 +422,7 @@ class RequestGenerator:
 
     def __init__(
         self,
-        graph: nx.Graph,
+        graph: nx.Graph[int],
         seed: int | None = None,
         tenant_flood: TenantFlood | None = None,
     ) -> None:

@@ -156,7 +156,8 @@ class QNetwork(nn.Module):
     def forward(self, state: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         features = self.trunk(state)
         if not self.dueling:
-            return self.head(features)
+            plain_q: torch.Tensor = self.head(features)
+            return plain_q
 
         value = self.value_head(features)
         advantage = self.advantage_head(features)
@@ -168,7 +169,8 @@ class QNetwork(nn.Module):
             legal_count = legal.sum(dim=1, keepdim=True).clamp(min=1.0)
             advantage_mean = (advantage * legal).sum(dim=1, keepdim=True) / legal_count
 
-        return value + advantage - advantage_mean
+        dueling_q: torch.Tensor = value + advantage - advantage_mean
+        return dueling_q
 
 
 # ---------------------------------------------------------------------------
@@ -770,7 +772,7 @@ class DQNAgent:
             loss = (per_sample_loss * per_weights).mean()
 
         self.optimizer.zero_grad()
-        loss.backward()
+        loss.backward()  # type: ignore[no-untyped-call]
         if self.config.grad_clip_norm > 0:
             nn.utils.clip_grad_norm_(self.q_network.parameters(), self.config.grad_clip_norm)
         self.optimizer.step()

@@ -184,7 +184,7 @@ class MPCOracle:
         policy sees this too, via `state["pool_fill"]`."""
         if self.env is None:
             return 0.0
-        return self.env._pool_sim.fill / self.env._bits_per_hybrid_draw
+        return float(self.env._pool_sim.fill / self.env._bits_per_hybrid_draw)
 
     def act(self, state: StateDict, mask: ActionMask) -> Action:
         demand, refill = self.peek_future()

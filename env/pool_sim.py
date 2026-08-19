@@ -444,7 +444,8 @@ def load_pool_config(path: str | Path | None = None) -> dict[str, float]:
         path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
     with open(path, encoding="utf-8") as f:
         config: dict[str, Any] = yaml.safe_load(f)
-    return config["pool"]
+    pool_config: dict[str, float] = config["pool"]
+    return pool_config
 
 
 def load_qkd_config(path: str | Path | None = None) -> dict[str, float]:
@@ -461,7 +462,8 @@ def load_qkd_config(path: str | Path | None = None) -> dict[str, float]:
         path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
     with open(path, encoding="utf-8") as f:
         config: dict[str, Any] = yaml.safe_load(f)
-    return config["qkd"]
+    qkd_config: dict[str, float] = config["qkd"]
+    return qkd_config
 
 
 @dataclass(frozen=True)
@@ -693,7 +695,7 @@ class SyntheticSKRQBERTrace:
             return 0.0 if qber >= self.qber_abort else 1.0
         excess = max(0.0, qber - self.baseline_qber)
         surviving_fraction = float(np.clip(1.0 - excess / headroom, 0.0, 1.0))
-        return surviving_fraction**self.gate_kappa
+        return float(surviving_fraction**self.gate_kappa)
 
     def _ou_log_mean(self) -> float:
         """`mu_x` for the log-space OU process, log-normal corrected.

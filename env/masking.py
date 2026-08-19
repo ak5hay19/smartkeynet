@@ -39,7 +39,8 @@ def load_key_lifetime_config(path: str | Path | None = None) -> dict[str, float]
         path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
     with open(path, encoding="utf-8") as f:
         config: dict[str, Any] = yaml.safe_load(f)
-    return config["key_lifetime"]
+    key_lifetime: dict[str, float] = config["key_lifetime"]
+    return key_lifetime
 
 
 # ---------------------------------------------------------------------------

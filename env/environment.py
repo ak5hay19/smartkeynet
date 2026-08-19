@@ -166,7 +166,13 @@ from env.contracts import (
 from env.deferral_queue import DeferralQueue
 from env.forecast_provider import MovingAverageForecaster
 from env.masking import PolicyTable, compute_mask, effective_floor_for
-from env.pool_sim import PoolSim, SyntheticSKRQBERTrace, TraceSKRQBERSource
+from env.pool_sim import (
+    PoolSim,
+    PoolState,
+    SKRQBERTrace,
+    SyntheticSKRQBERTrace,
+    TraceSKRQBERSource,
+)
 from env.request_generator import (
     RequestGenerator,
     build_tenant_graph,
@@ -270,7 +276,7 @@ _ACTION_TO_KEY_TYPE: dict[Action, KeyType] = {
 _KEY_TYPE_TO_SERVE_ACTION: dict[KeyType, Action] = {v: k for k, v in _ACTION_TO_KEY_TYPE.items()}
 
 
-class SmartKeyNetEnv(gym.Env):
+class SmartKeyNetEnv(gym.Env[StateDict, int]):
     """The MDP (PLAN.md §4). One agent, one MDP (Hard Rule 3).
 
     `config` selects the scenario (S1-S6, PLAN.md §5) and the
@@ -391,12 +397,20 @@ class SmartKeyNetEnv(gym.Env):
                 "expected 'synthetic' or 'rt_iot2022'"
             )
 
-        # Populated fresh by reset(); typed here for clarity.
-        self._pool_sim: PoolSim | None = None
-        self._deferral_queue: DeferralQueue | None = None
-        self._policy_table: PolicyTable | None = None
+        # Populated fresh by reset(). DECLARED, not assigned: these have no
+        # meaningful pre-reset value, so binding them to None would force every
+        # one of the ~40 use sites to narrow a type that is never actually
+        # None in practice. Touching one before `reset()` now raises
+        # AttributeError naming the attribute, which is a better error than an
+        # `AttributeError: 'NoneType' object has no attribute ...` anyway.
+        # `step()` and `action_mask()` still guard explicitly via
+        # `_current_mask`, which IS legitimately None before the first reset.
+        self._pool_sim: PoolSim
+        self._deferral_queue: DeferralQueue
+        self._policy_table: PolicyTable
+        self._request_stream: Iterator[Request]
+        self._last_pool_state: PoolState
         self._forecaster: ForecastProvider | None = None
-        self._request_stream: Iterator[Request] | None = None
         self._peeked_arrival: Request | None = None
 
         self._sessions: dict[tuple[str, str], _SessionKeyState] = {}
@@ -422,7 +436,7 @@ class SmartKeyNetEnv(gym.Env):
         self._last_threat_score: float = 0.0
         self._latency_sum = 0.0
         self._latency_count = 0
-        self._latency_samples = []
+        self._latency_samples: list[float] = []
         self._served_tier_counts = [0] * N_ACTIONS
         self._reward_terms_accum = {
             "latency": 0.0,
@@ -437,7 +451,6 @@ class SmartKeyNetEnv(gym.Env):
         self._arrivals_per_class_accum: list[int] = [0] * len(SensitivityClass)
         self._hybrid_serves_accum = 0
         self._last_regret_step: int | None = None
-        self._last_pool_state = None
 
         self._current_request: Request | None = None
         self._current_posture: ThreatPosture = ThreatPosture.CALM
@@ -486,13 +499,13 @@ class SmartKeyNetEnv(gym.Env):
         # training down by reaching into the env.
         self._episode_index = getattr(self, "_episode_index", -1) + 1
         self._event_log = EventLog(episode=self._episode_index)
-        self._pool_keys_before_refill: int | None = None
-        self._resolved_waits: dict[str, int] = {}
+        self._pool_keys_before_refill = None
+        self._resolved_waits = {}
         # One `floor_change` per cohort per episode, not one per request that
         # happens to hit the raised floor -- the event describes the schedule
         # firing, not each consequence of it.
-        self._floor_changes_logged: set[str] = set()
-        self._last_threat_score: float = 0.0
+        self._floor_changes_logged = set()
+        self._last_threat_score = 0.0
         self._latency_sum = 0.0
         self._latency_count = 0
         self._latency_samples = []
@@ -526,7 +539,9 @@ class SmartKeyNetEnv(gym.Env):
         }
         return state, info
 
-    def step(self, action: Action) -> tuple[StateDict, float, bool, bool, dict[str, Any]]:
+    def step(  # type: ignore[override]  # narrows gym.Env's `int` to `Action`
+        self, action: Action
+    ) -> tuple[StateDict, float, bool, bool, dict[str, Any]]:
         """Gymnasium-standard step.
 
         info must include the current action_mask (masked-env
@@ -697,7 +712,7 @@ class SmartKeyNetEnv(gym.Env):
             "low_rate_multiplier": raw["low_rate_multiplier"],
         }
 
-    def _build_trace(self, episode_seed: int) -> SyntheticSKRQBERTrace:
+    def _build_trace(self, episode_seed: int) -> SKRQBERTrace:
         """Construct the SKR/QBER trace for this episode, applying the
         scenario's QBER drift schedule if it has one (S3).
 
@@ -1016,6 +1031,10 @@ class SmartKeyNetEnv(gym.Env):
         elevated_weight = 1.0 - abs(2.0 * intensity - 1.0)
         high_weight = max(0.0, 2.0 * intensity - 1.0)
 
+        if self._threat_source is None or self._threat_scorer is None:
+            raise RuntimeError(
+                "threat_source: rt_iot2022 was selected but the source failed to load"
+            )
         sampled = self._threat_source.sample_mixture(calm_weight, elevated_weight, high_weight)
         threat_score = self._threat_scorer.score(sampled)
         return [float(value) for value in sampled] + [threat_score]
@@ -1315,9 +1334,20 @@ class SmartKeyNetEnv(gym.Env):
         current_tier = _KEY_TYPE_TO_SERVE_ACTION[session.key_type]
         return Action(max(int(current_tier), int(floor)))
 
-    def _apply_action(self, action: Action) -> tuple[float, dict[str, Any]]:
+    def _apply_action(self, action: Action) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Apply one action and report its PHYSICAL outcome.
+
+        Returns `(outcome, info)`, not `(reward, info)` -- the annotation said
+        `tuple[float, ...]` until 2026-08-19, left stale by the Hard Rule 1
+        refactor that moved reward arithmetic out of this method. `step()`
+        turns the outcome into a `RewardInputs` and calls `env/reward.py`.
+        """
         request = self._current_request
+        if request is None:
+            raise RuntimeError("_apply_action called with no request in flight")
         floor = self._current_floor
+        if floor is None:
+            raise RuntimeError("_apply_action called with no floor resolved for the request")
         reuse_masked_due_to_age = self._current_reuse_masked_due_to_age
         tenant_service = (request["tenant"], request["service"])
         session = self._sessions[tenant_service]
@@ -1340,9 +1370,14 @@ class SmartKeyNetEnv(gym.Env):
         # (design decision 11).
         keys_consumed = bits_consumed / self._bits_per_hybrid_draw
 
-        cost_action = (
-            _KEY_TYPE_TO_SERVE_ACTION[new_key_type] if action is Action.REKEY_NOW else action
-        )
+        if action is Action.REKEY_NOW:
+            # REKEY_NOW is a meta action: it costs whatever tier it actually
+            # re-established at, which `_resulting_key_type` has just decided.
+            if new_key_type is None:
+                raise RuntimeError("REKEY_NOW resolved to no key type")
+            cost_action = _KEY_TYPE_TO_SERVE_ACTION[new_key_type]
+        else:
+            cost_action = action
         latency_ms = _LATENCY_MS[cost_action]
         energy_mj = _ENERGY_MJ[cost_action]
 

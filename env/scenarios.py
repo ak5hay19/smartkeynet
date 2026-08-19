@@ -346,7 +346,7 @@ def build_scenario(name: str, config: dict[str, Any], episode_steps: int) -> Sce
         raw_schedule = config.get("migration_schedule") or _DEFAULT_MIGRATION_SCHEDULE
         schedule = tuple(
             FloorChange(
-                step=int(entry["step"]),
+                step=int(str(entry["step"])),
                 tenant_cohort=str(entry["tenant_cohort"]),
                 new_floor=Action[str(entry["new_floor"])],
             )
