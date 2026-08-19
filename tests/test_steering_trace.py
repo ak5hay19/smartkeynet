@@ -141,9 +141,13 @@ def test_the_masked_reward_cannot_see_the_threat_signal():
     this is the test that keeps the headline claim true."""
     import inspect
 
-    from env import environment
+    from env import reward as reward_module
 
-    reward_source = inspect.getsource(environment.SmartKeyNetEnv._apply_action)
+    # Scan the reward module itself, not the environment method that used to
+    # contain the arithmetic. Since 2026-08-19 the reward is a pure function of
+    # `RewardInputs`, so this is a check on the whole of the reward -- not on
+    # one method that happened to hold it.
+    reward_source = inspect.getsource(reward_module.compute_reward)
     for forbidden in ("threat", "posture", "security", "risk"):
         assert forbidden not in reward_source.lower(), (
             f"'{forbidden}' appears in the reward computation -- Hard Rule 1 violated"

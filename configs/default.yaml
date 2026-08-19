@@ -107,7 +107,33 @@ pool:
 #     explicitly permits this "if the generation procedure is stated +
 #     rate ranges cited"). ---
 qkd:
-  mean_skr_kbps: 0.025  # CALIBRATED, not looked up -- see the arithmetic above. Published CV-QKD
+  mean_skr_kbps: 0.10
+  # RECALIBRATED 2026-08-19 from 0.025 (SMARTKEYNET_BUILD_SPEC.md §7.1 fix A,
+  # which ranks supply/demand knobs as legitimate design and asks for every
+  # choice to be documented).
+  #
+  # WHY. At 0.025 kbps (0.098 keys/step) the environment was in *permanent*
+  # deficit, not intermittent scarcity: the deferral queue grew monotonically
+  # to 303 and never drained, the pool sat empty 85% of the time, and a random
+  # policy drew zero keys across a whole episode. The consequence showed up
+  # the moment per-term reward logging was added (spec §S5 point 1): the
+  # `starve` term was 99.5% of total reward magnitude and every other term was
+  # under 2%, so the reward had collapsed into a single function of queue
+  # backlog. That failed the spec's own §S5 point 3 balance rule, and it
+  # explains the project's negative results -- with an empty pool there is
+  # nothing to budget, which is why the measured foresight-value gap was only
+  # 4% against the >10% the spec requires for Gate W3 to be winnable.
+  #
+  # HOW THIS VALUE WAS PICKED. Swept 0.025..0.18 and measured, per value: the
+  # six reward-term shares, the deferral-queue trajectory, the fraction of
+  # steps with an empty and a full pool, regret events, and overflow. 0.10 is
+  # the value where every term lands inside the spec's [2%, 60%] band
+  # (starve 41.6%, rekey 25.9%, latency 20.6%, qkd 7.8%, energy 2.1%,
+  # freshness 2.0%) while the pool still binds -- empty 21% of steps, 80
+  # regret events, queue bounded at 6. Above ~0.14 the pool stops binding
+  # (regret falls to 1 and overflow climbs); below ~0.09 starve re-dominates.
+  # S3 still degrades hard at this supply (195 regret events, queue to 177),
+  # so the degradation scenario is unaffected.  # CALIBRATED, not looked up -- see the arithmetic above. Published CV-QKD
                         # secret-key rates span Mbps (short metro) down to O(bps) at 200+ km, so no
                         # single published figure constrains this; what is defensible is the
                         # calibration target (rho ~ 1.1), which is stated, reproducible, and guarded

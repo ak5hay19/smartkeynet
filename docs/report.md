@@ -101,7 +101,7 @@ precisely the design we argue against. `tests/test_forecaster.py` asserts that
 
 ---
 
-## 3. Calibrating the environment (and getting it wrong twice)
+## 3. Calibrating the environment (and getting it wrong three times)
 
 The scarcity engine is what the thesis rests on, and it was inert.
 
@@ -128,18 +128,77 @@ for any policy anyone would deploy, and the tuned threshold consequently scored
 **Sizing a link against a villain is a mistake.** Always-hybrid rekeys ~500×
 more often than necessary; making *it* struggle leaves everyone else swimming.
 
-**Final calibration**, against measured sensible demand:
+**Second correction**, against measured sensible demand, set refill to 0.098
+keys/step (`mean_skr_kbps: 0.025`), giving ρ = 0.44 for a sensible policy and
+ρ = 10.0 for the villain.
+
+**That overshot into permanent deficit, and it took per-term reward logging to
+see it.** The ρ figures above are open-loop ratios; the closed loop behaved
+differently. Instrumenting the reward per term (spec §S5 point 1 — added late,
+which is exactly the mistake) showed:
+
+| term | share of total reward magnitude |
+|---|---|
+| **starve** | **99.5%** |
+| rekey | 0.25% |
+| latency | 0.18% |
+| qkd | 0.03% |
+| freshness | 0.02% |
+| energy | 0.02% |
+
+The reward had collapsed into a single function of deferral-queue backlog. The
+cause: at 0.098 keys/step the deferral queue grew **monotonically to 303 and
+never drained**, the pool sat empty 85% of steps, and a random policy drew
+**zero** keys across an entire episode. That is not scarcity, it is famine —
+and under famine every policy drowns equally, so the differences between them
+are noise on top of a huge constant starvation cost. Spec §S5 point 3 sets the
+rule this violated: no term may exceed 60% or fall below 2% of mean absolute
+total.
+
+**Final calibration.** Swept refill 0.025→0.18 kbps measuring, per value, the
+six term shares, the queue trajectory, empty/full pool fractions, regret and
+overflow. `mean_skr_kbps: 0.10` is the unique setting where every term lands
+in band:
 
 | quantity | value |
 |---|---|
-| refill | 0.098 keys/step (`mean_skr_kbps: 0.025`) |
-| demand, tuned threshold (measured) | 0.043 keys/step |
-| demand, always-hybrid (villain) | 0.98 keys/step |
-| ρ, sensible policy | **0.44** — binds, with room to misuse |
-| ρ, always-hybrid | **10.0** — drains immediately |
+| refill | 0.391 keys/step (`mean_skr_kbps: 0.10`) |
+| term shares | starve 41.6%, rekey 25.9%, latency 20.6%, qkd 7.8%, energy 2.1%, freshness 2.0% |
+| pool empty | 21% of steps — binds, does not starve |
+| deferral queue | bounded at 6 (was unbounded) |
+| S1 regret events | 80 per 1,200 steps |
+| S3 | still degrades hard: 195 regret events, queue to 177 |
 
-The gap between those two *is* the budgeting problem. Guarded permanently by
-`tests/test_pool_sim.py::test_scarcity_ratio_in_target_band`.
+Above ~0.14 the pool stops binding (regret falls to 1, overflow climbs);
+below ~0.09 starve re-dominates.
+
+**The behavioural signature the spec predicts finally appeared.** On S1, over
+three seeds:
+
+| policy | pool empty | pool full | regret | overflow |
+|---|---|---|---|---|
+| always-hybrid | 58% | 0% | 137 | 0 |
+| always-PQC | 0% | 66% | 1 | **163** |
+| tuned threshold | 0% | 92% | 0 | **302** |
+
+Always-PQC wastes the entire link output while causing no regret; always-hybrid
+drains it. Overflow now *discriminates* between policies, which is what makes it
+the "free extra axis of evidence" §S1 asks for — a good agent must show low
+regret **and** low overflow, and the threshold's zero regret is bought by
+hoarding 302 keys' worth of wasted quantum material.
+
+**Consequence for the headline result.** The foresight-value gap on S3 —
+`static_threshold` minus `mpc_oracle` on regret events, the spec's §7.1
+diagnostic 1 — moved from **4% to 91.8%**. The spec requires >10% for Gate W3
+to be winnable at all and asks you to iterate to >25%. Under the previous
+calibration no policy could have won; that is now no longer the reason.
+
+Guarded by `tests/test_pool_sim.py::test_scarcity_ratio_in_target_band`, which
+was itself part of the problem: it asserted a **hardcoded** demand figure
+against a live refill rate, so its numerator was frozen while its denominator
+tracked the config. It passed throughout the famine it was supposed to catch.
+It now measures the environment it tests, and asserts the behavioural
+signature above rather than a remembered constant.
 
 A second, independent bug surfaced only once the pool bound: the QKD scarcity
 price was charged **per bit rather than per key**, making it 256× oversized, so

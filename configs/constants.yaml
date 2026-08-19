@@ -1,0 +1,111 @@
+# configs/constants.yaml
+#
+# Every security-relevant numeric constant in SmartKeyNet, each with a
+# mandatory `source` naming the artifact it comes from.
+#
+# HARD RULE 4 (PLAN.md; SMARTKEYNET_BUILD_SPEC.md §2.5): "No invented
+# security constants. Every numeric security constant must carry a citation
+# comment naming the artifact." This file is the mechanism, and
+# tests/test_hard_rules.py::test_every_constant_has_a_source is the
+# enforcement: it walks this YAML and fails on any block containing a
+# number whose block lacks a non-empty `source`.
+#
+# HONESTY RULE FOR THIS FILE. A fabricated citation is worse than an
+# admitted calibration, because it cannot be checked and it launders a
+# guess as a standard. Values that were *calibrated* for this simulator
+# rather than taken from a standard say so in their `source`, and name the
+# procedure and the test that pins them. Values that would need
+# measurement on the evaluation host are marked `measured: false` so they
+# cannot be quoted as measurements in the report.
+
+# ---------------------------------------------------------------------------
+# Post-quantum and classical primitives
+# ---------------------------------------------------------------------------
+ml_kem_768:
+  category: 3
+  source: "NIST FIPS 203 (ML-KEM), Category 3 parameter set (ML-KEM-768)"
+  public_key_bytes: 1184
+  secret_key_bytes: 2400
+  ciphertext_bytes: 1088
+  sizes_source: "NIST FIPS 203, Table 3 (ML-KEM parameter sets)"
+
+x25519:
+  public_key_bytes: 32
+  shared_secret_bytes: 32
+  source: "RFC 7748 §6.1 (X25519), 32-byte u-coordinates"
+
+hkdf:
+  source: "RFC 5869 (HKDF); used to combine the classical and PQC shared secrets in the hybrid tier"
+
+hybrid_construction:
+  source: "RFC 9370 (IKEv2 multiple key exchanges) / draft-ietf-tls-hybrid-design: concatenate secrets, derive with a KDF"
+
+# ---------------------------------------------------------------------------
+# Key lifetimes and posture requirements
+# ---------------------------------------------------------------------------
+key_lifetime:
+  max_key_age_steps: 500
+  source: "NIST SP 800-57 Part 1 Rev 5 §5.3.6 (cryptoperiods) -- an
+    originator-usage-period bound expressed in simulator steps rather than
+    wall-clock time, since one step is one modelled second (see
+    env/pool_sim.py `_SECONDS_PER_STEP`)"
+
+posture_tier_requirements:
+  source: "CNSA 2.0 (NSA, Sep 2022) PQC transition timelines; BSI TR-02102-1
+    and ANSSI's PQC position, all of which recommend hybrid classical+PQC
+    key establishment during the migration period rather than PQC alone"
+
+# ---------------------------------------------------------------------------
+# QKD key delivery
+# ---------------------------------------------------------------------------
+etsi_qkd_014:
+  key_bits: 256
+  source: "ETSI GS QKD 014 (REST API for key delivery): keys are delivered
+    as fixed-size blocks; 256 bits is the size this simulator draws in"
+
+# ---------------------------------------------------------------------------
+# CV-QKD link model -- CALIBRATED, not cited. Read the source strings.
+# ---------------------------------------------------------------------------
+cvqkd_link:
+  qber_abort: 0.11
+  qber_abort_source: "CALIBRATED for this simulator, not a measured device
+    figure. Reverse-reconciliation CV-QKD systems lose their secret-key rate
+    as excess noise rises, and this simulator needs a single abort threshold
+    to express that; 0.11 is the value used, and no published device is
+    claimed for it. Treat as a model parameter."
+  gate_kappa: 1.5
+  gate_kappa_source: "CALIBRATED. Exponent of the reconciliation gate
+    clip(1 - excess/headroom, 0, 1) ** kappa, whose functional form is given
+    by SMARTKEYNET_BUILD_SPEC.md §S1. kappa in [1, 2] per that spec; 1.5
+    chosen mid-range."
+  mean_skr_kbps_source: "CALIBRATED to hit the scarcity ratio rho, NOT taken
+    from any published link. Published CV-QKD secret-key rates span many
+    orders of magnitude with distance, so no single figure would fix anything
+    that matters here. The defensible quantity is the dimensionless rho; see
+    SMARTKEYNET_BUILD_SPEC.md §11.2 and
+    tests/test_pool_sim.py::test_scarcity_ratio_in_target_band."
+
+# ---------------------------------------------------------------------------
+# Cost model -- NOT measured on the evaluation host
+# ---------------------------------------------------------------------------
+handshake_latency_ms:
+  reuse: 20.0
+  classical: 100.0
+  pqc: 120.0
+  hybrid: 150.0
+  measured: false
+  source: "ORDINAL MODEL, not measurement. These encode only the ordering
+    reuse < classical < PQC < hybrid, which is what the reward needs; the
+    magnitudes are simulator units against the spec's 100 ms reference.
+    SMARTKEYNET_BUILD_SPEC.md §S5 asks for liboqs/pqm4 figures measured on
+    the evaluation host -- that measurement has NOT been done, so the report
+    must not describe these as measured."
+
+handshake_energy_mj:
+  reuse: 0.1
+  classical: 1.0
+  pqc: 1.3
+  hybrid: 1.6
+  measured: false
+  source: "ORDINAL MODEL, as above. Energy per operation would need a
+    host-specific TDP-derived figure or pqm4 measurements; neither was taken."

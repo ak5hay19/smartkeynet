@@ -28,3 +28,7 @@ plotly>=5.20
 # --- dev / test ---
 pytest>=8.0
 pytest-cov>=5.0
+
+# --- property-based testing (SMARTKEYNET_BUILD_SPEC.md §S1 tests 9-10,
+#     §S2 test 7: invariants the spec specifies as property-based) ---
+hypothesis>=6.100

@@ -18,8 +18,9 @@ stated + rate ranges cited"), `SyntheticSKRQBERTrace` below is the
 documented fallback and states its generation procedure in its own
 docstring.
 
-Unit convention: `PoolState.fill`/`capacity` are in **bits**;
-`SKRQBERTrace` yields `skr` in **kbps** (citable, kbps-scale, matching
+Unit convention: the pool counts whole 256-bit ETSI keys (see `PoolSim`);
+`PoolState.fill`/`capacity` expose the same quantity in **bits** for the
+masking layer and state assembly. `SKRQBERTrace` yields `skr` in **kbps** (citable, kbps-scale, matching
 PLAN.md's "refills slowly (kbps ...)"). `PoolSim.step()` converts kbps
 to bits-refilled-this-step under the modeling assumption that one
 simulator step represents one wall-clock second (`_SECONDS_PER_STEP`
@@ -30,6 +31,8 @@ value, so it is documented here rather than added to
 
 from __future__ import annotations
 
+import math
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Protocol
@@ -40,12 +43,65 @@ import yaml
 
 @dataclass
 class PoolState:
-    """Snapshot of pool physics at one step."""
+    """Snapshot of pool physics at one step.
 
-    fill: float  # current pool level, bits
+    `fill`/`capacity` are reported in **bits** for compatibility with the
+    state assembly and the masking layer, but they are *derived* from the
+    integer key counts below -- the pool's own arithmetic is entirely in
+    whole 256-bit keys (see `PoolSim`).
+    """
+
+    fill: float  # current pool level, bits (== keys * key_bits)
     capacity: float  # max pool capacity, bits
     skr: float  # instantaneous secret-key rate driving refill
     qber: float  # current quantum bit error rate
+    keys: int = 0  # current pool level, whole ETSI keys -- the authoritative unit
+    capacity_keys: int = 0  # max pool capacity, whole keys
+    overflow_keys: int = 0  # keys discarded this step because the pool was full
+    expired_keys: int = 0  # keys discarded this step by age-out
+
+
+@dataclass
+class RefillBatch:
+    """One step's worth of distilled key material, tracked as a unit so
+    draws can be attributed back to the refill that produced them.
+
+    SMARTKEYNET_BUILD_SPEC.md §S1 asks for the pool to be "a
+    `collections.deque` of `RefillBatch(batch_id, refill_step,
+    keys_remaining)`" with FIFO consumption, which makes both age-out and
+    §S2's attribution ledger fall out for free: the oldest batch is always
+    at the left end, and every draw reports exactly which batches it ate.
+    """
+
+    batch_id: int
+    refill_step: int
+    keys_remaining: int
+
+
+@dataclass(frozen=True)
+class RefillResult:
+    """What one `refill()` did. `overflow_keys` is a *result*, not a
+    nuisance: it is the quantum material the link produced and the pool
+    was too full to hold, and §S1 calls it "a free extra axis of
+    evidence" -- an always-PQC policy wastes the entire link output, and
+    a good agent should show near-zero overflow *and* near-zero regret.
+    """
+
+    keys_added: int
+    overflow_keys: int
+    expired_keys: int
+    pool_keys_after: int
+    skr_kbps: float
+    qber: float
+
+
+@dataclass(frozen=True)
+class DrawResult:
+    """Outcome of a draw. `lineage` lists `(batch_id, keys_taken)` oldest
+    first, which is what `metrics/regret.py` attributes regret against."""
+
+    ok: bool
+    lineage: tuple[tuple[int, int], ...] = ()
 
 
 class SKRQBERTrace(Protocol):
@@ -77,10 +133,35 @@ class PoolSim:
     diagram. Refill is driven by an `SKRQBERTrace`; drain happens when
     `env/environment.py` calls `draw()` for a SERVE_HYBRID action.
 
-    `capacity` and `initial_fill_frac` are simulator parameters
-    supplied by the caller (see `load_pool_config` below, which reads
-    them from `configs/default.yaml`'s `pool:` block) -- nothing about
-    their values is hardcoded here.
+    ---------------------------------------------------------------
+    Unit convention: whole keys, with a fractional carry
+    ---------------------------------------------------------------
+    The pool counts **integer 256-bit ETSI keys**, not bits. This is
+    SMARTKEYNET_BUILD_SPEC.md §S1's explicit instruction -- "Work in
+    integer 256-bit keys, not bits. Fractional bits create off-by-epsilon
+    exhaustion bugs and make the attribution ledger painful" -- and it is
+    also the physical truth: half a key cannot establish a session.
+
+    This module held a float `fill` in bits until 2026-08-19. Nothing
+    visibly broke, because every draw in this environment happens to be
+    exactly one key, but the float representation meant `fill` could sit
+    at 255.99999999999997 bits and report "cannot cover a 256-bit draw"
+    for reasons no reader could see. It also made the two things §S1 and
+    §S2 ask for impossible to express: there were no batches to attribute
+    a regret event against, and no notion of a key being too old.
+
+    A step's distilled bits rarely divide evenly into keys, so the
+    remainder is banked in `_fractional_carry` and spent on later steps.
+    That is what keeps the long-run refill rate *exactly* equal to the
+    trace's bit rate -- truncating each step independently would silently
+    lose up to one key per step, which at this pool's 0.859 keys/step is
+    most of the link's output.
+
+    `capacity` and `initial_fill_frac` are simulator parameters supplied
+    by the caller (see `load_pool_config` below, which reads them from
+    `configs/default.yaml`'s `pool:` block) -- nothing about their values
+    is hardcoded here. `capacity` is accepted in bits, because that is
+    how the config expresses it and how the masking layer reads it back.
     """
 
     _SECONDS_PER_STEP: float = 1.0  # fixed sim convention: 1 step == 1 wall-clock second
@@ -90,34 +171,101 @@ class PoolSim:
         capacity: float,
         trace: SKRQBERTrace,
         initial_fill_frac: float,
+        key_bits: int = 256,
+        max_key_age_steps: int | None = None,
     ) -> None:
         if capacity <= 0:
             raise ValueError(f"capacity must be positive, got {capacity}")
         if not 0.0 <= initial_fill_frac <= 1.0:
             raise ValueError(f"initial_fill_frac must be in [0, 1], got {initial_fill_frac}")
+        if key_bits <= 0:
+            raise ValueError(f"key_bits must be positive, got {key_bits}")
 
         self.capacity = float(capacity)
+        self._key_bits = int(key_bits)
+        self.capacity_keys = int(self.capacity // self._key_bits)
+        if self.capacity_keys <= 0:
+            raise ValueError(
+                f"capacity {capacity} bits is smaller than one {key_bits}-bit key -- "
+                "the pool could never hold anything"
+            )
         self._trace = trace
         self._initial_fill_frac = float(initial_fill_frac)
+        self._max_key_age_steps = max_key_age_steps
 
-        self._fill: float = 0.0
+        self._batches: deque[RefillBatch] = deque()
+        self._keys: int = 0
+        self._fractional_carry: float = 0.0
+        self._next_batch_id: int = 0
+        self._now: int = 0
+        self._overflow_keys_total: int = 0
+        self._expired_keys_total: int = 0
         self._skr: float = 0.0
         self._qber: float = 0.0
         self._iterator: Iterator[tuple[float, float]] | None = None
 
         self.reset()
 
+    # -----------------------------------------------------------------
+    # Read-only views
+    # -----------------------------------------------------------------
+
+    @property
+    def level(self) -> int:
+        """Current pool level in whole keys -- the authoritative unit."""
+        return self._keys
+
     @property
     def fill(self) -> float:
-        """Current pool level, bits (read-only view; mutate only via step()/draw())."""
-        return self._fill
+        """Current pool level in bits, derived from `level`.
+
+        Kept because the state assembly and `env/masking.py` were written
+        against bits. It is exact (`level * key_bits`), never fractional.
+        """
+        return float(self._keys * self._key_bits)
+
+    @property
+    def fill_fraction(self) -> float:
+        return self._keys / self.capacity_keys if self.capacity_keys else 0.0
+
+    @property
+    def overflow_keys_total(self) -> int:
+        """Keys the link produced that the pool was too full to hold, all
+        episode. Reported per §3.3 as `pool_overflow_keys`."""
+        return self._overflow_keys_total
+
+    @property
+    def expired_keys_total(self) -> int:
+        return self._expired_keys_total
+
+    def batches(self) -> tuple[RefillBatch, ...]:
+        """Immutable snapshot of the lineage deque, oldest first."""
+        return tuple(RefillBatch(b.batch_id, b.refill_step, b.keys_remaining) for b in self._batches)
+
+    # -----------------------------------------------------------------
+    # Lifecycle
+    # -----------------------------------------------------------------
 
     def reset(self) -> PoolState:
         """Reset pool to its initial fill level and rewind the trace."""
         self._iterator = iter(self._trace)
-        self._fill = self.capacity * self._initial_fill_frac
+        self._batches = deque()
+        self._fractional_carry = 0.0
+        self._next_batch_id = 0
+        self._now = 0
+        self._overflow_keys_total = 0
+        self._expired_keys_total = 0
         self._skr = 0.0
         self._qber = 0.0
+
+        initial_keys = int(round(self.capacity_keys * self._initial_fill_frac))
+        initial_keys = max(0, min(self.capacity_keys, initial_keys))
+        self._keys = initial_keys
+        if initial_keys > 0:
+            # The starting stock is one batch refilled "before" step 0, so
+            # age-out treats it like any other material rather than as
+            # immortal seed keys.
+            self._batches.append(RefillBatch(self._new_batch_id(), 0, initial_keys))
         return self._state()
 
     def step(self) -> PoolState:
@@ -127,38 +275,158 @@ class PoolSim:
             raise RuntimeError("PoolSim.step() called before reset()")
 
         skr_kbps, qber = next(self._iterator)
+        self._now += 1
+        result = self.refill(float(skr_kbps), self._SECONDS_PER_STEP, self._now, qber=float(qber))
+        return self._state(overflow_keys=result.overflow_keys, expired_keys=result.expired_keys)
+
+    def refill(
+        self, skr_kbps: float, step_seconds: float, now: int, qber: float | None = None
+    ) -> RefillResult:
+        """Distil `skr_kbps` into whole keys and add them to the pool.
+
+        Implements §S1's refill block exactly: bank the remainder in the
+        fractional carry so no distilled bit is ever lost, clamp to
+        capacity, and report the clamped remainder as overflow.
+        """
         self._skr = float(skr_kbps)
-        self._qber = float(qber)
+        if qber is not None:
+            self._qber = float(qber)
 
-        bits_refilled = self._skr * 1000.0 * self._SECONDS_PER_STEP  # kbps -> bits/step
-        self._fill = min(self.capacity, self._fill + bits_refilled)
+        expired_keys = self._age_out(now)
 
-        return self._state()
+        bits_this_step = self._skr * 1000.0 * step_seconds  # kbps -> bits
+        keys_available = bits_this_step / self._key_bits + self._fractional_carry
+        keys_added_raw = int(keys_available)  # floor; keys_available >= 0 always
+        self._fractional_carry = keys_available - keys_added_raw
+
+        space = self.capacity_keys - self._keys
+        keys_added = max(0, min(keys_added_raw, space))
+        overflow_keys = keys_added_raw - keys_added
+
+        if keys_added > 0:
+            self._batches.append(RefillBatch(self._new_batch_id(), now, keys_added))
+            self._keys += keys_added
+        self._overflow_keys_total += overflow_keys
+
+        return RefillResult(
+            keys_added=keys_added,
+            overflow_keys=overflow_keys,
+            expired_keys=expired_keys,
+            pool_keys_after=self._keys,
+            skr_kbps=self._skr,
+            qber=self._qber,
+        )
+
+    # -----------------------------------------------------------------
+    # Feasibility and draws
+    # -----------------------------------------------------------------
+
+    def peek_can_cover(self, keys: int) -> bool:
+        """Pure feasibility check: can the pool cover `keys` right now?
+
+        Used by `env/masking.py` before allowing SERVE_HYBRID and by
+        `env/deferral_queue.py` to decide when a queued request can
+        finally be served. Must not mutate anything -- §S1 test 10
+        checks that by hashing the pool before and after.
+        """
+        return 0 <= keys <= self._keys
 
     def can_draw(self, bits: float) -> bool:
-        """Feasibility check used by `env/masking.py` before allowing
-        SERVE_HYBRID, and by `env/deferral_queue.py` to decide when a
-        queued request can finally be served."""
-        return 0.0 <= bits <= self._fill
+        """Bits-denominated feasibility check.
+
+        Compatibility wrapper over `peek_can_cover`. A partial key is
+        useless, so a request for any fraction of a key needs a whole one
+        -- hence the ceiling.
+        """
+        if bits < 0:
+            return False
+        return self.peek_can_cover(self._keys_for_bits(bits))
+
+    def draw_keys(self, keys: int, now: int | None = None) -> DrawResult:
+        """Consume `keys` whole keys, oldest batch first.
+
+        Returns the lineage consumed rather than raising, so callers that
+        want to branch on feasibility can. `draw()` is the raising
+        variant the environment uses.
+        """
+        if keys < 0:
+            raise ValueError(f"draw_keys() keys must be non-negative, got {keys}")
+        if not self.peek_can_cover(keys):
+            return DrawResult(ok=False)
+
+        lineage: list[tuple[int, int]] = []
+        remaining = keys
+        while remaining > 0:
+            batch = self._batches[0]  # FIFO: oldest material leaves first
+            taken = min(remaining, batch.keys_remaining)
+            batch.keys_remaining -= taken
+            remaining -= taken
+            lineage.append((batch.batch_id, taken))
+            if batch.keys_remaining == 0:
+                self._batches.popleft()
+        self._keys -= keys
+        return DrawResult(ok=True, lineage=tuple(lineage))
 
     def draw(self, bits: float) -> None:
         """Consume `bits` from the pool for a SERVE_HYBRID action.
 
-        Raises `PoolExhaustedError` if `bits` exceeds current fill --
-        callers must check `can_draw()` first. Pool exhaustion is
-        handled by `env/deferral_queue.py`, never by silently
-        under-drawing (Hard Rule 9).
+        Raises `PoolExhaustedError` if the pool cannot cover it --
+        callers must check `can_draw()` first. Pool exhaustion is handled
+        by `env/deferral_queue.py`, never by silently under-drawing
+        (Hard Rule 9).
         """
         if bits < 0:
             raise ValueError(f"draw() bits must be non-negative, got {bits}")
-        if not self.can_draw(bits):
+        keys = self._keys_for_bits(bits)
+        result = self.draw_keys(keys)
+        if not result.ok:
             raise PoolExhaustedError(
-                f"cannot draw {bits} bits from pool with {self._fill} bits available"
+                f"cannot draw {keys} key(s) ({bits} bits) from pool holding {self._keys} key(s)"
             )
-        self._fill = max(0.0, self._fill - bits)
+        self._last_lineage = result.lineage
 
-    def _state(self) -> PoolState:
-        return PoolState(fill=self._fill, capacity=self.capacity, skr=self._skr, qber=self._qber)
+    # -----------------------------------------------------------------
+    # Internals
+    # -----------------------------------------------------------------
+
+    def _keys_for_bits(self, bits: float) -> int:
+        """Whole keys needed to cover `bits`. A partial key cannot
+        establish a session, so this rounds up."""
+        return int(math.ceil(bits / self._key_bits - 1e-9))
+
+    def _age_out(self, now: int) -> int:
+        """Discard key material older than `max_key_age_steps`.
+
+        Real key stores do not hold material forever (§S1). Disabled when
+        `max_key_age_steps` is None, which is the default so existing
+        calibration is unaffected unless a config opts in.
+        """
+        if self._max_key_age_steps is None:
+            return 0
+        expired = 0
+        while self._batches and now - self._batches[0].refill_step >= self._max_key_age_steps:
+            batch = self._batches.popleft()  # FIFO order means the oldest is always leftmost
+            expired += batch.keys_remaining
+            self._keys -= batch.keys_remaining
+        self._expired_keys_total += expired
+        return expired
+
+    def _new_batch_id(self) -> int:
+        batch_id = self._next_batch_id
+        self._next_batch_id += 1
+        return batch_id
+
+    def _state(self, overflow_keys: int = 0, expired_keys: int = 0) -> PoolState:
+        return PoolState(
+            fill=self.fill,
+            capacity=self.capacity,
+            skr=self._skr,
+            qber=self._qber,
+            keys=self._keys,
+            capacity_keys=self.capacity_keys,
+            overflow_keys=overflow_keys,
+            expired_keys=expired_keys,
+        )
 
 
 def load_pool_config(path: str | Path | None = None) -> dict[str, float]:

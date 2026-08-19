@@ -21,12 +21,13 @@ import numpy as np
 import pytest
 import yaml
 
+from env.reward import ENERGY_REFERENCE_MJ, LATENCY_REFERENCE_MS
 from env.contracts import Action
 from env.environment import (
     _ACTION_TO_KEY_TYPE,
-    _ENERGY_UNITS,
+    _ENERGY_MJ,
     _KEY_TYPE_TO_SERVE_ACTION,
-    _LATENCY_UNITS,
+    _LATENCY_MS,
     IllegalActionError,
     SmartKeyNetEnv,
 )
@@ -275,15 +276,19 @@ def test_reward_matches_documented_formula_for_known_action():
     resulting_key_type = _ACTION_TO_KEY_TYPE[floor]
     keys_consumed = 1.0 if resulting_key_type.name == "HYBRID" else 0.0
     cost_action = _KEY_TYPE_TO_SERVE_ACTION[resulting_key_type]
-    latency = _LATENCY_UNITS[cost_action]
-    energy = _ENERGY_UNITS[cost_action]
+    latency = _LATENCY_MS[cost_action]
+    energy = _ENERGY_MJ[cost_action]
     freshness = 1.0  # age resets to 0 this step
     load_before = env._current_load()
     rekey_cost = reward_cfg["c_rekey_base"] * (1.0 + reward_cfg["c_rekey_load_beta"] * load_before)
 
+    # The reward now lives in env/reward.py behind `RewardInputs` (Hard Rule
+    # 1), and normalises before weighting: latency per 100 ms, energy per
+    # reference mJ. Reproduce that here rather than the pre-2026-08-19 inline
+    # formula, which weighted raw quantities.
     expected_reward = (
-        -reward_cfg["w_lat"] * latency
-        - reward_cfg["w_en"] * energy
+        -reward_cfg["w_lat"] * (latency / LATENCY_REFERENCE_MS)
+        - reward_cfg["w_en"] * (energy / ENERGY_REFERENCE_MJ)
         + reward_cfg["w_fr"] * freshness
         - reward_cfg["w_qkd"] * keys_consumed
         - rekey_cost
@@ -333,8 +338,8 @@ def test_qkd_scarcity_price_is_charged_per_key_not_per_bit():
     # blow straight through this.
     reward_cfg = config["reward"]
     worst_case_other_terms = (
-        reward_cfg["w_lat"] * max(_LATENCY_UNITS.values())
-        + reward_cfg["w_en"] * max(_ENERGY_UNITS.values())
+        reward_cfg["w_lat"] * (max(_LATENCY_MS.values()) / LATENCY_REFERENCE_MS)
+        + reward_cfg["w_en"] * (max(_ENERGY_MJ.values()) / ENERGY_REFERENCE_MJ)
         + reward_cfg["c_rekey_base"] * (1.0 + reward_cfg["c_rekey_load_beta"])
         + reward_cfg["r_starve"] * len(info["deferred_critical_steps"])
     )

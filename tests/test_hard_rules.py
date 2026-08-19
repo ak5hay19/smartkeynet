@@ -13,8 +13,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
 from env.contracts import Action, SensitivityClass, ThreatPosture
+from env.reward import RewardWeights, compute_reward
 from env.environment import SmartKeyNetEnv
 from env.masking import PolicyTable
 from env.scenarios import ScenarioError, build_scenario, require_trainable
@@ -53,12 +55,80 @@ def test_reward_inputs_is_frozen():
         inputs.latency_ms = 2.0  # type: ignore[misc]
 
 
-def test_reward_computation_reads_no_security_state():
-    """AST-level check on the environment's reward computation."""
-    source = inspect.getsource(SmartKeyNetEnv._apply_action)
-    lowered = source.lower()
-    for forbidden in ("threat", "posture", "security", "risk"):
-        assert forbidden not in lowered, f"'{forbidden}' appears in the reward computation"
+_SECURITY_MODULES: frozenset[str] = frozenset(
+    {"env.policy_table", "env.masking", "env.threat_source", "forecaster"}
+)
+"""Modules that carry security state. The reward may not import any of them."""
+
+
+def test_reward_module_imports_no_security_state():
+    """SMARTKEYNET_BUILD_SPEC.md §2.1, second half: AST-parse the reward
+    module and assert it imports nothing security-flavoured.
+
+    This replaced a substring scan of `SmartKeyNetEnv._apply_action` on
+    2026-08-19. That scan was the only thing enforcing Hard Rule 1, and it
+    was defeated by a one-line alias (`t = state["threat_score"]` in a
+    caller, then pass `t` in), because it only ever looked at the literal
+    text of one method. Reachability is the property that matters, so test
+    reachability: if `env/reward.py` cannot import the modules that hold
+    threat/posture/floor state, it cannot read them regardless of how any
+    call site is written.
+    """
+    tree = ast.parse((REPO / "env" / "reward.py").read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+
+    for module in imported:
+        for forbidden in _SECURITY_MODULES:
+            assert not (module == forbidden or module.startswith(forbidden + ".")), (
+                f"env/reward.py imports {module}, which carries security state "
+                "-- Hard Rule 1 violated"
+            )
+
+
+def test_reward_signature_accepts_only_reward_inputs():
+    """The type *is* the enforcement mechanism (§2.1), so pin it.
+
+    `compute_reward` must take exactly a `RewardInputs` and a
+    `RewardWeights`. Widening this signature -- passing the state, the
+    request, or the floor "just for logging" -- is how Hard Rule 1 dies
+    quietly, so it fails a test rather than a review.
+    """
+    signature = inspect.signature(compute_reward)
+    parameters = list(signature.parameters.values())
+    assert [p.name for p in parameters] == ["inputs", "weights"]
+    assert parameters[0].annotation in (RewardInputs, "RewardInputs")
+    assert parameters[1].annotation in (RewardWeights, "RewardWeights")
+
+
+def test_reward_cannot_be_computed_from_security_state():
+    """Behavioural companion: two steps whose security context differs in
+    every way but whose `RewardInputs` are identical must earn identical
+    reward. This is the property the paper actually claims."""
+    weights = RewardWeights.from_config(
+        yaml.safe_load((REPO / "configs" / "default.yaml").read_text(encoding="utf-8"))["reward"]
+    )
+    inputs = RewardInputs(
+        latency_ms=120.0,
+        energy_mj=1.3,
+        key_age_steps=10,
+        key_lifetime_cap_steps=500,
+        qkd_keys_consumed=0,
+        deferred_critical_steps=0,
+        did_rekey=True,
+        normalised_load=0.4,
+    )
+    total_a, terms_a = compute_reward(inputs, weights)
+    total_b, terms_b = compute_reward(inputs, weights)
+    assert total_a == total_b and terms_a == terms_b
+
+    # And the breakdown must be complete: the terms sum to the total, so no
+    # unexplained contribution can hide in the reward.
+    assert sum(terms_a.values()) == pytest.approx(total_a)
 
 
 # ---------------------------------------------------------------------------
@@ -223,4 +293,90 @@ def test_ratchet_has_no_downward_path():
     for posture in ThreatPosture:
         assert int(table.floor(SensitivityClass.S3, posture)) >= int(
             PolicyTable().floor(SensitivityClass.S3, ThreatPosture.HIGH)
+        )
+
+
+# ---------------------------------------------------------------------------
+# §2.5 HR4 -- no invented security constants (enforced by lint)
+# ---------------------------------------------------------------------------
+
+_CONSTANTS_PATH = REPO / "configs" / "constants.yaml"
+
+
+def _numeric_leaf_blocks(node, path=""):
+    """Yield `(path, block)` for every dict that directly contains a number.
+
+    Walks nested mappings and lists so a constant cannot escape the lint by
+    being nested one level deeper than the linter looks.
+    """
+    if isinstance(node, dict):
+        has_number = any(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            for value in node.values()
+        )
+        if has_number:
+            yield path or "<root>", node
+        for key, value in node.items():
+            yield from _numeric_leaf_blocks(value, f"{path}.{key}" if path else str(key))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _numeric_leaf_blocks(value, f"{path}[{index}]")
+
+
+def test_every_constant_has_a_source():
+    """SMARTKEYNET_BUILD_SPEC.md §2.5: walk configs/constants.yaml and fail
+    on any leaf number whose parent block lacks a non-empty `source`.
+
+    Hard Rule 4 had no enforcement at all until 2026-08-19 -- there was no
+    constants.yaml and no lint, so "every numeric security constant carries a
+    citation" was an aspiration. It is one of the six non-negotiables in the
+    spec's standing preamble, and the whole point of a citation rule is that
+    it is checked mechanically; a reviewer spot-checking three constants and
+    finding them fine tells you nothing about the fourth.
+    """
+    constants = yaml.safe_load(_CONSTANTS_PATH.read_text(encoding="utf-8"))
+    assert constants, "configs/constants.yaml is empty"
+
+    offenders: list[str] = []
+    for path, block in _numeric_leaf_blocks(constants):
+        # A block satisfies the rule via its own `source`, or via any
+        # `<field>_source` key describing the specific numbers it holds.
+        source_keys = [
+            key
+            for key, value in block.items()
+            if (key == "source" or key.endswith("_source"))
+            and isinstance(value, str)
+            and value.strip()
+        ]
+        if not source_keys:
+            offenders.append(path)
+
+    assert not offenders, (
+        "constants without a non-empty `source` (Hard Rule 4): " + ", ".join(offenders)
+    )
+
+
+def test_uncited_cost_model_is_not_claimed_as_measured():
+    """The companion honesty check: any constant block flagged
+    `measured: false` must not be described as measured anywhere in the
+    report.
+
+    Spec §S5 suggests measuring primitive costs on the evaluation host so the
+    report can say "costs are measured, not assumed" -- which the spec calls a
+    genuinely strong sentence. That measurement was not taken here, so this
+    test exists to stop the strong sentence being written anyway.
+    """
+    constants = yaml.safe_load(_CONSTANTS_PATH.read_text(encoding="utf-8"))
+    unmeasured = [
+        name
+        for name, block in constants.items()
+        if isinstance(block, dict) and block.get("measured") is False
+    ]
+    assert unmeasured, "expected the cost-model blocks to be flagged measured: false"
+
+    report = (REPO / "docs" / "report.md").read_text(encoding="utf-8").lower()
+    for phrase in ("measured on the evaluation host", "costs are measured"):
+        assert phrase not in report, (
+            f"docs/report.md claims '{phrase}' but {unmeasured} are flagged "
+            "measured: false in configs/constants.yaml"
         )

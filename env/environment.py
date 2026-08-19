@@ -142,6 +142,7 @@ import gymnasium as gym
 import numpy as np
 
 from env.contracts import (
+    N_ACTIONS,
     Action,
     ActionMask,
     DeferredCriticalStep,
@@ -159,6 +160,12 @@ from env.deferral_queue import DeferralQueue
 from env.forecast_provider import MovingAverageForecaster
 from env.masking import PolicyTable, compute_mask, effective_floor_for
 from env.pool_sim import PoolSim, SyntheticSKRQBERTrace
+from env.reward import (
+    RewardWeights,
+    assert_weights_are_sane,
+    compute_reward,
+)
+from metrics.reward_inputs import RewardInputs
 from env.request_generator import (
     RequestGenerator,
     build_tenant_graph,
@@ -225,13 +232,19 @@ class _SessionKeyState:
 # hasn't happened yet. REKEY_NOW is deliberately absent: its cost is
 # always looked up via whichever tier it resolves to (see
 # `_resulting_key_type`), never as its own entry.
-_LATENCY_UNITS: dict[Action, float] = {
-    Action.REUSE: 0.2,  # cache hit, no handshake
-    Action.SERVE_CLASSICAL: 1.0,
-    Action.SERVE_PQC: 1.2,
-    Action.SERVE_HYBRID: 1.5,
+_LATENCY_MS: dict[Action, float] = {
+    # Handshake latency per tier, in milliseconds. These were dimensionless
+    # multipliers (0.2/1.0/1.2/1.5) until 2026-08-19, which made the reward's
+    # `w_lat` weight silently carry a unit conversion and left `avg_latency_norm`
+    # -- documented as "EWMA latency / 100 ms" -- two orders of magnitude off.
+    # Expressed against the spec's 100 ms reference they are the same numbers
+    # times 100, so every recorded reward is unchanged.
+    Action.REUSE: 20.0,  # cache hit, no handshake
+    Action.SERVE_CLASSICAL: 100.0,  # X25519 keygen + DH
+    Action.SERVE_PQC: 120.0,  # ML-KEM-768 keygen + encaps + decaps
+    Action.SERVE_HYBRID: 150.0,  # PQC + HKDF over the concatenated secret + ETSI delivery RTT
 }
-_ENERGY_UNITS: dict[Action, float] = {
+_ENERGY_MJ: dict[Action, float] = {  # per-tier energy in mJ, against ENERGY_REFERENCE_MJ = 1.0
     Action.REUSE: 0.1,
     Action.SERVE_CLASSICAL: 1.0,
     Action.SERVE_PQC: 1.3,
@@ -299,7 +312,8 @@ class SmartKeyNetEnv(gym.Env):
         self._bits_per_hybrid_draw = float(config["pool"]["bits_per_hybrid_draw"])
         self._max_key_age = float(config["key_lifetime"]["max_key_age_steps"])
         self._reward_cfg = config["reward"]
-        self._assert_reward_weights_are_sane()
+        self._reward_weights = RewardWeights.from_config(self._reward_cfg)
+        assert_weights_are_sane(self._reward_weights)
         self._use_foresight = config.get("use_foresight", "off")
         self._seed = config.get("seed")
         self._max_steps = config.get("max_steps")
@@ -361,6 +375,16 @@ class SmartKeyNetEnv(gym.Env):
         self._decision_count = 0
         self._latency_sum = 0.0
         self._latency_count = 0
+        self._latency_samples = []
+        self._served_tier_counts = [0] * N_ACTIONS
+        self._reward_terms_accum = {
+            "latency": 0.0,
+            "energy": 0.0,
+            "freshness": 0.0,
+            "qkd": 0.0,
+            "starve": 0.0,
+            "rekey": 0.0,
+        }
         self._arrivals_total = 0
         self._ticks_total = 0
         self._arrivals_per_class_accum: list[int] = [0] * len(SensitivityClass)
@@ -409,6 +433,16 @@ class SmartKeyNetEnv(gym.Env):
         self._decision_count = 0
         self._latency_sum = 0.0
         self._latency_count = 0
+        self._latency_samples = []
+        self._served_tier_counts = [0] * N_ACTIONS
+        self._reward_terms_accum = {
+            "latency": 0.0,
+            "energy": 0.0,
+            "freshness": 0.0,
+            "qkd": 0.0,
+            "starve": 0.0,
+            "rekey": 0.0,
+        }
         self._arrivals_total = 0
         self._ticks_total = 0
         self._arrivals_per_class_accum = [0] * len(SensitivityClass)
@@ -450,18 +484,37 @@ class SmartKeyNetEnv(gym.Env):
             )
 
         self._decision_count += 1
-        reward, action_info = self._apply_action(action)
+        outcome, action_info = self._apply_action(action)
 
         state, mask, tick_info = self._advance_to_next_decision()
         self._current_mask = mask
 
         deferred_this_step = tick_info["deferred_critical_steps"]
-        reward -= self._reward_cfg["r_starve"] * len(deferred_this_step)
+
+        # Hard Rule 1 lives here: this is the complete set of things the
+        # reward is allowed to see. `RewardInputs` is frozen and carries no
+        # security field, so the reward physically cannot condition on
+        # threat, posture, floor or tier -- it is not a matter of this call
+        # site being careful.
+        reward_inputs = RewardInputs(
+            latency_ms=outcome["latency_ms"],
+            energy_mj=outcome["energy_mj"],
+            key_age_steps=outcome["key_age_steps"],
+            key_lifetime_cap_steps=int(self._max_key_age),
+            qkd_keys_consumed=outcome["qkd_keys_consumed"],
+            deferred_critical_steps=len(deferred_this_step),
+            did_rekey=outcome["did_rekey"],
+            normalised_load=outcome["normalised_load"],
+        )
+        reward, reward_terms = compute_reward(reward_inputs, self._reward_weights)
+        for term_name, term_value in reward_terms.items():
+            self._reward_terms_accum[term_name] += term_value
 
         info: dict[str, Any] = {
             "action_mask": mask,
             "regret_events": tick_info["regret_events"],
             "deferred_critical_steps": deferred_this_step,
+            "reward_terms": reward_terms,
         }
         if "forced_rekey" in action_info:
             info["forced_rekey"] = action_info["forced_rekey"]
@@ -470,6 +523,32 @@ class SmartKeyNetEnv(gym.Env):
         truncated = self._max_steps is not None and self._decision_count >= self._max_steps
 
         return state, reward, terminated, truncated, info
+
+    @property
+    def pool_overflow_keys(self) -> int:
+        """Keys the QKD link produced this episode that the pool was too
+        full to hold (§3.3 `pool_overflow_keys`).
+
+        Reported because it is a second, independent axis of evidence:
+        an always-PQC policy never draws, so it wastes the entire link
+        output and shows huge overflow with zero regret, while
+        always-hybrid shows zero overflow and heavy regret. A policy
+        doing real inventory control should show little of either, and
+        no single-number metric can say that.
+        """
+        return self._pool_sim.overflow_keys_total
+
+    @property
+    def reward_terms_total(self) -> dict[str, float]:
+        """Per-term reward totals for the episode so far (§3.3
+        `reward_terms`). Spec §S5 point 1: log every term separately,
+        because reading which term dominates is most of §7's debugging."""
+        return dict(self._reward_terms_accum)
+
+    @property
+    def latency_samples_ms(self) -> list[float]:
+        """Per-decision realised latency in ms, for the p50/p99 columns."""
+        return list(self._latency_samples)
 
     def action_mask(self) -> ActionMask:
         """Current legal-action mask, per env/masking.py. Exposed
@@ -482,7 +561,7 @@ class SmartKeyNetEnv(gym.Env):
     # Internal wiring
     # -----------------------------------------------------------------
 
-    def _assert_reward_weights_are_sane(self) -> None:
+    def _unused_assert_reward_weights_are_sane(self) -> None:
         """Load-time guard on the reward's internal balance.
 
         SMARTKEYNET_BUILD_SPEC.md §S5 test 5: "the reward of 'defer one
@@ -1069,28 +1148,29 @@ class SmartKeyNetEnv(gym.Env):
         keys_consumed = bits_consumed / self._bits_per_hybrid_draw
 
         cost_action = _KEY_TYPE_TO_SERVE_ACTION[new_key_type] if action is Action.REKEY_NOW else action
-        latency = _LATENCY_UNITS[cost_action]
-        energy = _ENERGY_UNITS[cost_action]
-        freshness = 1.0 - min(1.0, max(0.0, session.key_age / self._max_key_age))
+        latency_ms = _LATENCY_MS[cost_action]
+        energy_mj = _ENERGY_MJ[cost_action]
 
-        self._latency_sum += latency
+        self._latency_sum += latency_ms
         self._latency_count += 1
+        self._latency_samples.append(latency_ms)
+        self._served_tier_counts[int(cost_action)] += 1
 
         load = self._current_load()
-        rekey_cost = 0.0
-        if is_rekey:
-            rekey_cost = self._reward_cfg["c_rekey_base"] * (1.0 + self._reward_cfg["c_rekey_load_beta"] * load)
 
-        reward = (
-            -self._reward_cfg["w_lat"] * latency
-            - self._reward_cfg["w_en"] * energy
-            + self._reward_cfg["w_fr"] * freshness
-            - self._reward_cfg["w_qkd"] * keys_consumed
-            - rekey_cost
-        )
-        # -R_starve*deferred_critical_steps is added by the caller
-        # (step()), using this-call's *following* advance-to-next-
-        # decision phase -- see module docstring point 5.
+        # NOTE: no reward arithmetic happens here. This method has the
+        # request, the floor and the policy table in scope, so computing the
+        # reward here is precisely what Hard Rule 1 forbids. It assembles the
+        # *physical* outcome; `step()` turns that into a `RewardInputs` and
+        # hands it to `env/reward.py`, which cannot see security state at all.
+        outcome: dict[str, Any] = {
+            "latency_ms": latency_ms,
+            "energy_mj": energy_mj,
+            "key_age_steps": int(session.key_age),
+            "qkd_keys_consumed": int(keys_consumed),
+            "did_rekey": bool(is_rekey),
+            "normalised_load": load,
+        }
 
         info: dict[str, Any] = {}
         if is_rekey and reuse_masked_due_to_age:
@@ -1099,9 +1179,10 @@ class SmartKeyNetEnv(gym.Env):
                 request_id=request["request_id"],
                 key_age_at_rekey=age_before_action,
                 load_at_rekey=load,
-                cost=rekey_cost,
+                cost=self._reward_weights.c_rekey_base
+                * (1.0 + self._reward_weights.c_rekey_load_beta * load),
             )
             self._forced_rekey_log.append(forced_event)
             info["forced_rekey"] = forced_event
 
-        return reward, info
+        return outcome, info

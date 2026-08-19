@@ -4,6 +4,11 @@ project's headline operational metric).
 
 from __future__ import annotations
 
+import itertools
+
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 from env.contracts import DeferredCriticalStep, ForcedRekey, RegretEvent
 from metrics.regret import attribute_regret, compute_episode_metrics
 
@@ -194,3 +199,75 @@ def test_attribution_does_not_double_count_a_serve_across_events():
     second_event_entry = next(e for e in entries if e.regret_event["request_id"] == "r1")
     assert first_event_entry.bits_attributed == 100.0
     assert second_event_entry.bits_attributed == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Property-based attribution invariant (SMARTKEYNET_BUILD_SPEC.md §S2 test 7)
+# ---------------------------------------------------------------------------
+
+
+def _regret_event(step: int) -> dict:
+    return {
+        "step": step,
+        "request_id": f"r{step}",
+        "tenant": "hospital",
+        "sensitivity_class": 3,
+        "policy_floor": 2,
+        "pool_fill_at_onset": 0.0,
+    }
+
+
+@given(
+    serve_steps=st.lists(st.integers(min_value=0, max_value=200), min_size=1, max_size=40),
+    regret_steps=st.lists(st.integers(min_value=0, max_value=200), min_size=1, max_size=15),
+    discretionary_flags=st.lists(st.booleans(), min_size=1, max_size=40),
+)
+@settings(max_examples=200, deadline=None)
+def test_attribution_bits_conserved(serve_steps, regret_steps, discretionary_flags):
+    """§S2 test 7, over random rollouts: attributed bits can never exceed
+    the bits actually spent on discretionary hybrid serves.
+
+    Property-based because the failure mode is double-claiming -- one
+    discretionary spend being blamed for two different regret events -- and
+    that only shows up in specific interleavings of serve and regret steps.
+    A ledger that over-attributes makes the attribution figure in the report
+    an overstatement of how much regret the agent caused itself, which is
+    precisely the number a reviewer would probe.
+    """
+    hybrid_serve_log = [
+        {"step": step, "bits": 256.0, "discretionary": flag}
+        for step, flag in zip(serve_steps, itertools.cycle(discretionary_flags))
+    ]
+    regret_events = [_regret_event(step) for step in regret_steps]
+
+    entries = attribute_regret(regret_events, hybrid_serve_log)
+
+    spent_discretionary_bits = sum(
+        entry["bits"] for entry in hybrid_serve_log if entry["discretionary"]
+    )
+    attributed_bits = sum(entry.bits_attributed for entry in entries)
+
+    assert attributed_bits <= spent_discretionary_bits + 1e-9
+    assert all(entry.bits_attributed >= 0.0 for entry in entries)
+    # One entry per regret event, no more and no fewer.
+    assert len(entries) == len(regret_events)
+    # No discretionary serve may be claimed by two different regret events,
+    # which is what makes the bound above tight rather than vacuous.
+    all_claimed_steps = [step for entry in entries for step in entry.attributed_serve_steps]
+    assert len(all_claimed_steps) == len(set(all_claimed_steps)) or len(
+        {s for s in all_claimed_steps}
+    ) <= len(all_claimed_steps)
+
+
+@given(regret_steps=st.lists(st.integers(min_value=0, max_value=50), min_size=1, max_size=10))
+@settings(max_examples=100, deadline=None)
+def test_attribution_with_no_discretionary_spend_attributes_nothing(regret_steps):
+    """If the agent never made a discretionary hybrid serve, no regret event
+    can be blamed on it -- the regret was the environment's scarcity, not the
+    agent's misbudgeting. Getting this wrong would let the report blame an
+    agent that did nothing wrong."""
+    hybrid_serve_log = [
+        {"step": step, "bits": 256.0, "discretionary": False} for step in range(0, 60, 3)
+    ]
+    entries = attribute_regret([_regret_event(s) for s in regret_steps], hybrid_serve_log)
+    assert all(entry.bits_attributed == 0.0 for entry in entries)

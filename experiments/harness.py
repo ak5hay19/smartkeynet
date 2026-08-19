@@ -12,14 +12,14 @@ be comparable from day one, not bolted on after the agent looks good.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 
 from agents.baselines import Policy
 from env.contracts import Action, KeyType
-from env.environment import _KEY_TYPE_TO_SERVE_ACTION, _LATENCY_UNITS, SmartKeyNetEnv
+from env.environment import _KEY_TYPE_TO_SERVE_ACTION, _LATENCY_MS, SmartKeyNetEnv
 from metrics.regret import EpisodeMetrics, compute_episode_metrics
 
 _DEFAULT_MAX_STEPS = 250
@@ -45,6 +45,12 @@ class ScenarioResult:
     pool_exhaustion_events: int
     floor_violations: int  # must be 0 for any masked policy, by construction
     total_reward: float
+    p50_latency_ms: float = 0.0
+    p99_latency_ms: float = 0.0
+    pool_overflow_keys: int = 0
+    mean_served_tier: float = 0.0
+    served_tier_hist: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    reward_terms: dict[str, float] = field(default_factory=dict)
     """Raw summed `env.step()` reward across the whole episode -- not
     weighted or normalized by anything (that's already baked into the
     reward formula's own `w_*` coefficients, see env/environment.py).
@@ -53,6 +59,32 @@ class ScenarioResult:
     are environment- not policy-determined) and doesn't discriminate
     well between policies that behave very differently on rekey
     timing -- this is a less coarse per-policy comparison number."""
+
+
+_ACTION_TO_TIER: dict[Action, int] = {
+    Action.SERVE_CLASSICAL: 0,  # T0
+    Action.SERVE_PQC: 1,  # T1
+    Action.SERVE_HYBRID: 2,  # T2
+}
+"""`Tier` index per serve action (env/contracts.py §4.1). T3
+(hybrid-with-shortened-lifetime) shares T2's key material and is not
+separately reachable in this environment, so the histogram's fourth bin
+is always zero -- reported anyway so the column matches §3.3's width."""
+
+
+def _served_tier(action: Action, cost_action: Action, key_type_onehot: Any) -> int | None:
+    """Tier actually delivered to the request.
+
+    `REUSE` is the case worth spelling out: it delivers whatever tier the
+    existing key already has, so its tier comes from the session's key
+    type rather than from the action. Charging it to a fixed tier is how a
+    mean-served-tier metric ends up describing the action distribution
+    instead of the protection actually delivered.
+    """
+    if action is Action.REUSE:
+        active = _active_key_tier(key_type_onehot)
+        return _ACTION_TO_TIER.get(active) if active is not None else None
+    return _ACTION_TO_TIER.get(cost_action)
 
 
 def _resolved_cost_action(action: Action, key_type_onehot: Any, floor: Action) -> Action:
@@ -141,6 +173,8 @@ def run_scenario(
     deferred_steps: list[Any] = list(info["deferred_critical_steps"])
     forced_rekeys: list[Any] = []
     floor_violations = 0
+    served_tier_counts = [0, 0, 0, 0]
+    reward_terms: dict[str, float] = {}
     total_rekeys = 0
     total_requests = 0
     discretionary_hybrid_serves = 0
@@ -176,7 +210,10 @@ def run_scenario(
                 floor_violations += 1
 
         cost_action = _resolved_cost_action(action, key_type_onehot, floor)
-        latencies.append(_LATENCY_UNITS[cost_action])
+        latencies.append(_LATENCY_MS[cost_action])
+        served_tier = _served_tier(action, cost_action, key_type_onehot)
+        if served_tier is not None:
+            served_tier_counts[served_tier] += 1
 
         is_rekey = action is not Action.REUSE
         if is_rekey:
@@ -190,6 +227,8 @@ def run_scenario(
 
         regret_events.extend(info["regret_events"])
         deferred_steps.extend(info["deferred_critical_steps"])
+        for term_name, term_value in info.get("reward_terms", {}).items():
+            reward_terms[term_name] = reward_terms.get(term_name, 0.0) + term_value
         if "forced_rekey" in info:
             forced_rekeys.append(info["forced_rekey"])
 
@@ -201,7 +240,18 @@ def run_scenario(
         total_requests=total_requests,
         discretionary_hybrid_serves=discretionary_hybrid_serves,
     )
+    p50_latency = float(np.percentile(latencies, 50)) if latencies else 0.0
     p99_latency = float(np.percentile(latencies, 99)) if latencies else 0.0
+
+    total_served = sum(served_tier_counts)
+    if total_served:
+        served_tier_hist = tuple(count / total_served for count in served_tier_counts)
+        mean_served_tier = sum(
+            tier * count for tier, count in enumerate(served_tier_counts)
+        ) / total_served
+    else:
+        served_tier_hist = (0.0, 0.0, 0.0, 0.0)
+        mean_served_tier = 0.0
 
     return ScenarioResult(
         scenario=scenario,
@@ -211,6 +261,12 @@ def run_scenario(
         pool_exhaustion_events=len(regret_events),
         floor_violations=floor_violations,
         total_reward=total_reward,
+        p50_latency_ms=p50_latency,
+        p99_latency_ms=p99_latency,
+        pool_overflow_keys=env.pool_overflow_keys,
+        mean_served_tier=mean_served_tier,
+        served_tier_hist=served_tier_hist,  # type: ignore[arg-type]
+        reward_terms=reward_terms,
     )
 
 

@@ -9,10 +9,14 @@ generation procedure (mean rate + dialed-in QBER spike for S3).
 
 from __future__ import annotations
 
+import pathlib
+
 from dataclasses import dataclass
 from typing import Iterator
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from env.pool_sim import (
     PoolExhaustedError,
@@ -34,8 +38,24 @@ class FixedSKRQBERTrace:
         return iter(self.pairs)
 
 
-def make_pool(capacity: float, pairs: list[tuple[float, float]], initial_fill_frac: float = 0.0) -> PoolSim:
-    return PoolSim(capacity=capacity, trace=FixedSKRQBERTrace(pairs), initial_fill_frac=initial_fill_frac)
+KEY_BITS = 256
+"""ETSI GS QKD 014 key size. The pool counts whole keys of this size, so
+every bit quantity in this file is a multiple of it -- see
+`test_refill_conserves_bits` for why that matters."""
+
+
+def make_pool(
+    capacity: float,
+    pairs: list[tuple[float, float]],
+    initial_fill_frac: float = 0.0,
+    max_key_age_steps: int | None = None,
+) -> PoolSim:
+    return PoolSim(
+        capacity=capacity,
+        trace=FixedSKRQBERTrace(pairs),
+        initial_fill_frac=initial_fill_frac,
+        max_key_age_steps=max_key_age_steps,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -44,32 +64,78 @@ def make_pool(capacity: float, pairs: list[tuple[float, float]], initial_fill_fr
 
 
 def test_refill_rate_matches_trace_skr():
-    """step() must refill by exactly skr_kbps * 1000 bits (1 step == 1 second)."""
+    """step() refills by skr_kbps * 1000 bits (1 step == 1 second), rounded
+    down to whole keys with the remainder banked in the carry."""
     pool = make_pool(capacity=1_000_000, pairs=[(10.0, 0.01), (20.0, 0.01)])
 
     state = pool.step()
-    assert state.fill == pytest.approx(10.0 * 1000.0)
+    assert state.fill == pytest.approx(KEY_BITS * int(10.0 * 1000.0 / KEY_BITS))
     assert state.skr == pytest.approx(10.0)
     assert state.qber == pytest.approx(0.01)
 
     state = pool.step()
-    assert state.fill == pytest.approx((10.0 + 20.0) * 1000.0)
+    # Two steps supplied 30_000 bits; the pool holds whole keys, so it is
+    # within one key of that and never above it.
+    assert 30_000 - KEY_BITS < state.fill <= 30_000
+
+
+def test_refill_conserves_bits():
+    """SMARTKEYNET_BUILD_SPEC.md §S1 test 1, the one that catches the
+    classic dropped-remainder bug.
+
+    Each step's distilled bits rarely divide evenly into 256-bit keys.
+    Truncating independently every step would silently discard up to one
+    key per step -- at this project's calibrated 0.859 keys/step that is
+    most of the link's output, and it would show up only as an
+    unexplained shortfall in the scarcity ratio. The fractional carry is
+    what makes the long-run rate exact.
+    """
+    steps = 10_000
+    skr_kbps = 7.3  # deliberately not a multiple of a key per step
+    pool = make_pool(capacity=10**9, pairs=[(skr_kbps, 0.01)] * steps)
+
+    for _ in range(steps):
+        pool.step()
+
+    supplied_bits = skr_kbps * 1000.0 * steps
+    banked_bits = pool.level * KEY_BITS + pool._fractional_carry * KEY_BITS
+    assert banked_bits == pytest.approx(supplied_bits, abs=KEY_BITS)
 
 
 def test_refill_never_exceeds_capacity():
-    pool = make_pool(capacity=5_000, pairs=[(100.0, 0.01)])  # 100 kbps -> 100_000 bits, way over cap
+    pool = make_pool(capacity=5_120, pairs=[(100.0, 0.01)])  # 20 keys cap; 100 kbps is way over
     state = pool.step()
-    assert state.fill == pytest.approx(5_000)
+    assert state.fill == pytest.approx(5_120)
     assert state.fill <= state.capacity
+    assert pool.level == pool.capacity_keys
+
+
+def test_overflow_is_reported():
+    """Overflow is a result, not a nuisance (§S1): it is the quantum
+    material the link produced and the pool was too full to hold."""
+    pool = make_pool(capacity=5_120, pairs=[(100.0, 0.01)])  # 20-key cap
+    state = pool.step()
+    # 100 kbps == 100_000 bits == 390 keys distilled into a 20-key pool.
+    assert state.overflow_keys == 390 - 20
+    assert pool.overflow_keys_total == 370
+
+
+def test_no_overflow_when_pool_has_room():
+    pool = make_pool(capacity=10**9, pairs=[(1.0, 0.01)])
+    state = pool.step()
+    assert state.overflow_keys == 0
+    assert pool.overflow_keys_total == 0
 
 
 def test_reset_rewinds_trace_and_restores_initial_fill():
     pool = make_pool(capacity=1_000_000, pairs=[(10.0, 0.01)], initial_fill_frac=0.5)
+    starting_keys = pool.level
     pool.step()
-    assert pool.fill != pytest.approx(500_000)
+    assert pool.level != starting_keys
 
     state = pool.reset()
-    assert state.fill == pytest.approx(500_000)
+    assert pool.level == starting_keys
+    assert state.fill == pytest.approx(starting_keys * KEY_BITS)
 
     # trace should yield the same first value again after rewind
     state = pool.step()
@@ -83,15 +149,76 @@ def test_reset_rewinds_trace_and_restores_initial_fill():
 
 def test_draw_drains_by_exact_amount():
     pool = make_pool(capacity=1_000_000, pairs=[(10.0, 0.01)], initial_fill_frac=0.5)
-    before = pool.fill
-    pool.draw(1_000.0)
-    assert pool.fill == pytest.approx(before - 1_000.0)
+    before = pool.level
+    pool.draw(4 * KEY_BITS)
+    assert pool.level == before - 4
+    assert pool.fill == pytest.approx((before - 4) * KEY_BITS)
+
+
+def test_draw_of_a_partial_key_still_costs_a_whole_key():
+    """A fraction of a key cannot establish a session, so a sub-key draw
+    consumes a whole one. This is the behaviour the old float-bits pool
+    could not express."""
+    pool = make_pool(capacity=1_000_000, pairs=[], initial_fill_frac=0.5)
+    before = pool.level
+    pool.draw(1.0)
+    assert pool.level == before - 1
 
 
 def test_can_draw_true_when_sufficient():
     pool = make_pool(capacity=1_000_000, pairs=[], initial_fill_frac=0.5)
-    assert pool.can_draw(500_000.0) is True
-    assert pool.can_draw(500_001.0) is False
+    held_bits = pool.level * KEY_BITS
+    assert pool.can_draw(held_bits) is True
+    assert pool.can_draw(held_bits + 1.0) is False
+
+
+def test_draw_refuses_when_insufficient():
+    """§S1 test 3: at level 0 and at exactly one key short, the draw is
+    refused and the level is unchanged."""
+    pool = make_pool(capacity=2_560, pairs=[], initial_fill_frac=0.0)
+    assert pool.draw_keys(1).ok is False
+    assert pool.level == 0
+
+    pool = make_pool(capacity=2_560, pairs=[], initial_fill_frac=0.5)  # 5 keys
+    assert pool.draw_keys(6).ok is False
+    assert pool.level == 5
+
+
+def test_draw_is_fifo_over_batches():
+    """§S1 test 4: a draw spanning two batches reports the older batch
+    first with the correct split."""
+    pool = make_pool(capacity=100 * KEY_BITS, pairs=[], initial_fill_frac=0.0)
+    pool.refill(skr_kbps=2 * KEY_BITS / 1000.0, step_seconds=1.0, now=1)  # 2 keys
+    pool.refill(skr_kbps=3 * KEY_BITS / 1000.0, step_seconds=1.0, now=2)  # 3 keys
+    first, second = pool.batches()
+
+    result = pool.draw_keys(4)
+    assert result.ok is True
+    assert result.lineage == ((first.batch_id, 2), (second.batch_id, 2))
+    assert pool.level == 1
+
+
+def test_age_out_discards_oldest_first():
+    """§S1 test 8: real key stores do not hold material forever."""
+    pool = make_pool(capacity=100 * KEY_BITS, pairs=[], initial_fill_frac=0.0, max_key_age_steps=5)
+    pool.refill(skr_kbps=2 * KEY_BITS / 1000.0, step_seconds=1.0, now=1)
+    pool.refill(skr_kbps=3 * KEY_BITS / 1000.0, step_seconds=1.0, now=4)
+    assert pool.level == 5
+
+    # now=6 is 5 steps past the first batch (refilled at 1) but not the second.
+    result = pool.refill(skr_kbps=0.0, step_seconds=1.0, now=6)
+    assert result.expired_keys == 2
+    assert pool.level == 3
+    assert pool.expired_keys_total == 2
+
+
+def test_age_out_is_off_by_default():
+    """Ageing is config-gated so it cannot silently change the calibrated
+    scarcity ratio of runs that never asked for it."""
+    pool = make_pool(capacity=100 * KEY_BITS, pairs=[], initial_fill_frac=0.0)
+    pool.refill(skr_kbps=2 * KEY_BITS / 1000.0, step_seconds=1.0, now=1)
+    pool.refill(skr_kbps=0.0, step_seconds=1.0, now=10_000)
+    assert pool.level == 2
 
 
 def test_draw_raises_when_exceeds_fill():
@@ -310,54 +437,116 @@ def test_s3_drift_collapses_refill():
     assert middle_third_mean < 0.30 * first_third_mean
 
 
+def _binding_diagnostics(policy, scenario: str, seeds=(0, 1, 2), steps: int = 900) -> dict:
+    """Run `policy` and report how hard the pool bound: the fraction of
+    steps it sat empty and full, regret events, the peak and final deferral
+    queue length, and wasted overflow.
+
+    Imported lazily so `tests/test_pool_sim.py` stays runnable as a unit
+    test file when the env or the baselines are mid-edit.
+    """
+    import numpy as np
+    import yaml
+
+    from agents.baselines import AlwaysHybridPolicy, AlwaysPQCPolicy  # noqa: F401
+    from env.environment import SmartKeyNetEnv
+
+    config_path = pathlib.Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
+    base = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+
+    empties, fulls, regrets, queue_peaks, queue_ends, overflows = [], [], [], [], [], []
+    for seed in seeds:
+        env = SmartKeyNetEnv(
+            {**base, "scenario": scenario, "max_steps": steps, "scenario_steps": steps + 200, "seed": seed}
+        )
+        state, info = env.reset(seed=seed)
+        levels, queue_lengths, regret_events = [], [], 0
+        for _ in range(steps):
+            levels.append(env._pool_sim.level)
+            queue_lengths.append(len(env._deferral_queue))
+            state, _reward, _terminated, truncated, info = env.step(
+                policy.act(state, info["action_mask"])
+            )
+            regret_events += len(info["regret_events"])
+            if truncated:
+                break
+        levels_array = np.array(levels)
+        empties.append(float(np.mean(levels_array == 0)))
+        fulls.append(float(np.mean(levels_array == env._pool_sim.capacity_keys)))
+        regrets.append(regret_events)
+        queue_peaks.append(max(queue_lengths))
+        queue_ends.append(queue_lengths[-1])
+        overflows.append(env.pool_overflow_keys)
+
+    return {
+        "empty_fraction": float(np.mean(empties)),
+        "full_fraction": float(np.mean(fulls)),
+        "regret_events": float(np.mean(regrets)),
+        "queue_peak": float(np.mean(queue_peaks)),
+        "queue_end": float(np.mean(queue_ends)),
+        "overflow_keys": float(np.mean(overflows)),
+    }
+
+
 def test_scarcity_ratio_in_target_band():
     """Spec §S1 test 11 -- the test that protects the thesis.
 
-    `rho = keys demanded per step / keys refilled per step`. If
-    `rho << 0.8` the pool never binds, every policy looks identical,
-    and the DQN ties the tuned threshold baseline. This repo measured
-    `rho = 0.0013` on 2026-08-15 before recalibration; see
-    `configs/default.yaml`'s scarcity calibration block for the full
-    arithmetic and `SESSION_LOG.md` for the measurement.
+    §S1 test 11 exists to guarantee one property: **the pool binds, but does
+    not collapse.** If it never binds, every policy looks identical and the
+    DQN ties the tuned threshold in week 3. If it binds so hard that demand
+    permanently exceeds supply, every policy drowns equally and the
+    differences between them are noise on top of a huge constant starvation
+    cost -- which is just as fatal and much harder to notice.
 
-    Demand is measured against a **sensible** policy, not the
-    always-hybrid villain. Sizing the link so always-hybrid struggles
-    is what produced the misleading rho = 1.14 in the first pass at
-    this calibration: that policy rekeys roughly 500x more often than
-    necessary, so a link that strains it is still twenty times
-    over-provisioned for anything anyone would deploy. See
-    `configs/default.yaml`'s calibration block for the full reasoning
-    and the measurement.
+    This test asserted a *hardcoded* demand figure (0.043 and 0.98
+    keys/step, "measured directly on 2026-08-15") divided by the live refill
+    rate, until 2026-08-19. That is not a measurement: the numerator was
+    frozen while the denominator tracked the config, so the ratio drifted
+    away from the environment it claimed to describe and the test passed
+    right through the environment being in permanent deficit -- pool empty
+    85% of steps, deferral queue growing monotonically to 303 and never
+    draining, and the `starve` reward term at 99.5% of total reward
+    magnitude. It now measures the environment it is testing.
 
-    Both ratios are asserted, because the environment needs both to be
-    true: enough key material for a deliberate policy, nowhere near
-    enough for a profligate one.
+    The behavioural signature asserted below is the one SMARTKEYNET_BUILD_SPEC
+    §S7 predicts for a correctly-sized link, and each half is load-bearing:
+      - always-hybrid must drain the pool (Demo Beat 2 needs a villain);
+      - always-PQC must waste the link instead (high overflow, ~no regret),
+        which is what makes overflow "a free extra axis of evidence";
+      - neither may accumulate an unbounded queue on the benign scenario.
     """
-    pool_config = load_pool_config()
-    qkd_config = load_qkd_config()
+    from agents.baselines import AlwaysHybridPolicy, AlwaysPQCPolicy
 
-    bits_per_step = qkd_config["mean_skr_kbps"] * 1000.0
-    keys_refilled_per_step = bits_per_step / pool_config["bits_per_hybrid_draw"]
+    villain = _binding_diagnostics(AlwaysHybridPolicy(), "S1")
+    hoarder = _binding_diagnostics(AlwaysPQCPolicy(), "S1")
 
-    # Both measured directly on 2026-08-15; see the config's calibration
-    # block. Sensible demand ~= sessions / key_lifetime, because a
-    # policy that reuses its keys draws one per session per lifetime.
-    sensible_demand_per_step = 0.043
-    always_hybrid_demand_per_step = 0.98
+    print("\nS1 always-hybrid:", {k: round(v, 3) for k, v in villain.items()})
+    print("S1 always-PQC   :", {k: round(v, 3) for k, v in hoarder.items()})
 
-    rho_sensible = sensible_demand_per_step / keys_refilled_per_step
-    rho_villain = always_hybrid_demand_per_step / keys_refilled_per_step
-    print(f"\nrho (tuned threshold, S1) = {rho_sensible:.3f}")
-    print(f"rho (always-hybrid, S1)   = {rho_villain:.3f}")
-
-    assert 0.2 <= rho_sensible <= 1.3, (
-        f"rho_sensible={rho_sensible:.4f} is outside the band the pool must bind in. "
-        "Too low and no policy can misbudget; too high and even a careful policy "
-        "starves. See SMARTKEYNET_BUILD_SPEC.md §S1 test 11 and §11.2."
+    # 1. The villain must actually exhaust the pool.
+    assert villain["empty_fraction"] >= 0.20, (
+        f"always-hybrid leaves the pool empty only {villain['empty_fraction']:.1%} of steps -- "
+        "the pool does not bind, so no policy can misbudget and Gate W3 is unwinnable. "
+        "See SMARTKEYNET_BUILD_SPEC.md §7.1 fix A."
     )
-    assert rho_villain > 2.0, (
-        f"rho_villain={rho_villain:.3f}: always-hybrid must comfortably exhaust the "
-        "pool, or Demo Beat 2 has no villain."
+    assert villain["regret_events"] > 0, "always-hybrid caused no regret: no scarcity at all"
+
+    # 2. But the queue must stay bounded -- scarcity, not permanent deficit.
+    assert villain["queue_end"] <= 0.5 * villain["queue_peak"] + 20, (
+        f"deferral queue ends at {villain['queue_end']:.0f} against a peak of "
+        f"{villain['queue_peak']:.0f}: the backlog never drains, so the environment is in "
+        "permanent deficit rather than intermittent scarcity. Raise supply (§7.1 fix A)."
+    )
+
+    # 3. The hoarder must waste the link rather than starve it. This is the
+    #    contrast that makes the two metrics independent evidence.
+    assert hoarder["overflow_keys"] > 0, (
+        "always-PQC wasted no key material -- overflow cannot discriminate policies, "
+        "and §S1's 'free extra axis of evidence' is unavailable"
+    )
+    assert hoarder["regret_events"] < villain["regret_events"], (
+        "always-PQC caused at least as much regret as always-hybrid, which inverts the "
+        "expected ordering (§S7 tests 2-3)"
     )
 
 
@@ -429,3 +618,113 @@ def test_pool_drains_correctly_under_synthetic_trace_s3_degradation():
     refill_pre_spike_equivalent = pool.fill
 
     assert refill_during_spike < refill_pre_spike_equivalent
+
+
+# ---------------------------------------------------------------------------
+# Property-based invariants (SMARTKEYNET_BUILD_SPEC.md §S1 tests 9-10)
+#
+# These are specified as property-based rather than example-based because the
+# invariants must hold for *any* interleaving of refills and draws, and the
+# interesting failures live at boundaries (a draw that exactly empties the
+# pool, a refill that exactly fills it) that hand-written cases miss.
+# ---------------------------------------------------------------------------
+
+REFILL_OR_DRAW = st.one_of(
+    st.tuples(st.just("refill"), st.floats(min_value=0.0, max_value=5.0)),
+    st.tuples(st.just("draw"), st.integers(min_value=0, max_value=8)),
+)
+
+
+@given(operations=st.lists(REFILL_OR_DRAW, min_size=1, max_size=200))
+@settings(max_examples=200, deadline=None)
+def test_level_invariant(operations):
+    """§S1 test 9: for any random sequence of refills and draws,
+    `0 <= level <= capacity` AND `level == sum(batch.keys_remaining)`.
+
+    The second half is the one that matters: it says the lineage deque and
+    the integer counter can never disagree. If they drift apart, the
+    attribution ledger starts describing key material that was never
+    actually spent, and §S2's "bits attributed <= bits spent" invariant
+    becomes unfalsifiable rather than true.
+    """
+    pool = make_pool(capacity=20 * KEY_BITS, pairs=[], initial_fill_frac=0.25)
+
+    for step_index, (kind, amount) in enumerate(operations, start=1):
+        if kind == "refill":
+            pool.refill(skr_kbps=amount, step_seconds=1.0, now=step_index)
+        else:
+            pool.draw_keys(amount)
+
+        assert 0 <= pool.level <= pool.capacity_keys
+        assert pool.level == sum(batch.keys_remaining for batch in pool.batches())
+        # No empty batch may linger: a drained batch is popped, so every
+        # batch in the deque carries real material.
+        assert all(batch.keys_remaining > 0 for batch in pool.batches())
+
+
+@given(
+    query_keys=st.integers(min_value=-3, max_value=30),
+    prior_refills=st.lists(st.floats(min_value=0.0, max_value=3.0), max_size=20),
+)
+@settings(max_examples=200, deadline=None)
+def test_peek_is_pure(query_keys, prior_refills):
+    """§S1 test 10: `peek_can_cover` never changes level or lineage.
+
+    Compared by deep snapshot, not by eyeballing the method: masking calls
+    this on every single step, so a peek with a side effect would corrupt
+    the pool once per decision and look like a mysterious drift.
+    """
+    pool = make_pool(capacity=20 * KEY_BITS, pairs=[], initial_fill_frac=0.5)
+    for step_index, skr in enumerate(prior_refills, start=1):
+        pool.refill(skr_kbps=skr, step_seconds=1.0, now=step_index)
+
+    before = (pool.level, pool.batches(), pool.overflow_keys_total, pool._fractional_carry)
+    pool.peek_can_cover(query_keys)
+    after = (pool.level, pool.batches(), pool.overflow_keys_total, pool._fractional_carry)
+    assert before == after
+
+
+@given(skr_values=st.lists(st.floats(min_value=0.0, max_value=20.0), min_size=1, max_size=300))
+@settings(max_examples=100, deadline=None)
+def test_refill_conserves_bits_property(skr_values):
+    """Bit conservation as a property, over arbitrary SKR sequences.
+
+    The example-based `test_refill_conserves_bits` uses one awkward rate;
+    this asserts the carry works for any sequence, including ones that
+    alternate between zero and large rates (where a naive carry
+    implementation loses or double-counts the remainder).
+    """
+    pool = make_pool(capacity=10**9, pairs=[], initial_fill_frac=0.0)
+    for step_index, skr in enumerate(skr_values, start=1):
+        pool.refill(skr_kbps=skr, step_seconds=1.0, now=step_index)
+
+    supplied_bits = sum(skr_values) * 1000.0
+    banked_bits = pool.level * KEY_BITS + pool._fractional_carry * KEY_BITS
+    assert banked_bits == pytest.approx(supplied_bits, abs=KEY_BITS)
+    assert 0.0 <= pool._fractional_carry < 1.0
+
+
+@given(draw_sizes=st.lists(st.integers(min_value=1, max_value=6), min_size=1, max_size=40))
+@settings(max_examples=150, deadline=None)
+def test_draw_lineage_accounts_for_exactly_the_keys_taken(draw_sizes):
+    """Every draw's lineage must sum to exactly the keys it removed.
+
+    This is the pool-side half of §S2 test 7 (attribution conservation):
+    if lineage over- or under-reports, attribution inherits the error and
+    the regret ledger silently stops adding up.
+    """
+    pool = make_pool(capacity=500 * KEY_BITS, pairs=[], initial_fill_frac=0.0)
+    for step_index in range(1, 60):
+        pool.refill(skr_kbps=2 * KEY_BITS / 1000.0, step_seconds=1.0, now=step_index)
+
+    for keys in draw_sizes:
+        level_before = pool.level
+        result = pool.draw_keys(keys)
+        if not result.ok:
+            assert pool.level == level_before  # a refused draw changes nothing
+            continue
+        assert sum(taken for _, taken in result.lineage) == keys
+        assert pool.level == level_before - keys
+        # FIFO: batch ids in a lineage are strictly increasing (oldest first)
+        batch_ids = [batch_id for batch_id, _ in result.lineage]
+        assert batch_ids == sorted(batch_ids)
