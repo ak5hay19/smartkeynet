@@ -35,9 +35,16 @@ checkpoint-averaged evaluation, a grid-searched threshold policy beats the
 agent on both S1 and S3 by a wide margin. §5.1 reports the numbers and the
 diagnosis.
 
-A trained dual-head LSTM forecaster (RT-IoT2022, balanced accuracy 0.931
-against a 0.682 base rate) and a seven-panel dashboard wired to real runs
-complete the system.
+A dual-head LSTM forecaster trained on RT-IoT2022 reaches balanced accuracy
+0.931 against a 0.682 base rate — and then, in the foresight ablation, makes the
+system dramatically **worse** than the parameter-free EWMA fallback it was meant
+to replace (§5.5). Anticipation itself is worth a great deal: `ewma` improves on
+no-foresight on every operational metric, reaching zero exhaustion and zero
+deferral on the held-out migration scenario. The learned head does not.
+
+Across 25 (scenario × policy) cells of the closing comparison, **floor violations
+are 0.00 ± 0.00 everywhere** — the one column the architecture actually
+promises (§5.4).
 
 ---
 
@@ -374,20 +381,130 @@ attack traffic and **inverts the threat signal** — measured separation Cohen's
 *d* = **−0.98** (benign scoring as *more* threatening) versus **+4.43** once
 benign is the reference.
 
-### 5.4 Closing comparison and foresight ablation
+### 5.4 Closing comparison table
 
-`python -m experiments.results_table` and `python -m experiments.ablation`
-produce `results/closing_table.json` and `results/foresight_ablation.json`, which
-Panels 7 and 1 render. Both are long multi-seed runs; where an artefact has not
-been generated, the dashboard renders an explicit "not yet run" rather than a
-placeholder.
+`python -m experiments.results_table` → `results/closing_table.json`. Agents
+trained on **S1 only**, 5 training seeds, checkpoint-averaged; every policy
+evaluated on the same 5 eval seeds over 2,000-step episodes. **S6 is held out —
+no agent in this table has ever trained on the migration schedule (Hard Rule 8).**
 
-The floor-violations column reads **0 — structural** for every masked policy in
-every scenario, verified across 4 scenarios × 4 policies × 3 seeds. That label is
-earned, not asserted: masking's five rules make a below-floor delivery
-unrepresentable, and the harness counts *delivered tier* rather than chosen
-action, so the counter would notice if a rule were removed (§7.1 is why that
-distinction exists).
+| scenario | policy | pool exhaustion | regret events | forced-rekey ratio | floor violations |
+|---|---|---|---|---|---|
+| **S1** | masked DQN | 0.96 ± 2.15 | 0.96 ± 2.15 | **0.107 ± 0.10** | **0 — structural** |
+| | static-threshold (tuned) | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.965 ± 0.01 | 0 — structural |
+| | always-hybrid | 104.80 ± 21.21 | 104.80 ± 21.21 | 0.954 ± 0.01 | 0 — structural |
+| | always-PQC | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.931 ± 0.01 | 0 — structural |
+| | random | 344.40 ± 22.40 | 344.40 ± 22.40 | 0.051 ± 0.00 | 0 — structural |
+| **S2** | masked DQN | 211.44 ± 290.46 | 211.44 ± 290.46 | 0.196 ± 0.12 | **0 — structural** |
+| | static-threshold (tuned) | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.864 ± 0.02 | 0 — structural |
+| | always-hybrid | 203.00 ± 29.83 | 203.00 ± 29.83 | 0.942 ± 0.01 | 0 — structural |
+| | always-PQC | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.861 ± 0.02 | 0 — structural |
+| | random | 773.20 ± 52.68 | 773.20 ± 52.68 | 0.075 ± 0.00 | 0 — structural |
+| **S3** | masked DQN | **0.00 ± 0.00** | **0.00 ± 0.00** | **0.050 ± 0.03** | **0 — structural** |
+| | static-threshold (tuned) | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.965 ± 0.01 | 0 — structural |
+| | always-hybrid | 117.60 ± 28.55 | 117.60 ± 28.55 | 0.946 ± 0.01 | 0 — structural |
+| | always-PQC | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.931 ± 0.01 | 0 — structural |
+| | random | 348.40 ± 25.44 | 348.40 ± 25.44 | 0.051 ± 0.00 | 0 — structural |
+| **S4** | masked DQN | **0.00 ± 0.00** | **0.00 ± 0.00** | **0.046 ± 0.03** | **0 — structural** |
+| | static-threshold (tuned) | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.968 ± 0.01 | 0 — structural |
+| | always-hybrid | 87.20 ± 11.65 | 87.20 ± 11.65 | 0.968 ± 0.01 | 0 — structural |
+| | always-PQC | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.939 ± 0.01 | 0 — structural |
+| | random | 302.20 ± 11.03 | 302.20 ± 11.03 | 0.046 ± 0.00 | 0 — structural |
+| **S6** *(held out)* | masked DQN | **0.00 ± 0.00** | **0.00 ± 0.00** | **0.073 ± 0.04** | **0 — structural** |
+| | static-threshold (tuned) | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.942 ± 0.01 | 0 — structural |
+| | always-hybrid | 144.20 ± 19.87 | 144.20 ± 19.87 | 0.950 ± 0.01 | 0 — structural |
+| | always-PQC | 0.00 ± 0.00 | 0.00 ± 0.00 | 0.915 ± 0.01 | 0 — structural |
+| | random | 514.00 ± 77.83 | 514.00 ± 77.83 | 0.069 ± 0.01 | 0 — structural |
+
+**Floor violations are 0.00 ± 0.00 in all 25 cells.** That column is the one the
+architecture actually promises, and the label "structural" is earned rather than
+asserted: `env/masking.py`'s five legality rules make a below-floor delivery
+unrepresentable, and `experiments/harness.py` counts *delivered tier* rather than
+chosen action, so the counter would notice if a rule were removed — which is
+exactly how §7.1's two violations were found.
+
+**p99 latency is omitted from the table because it is uninformative here**:
+every policy in every scenario scores exactly 1.500. It takes one of four
+discrete values and saturates at the top whenever any hybrid serve occurs, which
+is essentially always. Reporting five identical columns would imply a comparison
+that does not exist. `total_reward` (§5.1's metric) is likewise not in PLAN2
+§7.7's column list and is reported there instead.
+
+**What the table shows that §5.1 does not.** On the operational metrics the
+agent looks good: it is at **zero pool-exhaustion and zero regret events on S3,
+S4 and the held-out S6**, matching the tuned threshold and beating always-hybrid
+by two orders of magnitude — while rekeying **proactively** (forced-rekey ratio
+0.046–0.196 against 0.86–0.97 for every non-random baseline). Two caveats keep
+this from being a win:
+
+- On **`total_reward`, which is what §5.1 compares, the tuned threshold still
+  wins.** The agent buys its zero-exhaustion record with ~6× more rekeys than the
+  baselines, and rekeys are not free. Both facts are true; neither cancels the
+  other, and the table's metric list simply does not price the rekeys.
+- **S2 is bad and unstable**: 211.44 ± 290.46 exhaustion events, a standard
+  deviation larger than the mean. That is the documented checkpoint/seed
+  instability, and S2 (sustained HIGH posture) is where mandated hybrid demand is
+  highest, so an over-spending seed has the least headroom.
+
+### 5.5 E-A foresight ablation
+
+`python -m experiments.ablation` → `results/foresight_ablation.json`. Same
+architecture with the forecast varied `off` / `ewma` / `lstm`; trained on **S3**,
+5 seeds, checkpoint-averaged; evaluated on S3 and the held-out S6. All three arms
+run on `threat_input.source: rt_iot2022` so the comparison is of forecasters, not
+of their inputs (§7.5).
+
+| evaluated on | metric | `off` | `ewma` | `lstm` |
+|---|---|---|---|---|
+| **S3** | total_reward | −44,843.6 ± 75,685.2 | **−4,669.1 ± 5,568.7** | −9,766,367.2 ± 1,723,435.5 |
+| | pool exhaustion | 23.61 ± 23.30 | **2.00 ± 4.47** | 787.25 ± 99.38 |
+| | regret events | 23.61 ± 23.30 | **2.00 ± 4.47** | 787.25 ± 99.38 |
+| | deferred critical steps | 4,223.2 ± 7,585.5 | **220.6 ± 493.3** | 976,242.3 ± 172,232.6 |
+| | forced-rekey ratio | 0.330 ± 0.27 | 0.329 ± 0.32 | 0.169 ± 0.08 |
+| **S6** *(held out)* | total_reward | −5,164.5 ± 7,154.4 | **−2,165.7 ± 1,175.0** | −10,944,541.1 ± 5,066,928.8 |
+| | pool exhaustion | 21.88 ± 48.93 | **0.00 ± 0.00** | 890.56 ± 256.69 |
+| | regret events | 21.88 ± 48.93 | **0.00 ± 0.00** | 890.56 ± 256.69 |
+| | deferred critical steps | 307.2 ± 686.9 | **0.00 ± 0.00** | 1,094,059.8 ± 506,541.1 |
+| | forced-rekey ratio | 0.326 ± 0.35 | 0.293 ± 0.33 | 0.136 ± 0.13 |
+
+Deltas against `off`, which is the quantity E-A exists to measure:
+
+| | total_reward | regret events |
+|---|---|---|
+| S3 `ewma` | **+40,174.5** | **−21.6** |
+| S3 `lstm` | −9,721,523.6 | +763.6 |
+| S6 `ewma` | **+2,999.0** | **−21.9** |
+| S6 `lstm` | −10,939,376.6 | +868.7 |
+
+**Anticipation is worth a great deal — and the *learned* forecaster is a
+disaster.** `ewma` improves on `off` on every operational metric, on both the
+training scenario and the held-out one, and reaches **zero exhaustion and zero
+deferral on S6**. The `lstm` arm is worse than `off` by two to three orders of
+magnitude on every one of them.
+
+This is the sharpest negative result in the project, and it is not the one the
+plan anticipated (PLAN2 §11's cut-order treats the LSTM head as the *optional*
+part and the EWMA as the fallback; on this evidence the fallback is the better
+system).
+
+**Hypothesis, explicitly not verified here.** The pattern is consistent with an
+interaction already observed and recorded independently (§6.2, last bullet): the
+policy table's ratchet is deliberately **one-way**, so *any* posture escalation is
+permanent for the rest of an episode, and a single momentary detector peak — one
+decision in 2,000 — is enough to trip it. The LSTM threat head is a genuinely
+*more sensitive* detector than the EWMA (balanced accuracy 0.931 on real
+traffic, §5.3), so it should trip the ratchet more readily and earlier. Under
+sustained HIGH posture, mandated hybrid demand rises to ~12.28 bits/step (§3.6)
+while S3's degradation collapses refill to ~2.25 bits/step, and the deferral
+queue then diverges — which is what 976,242 deferred critical steps looks like.
+
+If that mechanism is the right one, the finding is *"a better detector produces a
+worse operational outcome, because the ratchet is one-way and the pool cannot
+fund the floors it raises"* — a real and reportable interaction between two
+design choices that are each individually defensible. **It has not been
+confirmed.** Confirming it needs a posture-trajectory probe per arm, which was
+not run; it is the first item under "Next task" in `PROGRESS.md`. Until then the
+numbers above stand as measured and the explanation stands as a hypothesis.
 
 ---
 
@@ -396,7 +513,8 @@ distinction exists).
 ### 6.1 Anticipated examiner questions
 
 **"Why RL instead of a threshold rule?"** On this evidence, for pool budgeting,
-you should not — §5.1 is a negative result and is reported as one. The
+you should not — §5.1 is a negative result and is reported as one, and §5.5 says
+the same about the learned forecaster against a parameter-free EWMA. The
 architecture's demonstrated value is §5.2: the *masking* is what resists
 steering, and that property belongs to the architecture rather than to the
 learned policy. A tuned threshold behind the same mask would be equally immune;
@@ -420,6 +538,11 @@ every number in a step's summary appears in that step's own computed values.
 
 - **§5.1 is negative**, and the training instability behind it is unresolved
   after six sessions.
+- **§5.5 is also negative, and more sharply so.** The trained LSTM forecaster is
+  two to three orders of magnitude worse than the EWMA fallback on every
+  operational metric. The mechanism is hypothesised (a more sensitive detector
+  trips the one-way ratchet earlier, and the pool cannot fund the floors it
+  raises) but **not verified** — the confirming probe was not run.
 - **ML-KEM-768 is simulated.** `liboqs` is an optional dependency and is not
   installed; every API response says so, and `GET /Health` publishes the full
   primitive-honesty matrix. No quantum-resistance claim is made for the PQC path.
@@ -500,9 +623,17 @@ roughly doubles under a suppressed threat signal, while an architecture that
 enforces the same protection by masking stays at exactly zero, at every attack
 strength, by construction.
 
-The accompanying operational claim — that reinforcement learning budgets the
-scarce quantum pool better than a tuned threshold — did not survive measurement,
-and we report it that way. The masking result does not depend on it.
+Two accompanying claims did not survive measurement, and we report them that
+way. Reinforcement learning does not budget the scarce quantum pool better than a
+tuned threshold on `total_reward` (§5.1), though it does reach zero exhaustion
+and zero regret on three of five scenarios while rekeying proactively (§5.4). And
+the trained LSTM forecaster is far worse than the parameter-free EWMA it was
+meant to replace (§5.5) — the most surprising result here, and the one most
+worth chasing next.
+
+Neither touches the masking result. That is the point of putting security in a
+constraint rather than a preference: it holds regardless of how well the learned
+parts learn.
 
 ---
 
