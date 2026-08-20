@@ -221,8 +221,18 @@ scenarios:
       duration_steps: 150
 
   S5:  # Steering attack -- the threat trace is supplied by attack/steering_trace.py
-       # at run time (see agents/soft_reward_baseline.py + attack/). Eval only.
+       # at run time via SmartKeyNetEnv.set_external_threat_trace (see
+       # agents/soft_reward_baseline.py + attack/run_attack.py). Eval only.
+       #
+       # The ramp below is the HONEST signal the attack is run against: an
+       # attack on an already-calm signal has nothing to suppress, which would
+       # make the dose axis meaningless. It mirrors S2's HNDL ramp so the two
+       # scenarios tell the same story about the same underlying threat.
     threat_level: 0.0
+    threat_ramp:
+      start_step: 60
+      ramp_steps: 40
+      peak_level: 3.2
 
   S6:  # Migration wave -- scripted floor ratchet. HELD-OUT EVAL ONLY (Hard Rule 8).
        # The schedule itself lives in `migration_schedule` below.

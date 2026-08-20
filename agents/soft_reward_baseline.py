@@ -187,9 +187,35 @@ class SoftRewardAgent:
         )
         return sensitivity, threat_bin, pool_bin
 
-    def _row(self, key: tuple[int, int, int]) -> np.ndarray:
+    def _row(
+        self,
+        key: tuple[int, int, int],
+        state: StateDict | None = None,
+        threat_score: float | None = None,
+    ) -> np.ndarray:
+        """Q-row for `key`, created on first visit.
+
+        Initialization is the **myopic value** -- each action's immediate
+        `soft_reward` in the state that first reached this cell -- not
+        zeros. Zeros are actively wrong here: every real soft-reward
+        value in this design is negative (costs outweigh the security
+        term except under strong threat), so a zero-initialized row makes
+        every *unvisited* action strictly preferred to every learned one,
+        and a greedy policy ends up selecting whatever it has never
+        tried. That produced a dose-response curve that was flat at 44%
+        across every dose -- the agent was reporting its initialization,
+        not its learning. Myopic initialization is a sensible prior (it
+        is the correct value at gamma = 0) and leaves the greedy policy
+        well-defined in thinly-visited cells.
+        """
         if key not in self._q:
-            self._q[key] = np.zeros(N_ACTIONS, dtype=np.float64)
+            if state is None or threat_score is None:
+                self._q[key] = np.full(N_ACTIONS, -1e3, dtype=np.float64)
+            else:
+                self._q[key] = np.array(
+                    [soft_reward(state, Action(i), threat_score, self.config) for i in range(N_ACTIONS)],
+                    dtype=np.float64,
+                )
         return self._q[key]
 
     # -- Policy ----------------------------------------------------------
@@ -200,7 +226,7 @@ class SoftRewardAgent:
         `threat_score` is read straight off the state, which is exactly
         the channel the steering attack controls.
         """
-        row = self._row(self._key(state, state["threat_score"]))
+        row = self._row(self._key(state, state["threat_score"]), state, float(state["threat_score"]))
         if self.respect_mask:
             candidates = [i for i in range(N_ACTIONS) if mask[i]]
             if not candidates:
@@ -229,8 +255,8 @@ class SoftRewardAgent:
         next_key = self._key(next_state, next_threat_score)
         reward = soft_reward(state, action, threat_score, self.config)
 
-        row = self._row(key)
-        bootstrap = float(np.max(self._row(next_key)))
+        row = self._row(key, state, threat_score)
+        bootstrap = float(np.max(self._row(next_key, next_state, next_threat_score)))
         target = reward + self.config.gamma * bootstrap
         td_error = target - row[int(action)]
         row[int(action)] += self.config.lr * td_error

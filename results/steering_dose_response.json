@@ -1,0 +1,135 @@
+{
+  "doses": [
+    0.0,
+    0.25,
+    0.5,
+    0.75,
+    1.0
+  ],
+  "policies": {
+    "soft-reward (security IS the reward, no mask)": [
+      {
+        "dose": 0.0,
+        "suppression": 0.0,
+        "decisions": 236,
+        "below_class_floor_share": 0.13983050847457626,
+        "below_escalated_floor_share": 0.23728813559322035,
+        "tier_counts": {
+          "SERVE_CLASSICAL": 48,
+          "SERVE_PQC": 60,
+          "SERVE_HYBRID": 128
+        }
+      },
+      {
+        "dose": 0.25,
+        "suppression": 0.24984247239191282,
+        "decisions": 236,
+        "below_class_floor_share": 0.24152542372881355,
+        "below_escalated_floor_share": 0.5466101694915254,
+        "tier_counts": {
+          "SERVE_CLASSICAL": 49,
+          "SERVE_PQC": 187,
+          "SERVE_HYBRID": 0
+        }
+      },
+      {
+        "dose": 0.5,
+        "suppression": 0.4996685987717693,
+        "decisions": 227,
+        "below_class_floor_share": 0.2775330396475771,
+        "below_escalated_floor_share": 0.4889867841409692,
+        "tier_counts": {
+          "SERVE_CLASSICAL": 49,
+          "SERVE_PQC": 178,
+          "SERVE_HYBRID": 0
+        }
+      },
+      {
+        "dose": 0.75,
+        "suppression": 0.749382426730317,
+        "decisions": 227,
+        "below_class_floor_share": 0.2775330396475771,
+        "below_escalated_floor_share": 0.4889867841409692,
+        "tier_counts": {
+          "SERVE_CLASSICAL": 49,
+          "SERVE_PQC": 178,
+          "SERVE_HYBRID": 0
+        }
+      },
+      {
+        "dose": 1.0,
+        "suppression": 0.9786814170020631,
+        "decisions": 227,
+        "below_class_floor_share": 0.2775330396475771,
+        "below_escalated_floor_share": 0.4889867841409692,
+        "tier_counts": {
+          "SERVE_CLASSICAL": 49,
+          "SERVE_PQC": 178,
+          "SERVE_HYBRID": 0
+        }
+      }
+    ],
+    "masked architecture (security is a constraint)": [
+      {
+        "dose": 0.0,
+        "suppression": 0.0,
+        "decisions": 236,
+        "below_class_floor_share": 0.0,
+        "below_escalated_floor_share": 0.0,
+        "tier_counts": {
+          "SERVE_CLASSICAL": 0,
+          "SERVE_PQC": 122,
+          "SERVE_HYBRID": 114
+        }
+      },
+      {
+        "dose": 0.25,
+        "suppression": 0.24984247239191282,
+        "decisions": 236,
+        "below_class_floor_share": 0.0,
+        "below_escalated_floor_share": 0.0,
+        "tier_counts": {
+          "SERVE_CLASSICAL": 0,
+          "SERVE_PQC": 122,
+          "SERVE_HYBRID": 114
+        }
+      },
+      {
+        "dose": 0.5,
+        "suppression": 0.4996685987717693,
+        "decisions": 227,
+        "below_class_floor_share": 0.0,
+        "below_escalated_floor_share": 0.21145374449339208,
+        "tier_counts": {
+          "SERVE_CLASSICAL": 0,
+          "SERVE_PQC": 179,
+          "SERVE_HYBRID": 48
+        }
+      },
+      {
+        "dose": 0.75,
+        "suppression": 0.749382426730317,
+        "decisions": 227,
+        "below_class_floor_share": 0.0,
+        "below_escalated_floor_share": 0.21145374449339208,
+        "tier_counts": {
+          "SERVE_CLASSICAL": 0,
+          "SERVE_PQC": 179,
+          "SERVE_HYBRID": 48
+        }
+      },
+      {
+        "dose": 1.0,
+        "suppression": 0.9786814170020631,
+        "decisions": 227,
+        "below_class_floor_share": 0.0,
+        "below_escalated_floor_share": 0.21145374449339208,
+        "tier_counts": {
+          "SERVE_CLASSICAL": 0,
+          "SERVE_PQC": 179,
+          "SERVE_HYBRID": 48
+        }
+      }
+    ]
+  }
+}
