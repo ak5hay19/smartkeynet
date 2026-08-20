@@ -25,6 +25,12 @@ data/raw/
 *.csv
 !data/sample/**/*.csv
 
+# --- Regenerable dashboard intermediate ---
+# `python -m dashboard.app` writes this alongside dashboard/index.html. It is
+# ~700 KB of full replay traces and is a build input to the HTML, not a result:
+# the numbers worth keeping are in results/*.json and in the rendered export.
+results/dashboard_payload.json
+
 # --- Model checkpoints / training artifacts ---
 *.pt
 *.pth

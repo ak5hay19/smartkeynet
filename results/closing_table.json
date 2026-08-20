@@ -1,0 +1,902 @@
+{
+  "scenarios": [
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S6"
+  ],
+  "policies": [
+    "masked DQN",
+    "static-threshold (tuned)",
+    "always-hybrid",
+    "always-PQC",
+    "random"
+  ],
+  "training_seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "eval_seeds": [
+    900,
+    901,
+    902,
+    903,
+    904
+  ],
+  "cells": {
+    "S1|static-threshold (tuned)": {
+      "total_reward": {
+        "mean": -955.504359999999,
+        "stdev": 7.708523938342282
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "deferred_critical_steps": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.9651982016727361,
+        "stdev": 0.007297193500562015
+      },
+      "rekeys_per_100_requests": {
+        "mean": 10.64,
+        "stdev": 0.10246950765959674
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 90.2,
+        "stdev": 7.52994023880668
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S1|always-hybrid": {
+      "total_reward": {
+        "mean": -18399.98260000001,
+        "stdev": 5762.834500204927
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 104.8,
+        "stdev": 21.206131188880256
+      },
+      "regret_events": {
+        "mean": 104.8,
+        "stdev": 21.206131188880256
+      },
+      "deferred_critical_steps": {
+        "mean": 1736.2,
+        "stdev": 574.9419101091866
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.9535439936952622,
+        "stdev": 0.007872493606427932
+      },
+      "rekeys_per_100_requests": {
+        "mean": 10.739999999999998,
+        "stdev": 0.23291629397704247
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 130.0,
+        "stdev": 6.244997998398398
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S1|always-PQC": {
+      "total_reward": {
+        "mean": -872.0109200000004,
+        "stdev": 7.807212294538167
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "deferred_critical_steps": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.9307579901093567,
+        "stdev": 0.007044609869038272
+      },
+      "rekeys_per_100_requests": {
+        "mean": 10.98,
+        "stdev": 0.06708203932499411
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 23.6,
+        "stdev": 4.827007354458868
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S1|random": {
+      "total_reward": {
+        "mean": -1611680.2778399917,
+        "stdev": 663730.4376449666
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 344.4,
+        "stdev": 22.40089283934906
+      },
+      "regret_events": {
+        "mean": 344.4,
+        "stdev": 22.40089283934906
+      },
+      "deferred_critical_steps": {
+        "mean": 160698.4,
+        "stdev": 66369.76997700082
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.05111955008520923,
+        "stdev": 0.002006463540978324
+      },
+      "rekeys_per_100_requests": {
+        "mean": 70.8,
+        "stdev": 0.7913595895672189
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 54.6,
+        "stdev": 6.06630035524124
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S1|masked DQN": {
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.96,
+        "stdev": 2.1466252583997982
+      },
+      "regret_events": {
+        "mean": 0.96,
+        "stdev": 2.1466252583997982
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.10743828302571909,
+        "stdev": 0.09807880179532405
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S2|static-threshold (tuned)": {
+      "total_reward": {
+        "mean": -1013.7361999999988,
+        "stdev": 24.1466091176379
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "deferred_critical_steps": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.8639955141087254,
+        "stdev": 0.021843879486275333
+      },
+      "rekeys_per_100_requests": {
+        "mean": 11.73,
+        "stdev": 0.354612464529943
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 86.4,
+        "stdev": 4.827007354458868
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S2|always-hybrid": {
+      "total_reward": {
+        "mean": -61227.217600000076,
+        "stdev": 15542.884357701527
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 203.0,
+        "stdev": 29.832867780352597
+      },
+      "regret_events": {
+        "mean": 203.0,
+        "stdev": 29.832867780352597
+      },
+      "deferred_critical_steps": {
+        "mean": 6015.0,
+        "stdev": 1552.9843849826693
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.9419172591158589,
+        "stdev": 0.010474210995085104
+      },
+      "rekeys_per_100_requests": {
+        "mean": 10.83,
+        "stdev": 0.23075961518428662
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 128.6,
+        "stdev": 7.92464510246358
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S2|always-PQC": {
+      "total_reward": {
+        "mean": -1008.195559999999,
+        "stdev": 22.221694687129297
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "deferred_critical_steps": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.8609255143195046,
+        "stdev": 0.01873688127288694
+      },
+      "rekeys_per_100_requests": {
+        "mean": 11.77,
+        "stdev": 0.3094349689353159
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 80.8,
+        "stdev": 4.43846820423443
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S2|random": {
+      "total_reward": {
+        "mean": -8325617.330320095,
+        "stdev": 1002566.1403911071
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 773.2,
+        "stdev": 52.67542121331352
+      },
+      "regret_events": {
+        "mean": 773.2,
+        "stdev": 52.67542121331352
+      },
+      "deferred_critical_steps": {
+        "mean": 832159.8,
+        "stdev": 100244.13605892367
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.0752309648585808,
+        "stdev": 0.0008942289753386414
+      },
+      "rekeys_per_100_requests": {
+        "mean": 57.04,
+        "stdev": 1.9695811737524296
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 74.2,
+        "stdev": 11.166915420114902
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S2|masked DQN": {
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 211.44,
+        "stdev": 290.4649514141078
+      },
+      "regret_events": {
+        "mean": 211.44,
+        "stdev": 290.4649514141078
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.1959424627889496,
+        "stdev": 0.11842951217148193
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S3|static-threshold (tuned)": {
+      "total_reward": {
+        "mean": -945.755559999999,
+        "stdev": 8.618418151145603
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "deferred_critical_steps": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.9651982016727361,
+        "stdev": 0.007297193500562015
+      },
+      "rekeys_per_100_requests": {
+        "mean": 10.64,
+        "stdev": 0.10246950765959674
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 83.6,
+        "stdev": 6.06630035524124
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S3|always-hybrid": {
+      "total_reward": {
+        "mean": -35509.90203999999,
+        "stdev": 14701.021138329694
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 117.6,
+        "stdev": 28.553458634638293
+      },
+      "regret_events": {
+        "mean": 117.6,
+        "stdev": 28.553458634638293
+      },
+      "deferred_critical_steps": {
+        "mean": 3447.8,
+        "stdev": 1468.9200795141987
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.9456903145031086,
+        "stdev": 0.006258915675372431
+      },
+      "rekeys_per_100_requests": {
+        "mean": 10.84,
+        "stdev": 0.2607680962081062
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 122.0,
+        "stdev": 7.615773105863909
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S3|always-PQC": {
+      "total_reward": {
+        "mean": -872.0109200000004,
+        "stdev": 7.807212294538167
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "deferred_critical_steps": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.9307579901093567,
+        "stdev": 0.007044609869038272
+      },
+      "rekeys_per_100_requests": {
+        "mean": 10.98,
+        "stdev": 0.06708203932499411
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 23.6,
+        "stdev": 4.827007354458868
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S3|random": {
+      "total_reward": {
+        "mean": -1801660.826799991,
+        "stdev": 845548.7173613474
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 348.4,
+        "stdev": 25.442091109026396
+      },
+      "regret_events": {
+        "mean": 348.4,
+        "stdev": 25.442091109026396
+      },
+      "deferred_critical_steps": {
+        "mean": 179694.4,
+        "stdev": 84551.05876806038
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.05084474960988981,
+        "stdev": 0.0018682970113930667
+      },
+      "rekeys_per_100_requests": {
+        "mean": 70.8,
+        "stdev": 1.1548809462451115
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 48.8,
+        "stdev": 8.955445270895245
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S3|masked DQN": {
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.04996108754220272,
+        "stdev": 0.030268418356255395
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S4|static-threshold (tuned)": {
+      "total_reward": {
+        "mean": -951.9816799999983,
+        "stdev": 11.788181312314522
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "deferred_critical_steps": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.9679153109116859,
+        "stdev": 0.006656206774788764
+      },
+      "rekeys_per_100_requests": {
+        "mean": 9.02,
+        "stdev": 0.34205262752974186
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 73.2,
+        "stdev": 3.5637059362410923
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S4|always-hybrid": {
+      "total_reward": {
+        "mean": -15059.407880000032,
+        "stdev": 3936.225052157833
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 87.2,
+        "stdev": 11.64903429473877
+      },
+      "regret_events": {
+        "mean": 87.2,
+        "stdev": 11.64903429473877
+      },
+      "deferred_critical_steps": {
+        "mean": 1404.2,
+        "stdev": 392.4942037788584
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.9682504306890722,
+        "stdev": 0.01142203737503907
+      },
+      "rekeys_per_100_requests": {
+        "mean": 9.05,
+        "stdev": 0.3840572873934306
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 113.8,
+        "stdev": 4.658325879540846
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S4|always-PQC": {
+      "total_reward": {
+        "mean": -885.8945600000006,
+        "stdev": 7.6759634110643296
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "deferred_critical_steps": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.9394497874690332,
+        "stdev": 0.01246328056901144
+      },
+      "rekeys_per_100_requests": {
+        "mean": 9.26,
+        "stdev": 0.27703790354390145
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 18.4,
+        "stdev": 2.3021728866442674
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S4|random": {
+      "total_reward": {
+        "mean": -1469222.7490399953,
+        "stdev": 199332.38431160824
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 302.2,
+        "stdev": 11.031772296417289
+      },
+      "regret_events": {
+        "mean": 302.2,
+        "stdev": 11.031772296417289
+      },
+      "deferred_critical_steps": {
+        "mean": 146445.2,
+        "stdev": 19928.40089420122
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.045658653998322044,
+        "stdev": 0.0027891798565034217
+      },
+      "rekeys_per_100_requests": {
+        "mean": 71.59,
+        "stdev": 0.9106316489118973
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 65.0,
+        "stdev": 4.636809247747852
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S4|masked DQN": {
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.0460860424719528,
+        "stdev": 0.034263800135614635
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S6|static-threshold (tuned)": {
+      "total_reward": {
+        "mean": -967.1006399999991,
+        "stdev": 15.016627893371393
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "deferred_critical_steps": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.942216883838762,
+        "stdev": 0.008533375945030584
+      },
+      "rekeys_per_100_requests": {
+        "mean": 10.73,
+        "stdev": 0.14832396974191328
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 95.6,
+        "stdev": 6.542170893518451
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S6|always-hybrid": {
+      "total_reward": {
+        "mean": -34825.52331999999,
+        "stdev": 10234.456464869401
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 144.2,
+        "stdev": 19.867058161690675
+      },
+      "regret_events": {
+        "mean": 144.2,
+        "stdev": 19.867058161690675
+      },
+      "deferred_critical_steps": {
+        "mean": 3377.8,
+        "stdev": 1021.8633470283588
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.9502207912084968,
+        "stdev": 0.010523244290134248
+      },
+      "rekeys_per_100_requests": {
+        "mean": 10.639999999999999,
+        "stdev": 0.21908902300206637
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 130.6,
+        "stdev": 6.308724118235002
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S6|always-PQC": {
+      "total_reward": {
+        "mean": -909.6779199999999,
+        "stdev": 12.060746388676737
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "deferred_critical_steps": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.9145735616323851,
+        "stdev": 0.008063439692106857
+      },
+      "rekeys_per_100_requests": {
+        "mean": 11.01,
+        "stdev": 0.12449899597988695
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 47.0,
+        "stdev": 5.916079783099616
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S6|random": {
+      "total_reward": {
+        "mean": -3583714.8405199945,
+        "stdev": 1148919.6342919203
+      },
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 514.0,
+        "stdev": 77.83315488916018
+      },
+      "regret_events": {
+        "mean": 514.0,
+        "stdev": 77.83315488916018
+      },
+      "deferred_critical_steps": {
+        "mean": 357955.2,
+        "stdev": 114885.37194395116
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.06854888678893337,
+        "stdev": 0.0061050709335051835
+      },
+      "rekeys_per_100_requests": {
+        "mean": 60.9,
+        "stdev": 1.224234454669531
+      },
+      "discretionary_hybrid_serves": {
+        "mean": 55.6,
+        "stdev": 9.44986772394196
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    },
+    "S6|masked DQN": {
+      "p99_latency": {
+        "mean": 1.5,
+        "stdev": 0.0
+      },
+      "pool_exhaustion_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "regret_events": {
+        "mean": 0.0,
+        "stdev": 0.0
+      },
+      "forced_rekey_ratio": {
+        "mean": 0.0725595619023122,
+        "stdev": 0.03845471502087353
+      },
+      "floor_violations": {
+        "mean": 0.0,
+        "stdev": 0.0
+      }
+    }
+  }
+}
