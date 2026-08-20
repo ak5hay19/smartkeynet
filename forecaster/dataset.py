@@ -275,6 +275,17 @@ class RTIoT2022Dataset:
         return source[start : start + window_size]
 
 
+_DATASET_CACHE: dict[tuple[str, int | None], "RTIoT2022Dataset"] = {}
+"""Parsed captures, keyed by (path, max_rows).
+
+`env/environment.py` builds a `ThreatTraceSampler` on every `reset()`,
+and an evaluation campaign resets thousands of times. Re-parsing a
+123k-row CSV each time dominated everything else in the run. The data is
+immutable once loaded, so caching it is free of surprises -- callers
+that need a private copy pass their own `standardizer`, which bypasses
+the cache."""
+
+
 def load_rt_iot2022(
     path: str | Path | None = None,
     max_rows: int | None = None,
@@ -287,6 +298,10 @@ def load_rt_iot2022(
     statistics the model was trained under.
     """
     resolved = resolve_dataset_path(path)
+
+    cache_key = (str(resolved), max_rows)
+    if standardizer is None and cache_key in _DATASET_CACHE:
+        return _DATASET_CACHE[cache_key]
 
     raw_rows: list[dict[str, Any]] = []
     labels: list[str] = []
@@ -309,6 +324,7 @@ def load_rt_iot2022(
         label_counts[label] = label_counts.get(label, 0) + 1
 
     features = extract_flow_features(raw_rows)
+    fitted_here = standardizer is None
     standardizer = standardizer if standardizer is not None else FeatureStandardizer.fit(features)
     standardized = standardizer.transform(features)
 
@@ -324,12 +340,15 @@ def load_rt_iot2022(
             "refusing to use it as training data per PLAN2 §6's DO-NOT-USE rule"
         )
 
-    return RTIoT2022Dataset(
+    dataset = RTIoT2022Dataset(
         benign=benign,
         attack=attack,
         standardizer=standardizer,
         label_counts=label_counts,
     )
+    if fitted_here:
+        _DATASET_CACHE[cache_key] = dataset
+    return dataset
 
 
 class ThreatTraceSampler:

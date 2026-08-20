@@ -229,6 +229,7 @@ class _ScenarioRuntime:
     threat_ramp: dict[str, Any] | None = None
     qber_spike: dict[str, Any] | None = None
     tenant_flood: dict[str, Any] | None = None
+    migration_schedule: tuple[dict[str, Any], ...] = ()
 
     def threat_level(self, step: int) -> float:
         """Standardized threat-signal level at `step` (0.0 == benign).
@@ -266,6 +267,44 @@ class _ScenarioRuntime:
             kwargs["spike_skr_scale"] = float(spike["skr_scale"])
         return kwargs
 
+    def cohort_floors(self, step: int) -> dict[str, Action]:
+        """Cumulative per-cohort floor overrides in force at `step` (S6).
+
+        Cumulative and monotone: every phase whose step has passed stays
+        in force, and a later phase for the same cohort can only raise
+        it (`max`). That is Hard Rule 2 applied to the migration
+        schedule -- a compliance deadline ratchets protection up and is
+        never walked back.
+        """
+        floors: dict[str, Action] = {}
+        for entry in self.migration_schedule:
+            if step < int(entry["step"]):
+                continue
+            cohort = str(entry["cohort"])
+            new_floor = Action[str(entry["new_floor"])]
+            floors[cohort] = Action(max(int(floors.get(cohort, Action.SERVE_CLASSICAL)), int(new_floor)))
+        return floors
+
+    def pqc_upgraded_cohorts(self, step: int) -> set[str]:
+        """Cohorts whose endpoints have finished their PQC upgrade by
+        `step` (`pqc_capable: true` on a migration phase).
+
+        `env/request_generator.py`'s `build_tenant_graph` docstring
+        promises exactly this: "S6 flips `pqc_capable` -> true as
+        subsystems upgrade".
+        """
+        return {
+            str(entry["cohort"])
+            for entry in self.migration_schedule
+            if step >= int(entry["step"]) and bool(entry.get("pqc_capable", False))
+        }
+
+    def migration_phases_elapsed(self, step: int) -> list[dict[str, Any]]:
+        """The schedule entries in force at `step`, for the dashboard's
+        Panel 6 phase selector. Read-only -- nothing in the decision
+        path consults it."""
+        return [entry for entry in self.migration_schedule if step >= int(entry["step"])]
+
     def tenant_rate_multipliers(self, step: int) -> dict[str, float]:
         """S4's noisy neighbour: the flooding tenant's arrival rate is
         multiplied inside the flood window and back to 1.0 outside it."""
@@ -293,13 +332,43 @@ def build_scenario_runtime(scenario: str, config: dict[str, Any]) -> _ScenarioRu
         raise ValueError(f"unknown scenario {scenario!r} -- configured scenarios: {known}")
 
     block = scenarios[scenario] or {}
+    schedule = tuple(config.get("migration_schedule") or ()) if scenario == "S6" else ()
+    _validate_migration_schedule(schedule)
     return _ScenarioRuntime(
         name=scenario,
         base_threat_level=float(block.get("threat_level", 0.0)),
         threat_ramp=block.get("threat_ramp"),
         qber_spike=block.get("qber_spike"),
         tenant_flood=block.get("tenant_flood"),
+        migration_schedule=schedule,
     )
+
+
+def _validate_migration_schedule(schedule: tuple[dict[str, Any], ...]) -> None:
+    """Reject a schedule that would ever LOWER a cohort's floor.
+
+    Hard Rule 2 has no exception for compliance schedules. Checked here
+    rather than trusted, because a lowering entry would look completely
+    ordinary in YAML and would quietly invalidate the structural
+    guarantee for the whole S6 evaluation.
+    """
+    highest: dict[str, int] = {}
+    for entry in sorted(schedule, key=lambda e: int(e["step"])):
+        cohort = str(entry["cohort"])
+        try:
+            new_floor = Action[str(entry["new_floor"])]
+        except KeyError as exc:
+            raise ValueError(
+                f"migration_schedule entry for {cohort!r} names an unknown floor "
+                f"{entry['new_floor']!r}"
+            ) from exc
+        if int(new_floor) < highest.get(cohort, -1):
+            raise ValueError(
+                f"migration_schedule would LOWER {cohort!r}'s floor to {new_floor.name} at step "
+                f"{entry['step']} -- threat and compliance signals may only raise floors "
+                "(Hard Rule 2)"
+            )
+        highest[cohort] = int(new_floor)
 
 
 class SmartKeyNetEnv(gym.Env):
@@ -369,6 +438,8 @@ class SmartKeyNetEnv(gym.Env):
         self._tenant_graph = build_tenant_graph(n_nodes=self._graph_n_nodes, seed=self._graph_seed)
         self._request_generator: RequestGenerator | None = None
         self._active_tenant_multipliers: dict[str, float] = {}
+        self._cohort_floors: dict[str, Action] = {}
+        self._pqc_upgraded_cohorts: set[str] = set()
 
         # Populated fresh by reset(); typed here for clarity.
         self._pool_sim: PoolSim | None = None
@@ -433,6 +504,8 @@ class SmartKeyNetEnv(gym.Env):
         self._last_forecast_observation = None
         self._request_generator = None
         self._active_tenant_multipliers = self._scenario.tenant_rate_multipliers(0)
+        self._cohort_floors = self._scenario.cohort_floors(0)
+        self._pqc_upgraded_cohorts = self._scenario.pqc_upgraded_cohorts(0)
         if self._load_spike_cfg is not None:
             # Legacy 2026-08-10 diagnostic path -- the graph-free stub with a
             # periodic arrival-rate multiplier. Retained only so that session's
@@ -727,9 +800,16 @@ class SmartKeyNetEnv(gym.Env):
         )
 
     def _apply_scenario_tick(self, step: int) -> None:
-        """Apply any step-indexed scenario perturbation to the arrival
-        process. Only S4's flood window currently varies within an
-        episode; every other scenario resolves once at `reset()`."""
+        """Apply this tick's step-indexed scenario perturbations.
+
+        S4's flood window opens and closes; S6's migration phases fire.
+        Both are exogenous properties of the world, not decisions -- the
+        agent never sees a cohort, a schedule or a multiplier
+        (Hard Rule 3).
+        """
+        self._cohort_floors = self._scenario.cohort_floors(step)
+        self._pqc_upgraded_cohorts = self._scenario.pqc_upgraded_cohorts(step)
+
         if self._request_generator is None:
             return
         multipliers = self._scenario.tenant_rate_multipliers(step)
@@ -830,6 +910,15 @@ class SmartKeyNetEnv(gym.Env):
         # design decision 7: exercise the sticky ratchet every decision
         self._policy_table.ratchet_up(current_posture)
         floor = self._policy_table.floor(SensitivityClass(request["sensitivity_class"]), current_posture)
+
+        # S6: a migration phase can raise this cohort's floor above whatever
+        # the (class x posture) table says. Combined by max(), never by
+        # replacement -- a compliance deadline can only ratchet protection
+        # up, exactly as a threat signal can (Hard Rule 2). Outside S6 the
+        # override map is empty and this is a no-op.
+        cohort_floor = self._cohort_floors.get(request["tenant"])
+        if cohort_floor is not None and int(cohort_floor) > int(floor):
+            floor = cohort_floor
 
         pool_can_draw_hybrid = self._pool_sim.can_draw(self._bits_per_hybrid_draw)
         reuse_masked_due_to_age = session.key_age >= self._max_key_age

@@ -22,7 +22,7 @@ import pytest
 import yaml
 
 from agents.baselines import AlwaysHybridPolicy, AlwaysPQCPolicy
-from env.contracts import Action, ThreatPosture
+from env.contracts import Action, SensitivityClass, ThreatPosture
 from env.environment import (
     _ACTION_TO_KEY_TYPE,
     _ENERGY_UNITS,
@@ -646,3 +646,99 @@ def test_external_threat_trace_overrides_the_scenario_signal():
     # an adversarially high trace can only push the posture UP
     assert env._policy_table._ratcheted_posture is not ThreatPosture.CALM
     assert state["threat_score"] > 0.5
+
+
+# ---------------------------------------------------------------------------
+# S6 migration wave -- scripted, exogenous, held-out eval only
+# (Hard Rules 2, 3, 8)
+# ---------------------------------------------------------------------------
+
+
+def test_migration_schedule_is_cumulative_and_monotone():
+    """A compliance deadline ratchets protection up and is never walked
+    back -- Hard Rule 2 applied to the schedule."""
+    runtime = build_scenario_runtime("S6", load_test_config())
+
+    previous: dict[str, int] = {}
+    for step in range(0, 2001, 50):
+        floors = runtime.cohort_floors(step)
+        for cohort, floor in floors.items():
+            assert int(floor) >= previous.get(cohort, -1)
+            previous[cohort] = int(floor)
+
+    # every phase is still in force at the end of the episode
+    assert set(runtime.cohort_floors(2000)) == {"logging", "fintech", "iot-telemetry"}
+
+
+def test_a_schedule_that_would_lower_a_floor_is_rejected():
+    """Hard Rule 2 has no exception for compliance schedules, and a
+    lowering entry would look completely ordinary in YAML."""
+    config = load_test_config(
+        overrides={
+            "migration_schedule": [
+                {"step": 100, "cohort": "fintech", "new_floor": "SERVE_HYBRID"},
+                {"step": 200, "cohort": "fintech", "new_floor": "SERVE_PQC"},
+            ]
+        }
+    )
+    with pytest.raises(ValueError, match="LOWER"):
+        build_scenario_runtime("S6", config)
+
+
+def test_an_unknown_floor_name_in_the_schedule_is_rejected():
+    config = load_test_config(
+        overrides={"migration_schedule": [{"step": 1, "cohort": "fintech", "new_floor": "SERVE_MAGIC"}]}
+    )
+    with pytest.raises(ValueError, match="unknown floor"):
+        build_scenario_runtime("S6", config)
+
+
+def test_migration_schedule_only_applies_to_s6():
+    """Every other scenario must be unaffected, or the training
+    scenarios would quietly inherit the held-out non-stationarity."""
+    config = load_test_config()
+    for scenario in ("S1", "S2", "S3", "S4", "S5"):
+        assert build_scenario_runtime(scenario, config).cohort_floors(9999) == {}
+
+
+def test_s6_raises_floors_above_s1_for_the_scheduled_cohorts():
+    s1 = _run_scenario_probe("S1", steps=2000)
+    s6 = _run_scenario_probe("S6", steps=2000)
+    assert np.mean(s6["floors"]) > np.mean(s1["floors"])
+
+
+def test_s6_preserves_the_structural_floor_guarantee():
+    """The point of a held-out robustness scenario is that the guarantee
+    survives conditions the agent never trained on."""
+    config = load_test_config(overrides={"max_steps": 2000})
+    for policy in (AlwaysHybridPolicy(), AlwaysPQCPolicy()):
+        result = run_scenario(policy, "S6", config, seed=0)
+        assert result.floor_violations == 0
+
+
+def test_s6_cohort_floor_combines_with_the_policy_table_by_max_never_replacement():
+    """A cohort override must never *reduce* a floor the (class x posture)
+    table already set higher -- e.g. an S3-class request inside a cohort
+    scheduled only up to SERVE_PQC keeps its SERVE_HYBRID class floor."""
+    config = load_test_config(overrides={"scenario": "S6", "max_steps": 2000})
+    env = SmartKeyNetEnv(config)
+    state, info = env.reset(seed=0)
+    policy = AlwaysPQCPolicy()
+
+    truncated = False
+    while not truncated:
+        request = env._current_request
+        class_floor = env._policy_table.floor(
+            SensitivityClass(request["sensitivity_class"]), ThreatPosture.CALM
+        )
+        assert int(env._current_floor) >= int(class_floor)
+        action = policy.act(state, info["action_mask"])
+        state, _r, _t, truncated, info = env.step(action)
+
+
+def test_training_refuses_the_held_out_scenario():
+    """Hard Rule 8, enforced in code rather than left to discipline."""
+    from experiments.train import train
+
+    with pytest.raises(ValueError, match="held-out"):
+        train(load_test_config(), training_overrides={"total_steps": 10}, scenario="S6")

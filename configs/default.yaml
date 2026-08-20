@@ -235,7 +235,10 @@ scenarios:
       peak_level: 3.2
 
   S6:  # Migration wave -- scripted floor ratchet. HELD-OUT EVAL ONLY (Hard Rule 8).
-       # The schedule itself lives in `migration_schedule` below.
+       # The schedule itself lives in `migration_schedule` below. Threat stays
+       # benign on purpose: S6 isolates non-stationarity in the FLOORS from
+       # non-stationarity in the threat signal (which is S2's job), so a policy
+       # that holds up here is holding up against the migration itself.
     threat_level: 0.0
 
 # --- env/request_generator.py random_request_generator's optional load-spike diagnostic ---
@@ -293,7 +296,42 @@ steering_attack:
   duration_steps: 1000
 
 # --- env/environment.py S6 migration wave (Hard Rule 3, 8 -- scripted, exogenous, held-out eval only) ---
-migration_schedule: []  # list of {step: int, tenant_cohort: str, new_floor: str} entries
+#
+# A rolling enterprise migration: compliance deadlines ratchet policy floors
+# upward one tenant cohort at a time (PLAN2 2's third analogy, 9's S6 row).
+#
+# Hard Rule 3: this is a SCRIPTED, EXOGENOUS schedule. The agent never chooses
+# the migration order, never sees the cohorts, and never sees the schedule --
+# it only experiences the floors it is handed, exactly as it experiences any
+# other floor. Deleting this block changes no line of agent code.
+#
+# Hard Rule 8: S6 is HELD-OUT EVALUATION ONLY. experiments/train.py and
+# forecaster/train.py both refuse it outright rather than relying on
+# discipline; the agent evaluated on it is trained on stationary scenarios
+# alone and has never seen a ratcheting schedule.
+#
+# Hard Rule 2: `new_floor` may only ever RAISE a cohort's floor. The
+# environment combines it with the policy table's own floor by max(), and
+# env/environment.py rejects a schedule entry that would lower one.
+#
+# Grounding (Hard Rule 4): CNSA 2.0 and the BSI/ANSSI migration guidance both
+# describe staged, subsystem-by-subsystem deadlines rather than a flag day --
+# the phases below are that shape. The specific steps are simulator timing,
+# not claimed deadlines.
+migration_schedule:
+  - step: 400
+    cohort: logging
+    new_floor: SERVE_PQC
+    label: "Phase 1 - shared observability plane clears classical"
+  - step: 900
+    cohort: fintech
+    new_floor: SERVE_HYBRID
+    label: "Phase 2 - regulated financial data moves to quantum-backed keys"
+  - step: 1400
+    cohort: iot-telemetry
+    new_floor: SERVE_PQC
+    pqc_capable: true
+    label: "Phase 3 - constrained IoT fleet finishes its firmware upgrade"
 
 # --- experiments/train.py ---
 # S1-only overfit-on-purpose training campaign (PLAN.md §10 step 5).
