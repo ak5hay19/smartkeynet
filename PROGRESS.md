@@ -15,69 +15,81 @@
 FAILED; the S5 steering result HOLDS.** See SESSION_LOG.md 2026-08-19/20
 for the complete account, and `docs/report.md` §5 and §7 for the writeup.
 
-### The single next task
+### The next task — now two decisions, not one
 
-**Decide what to do about Gate W3's negative result.** The tuned
-threshold beats the masked DQN on both S1 and S3, by a wide margin,
-checkpoint-averaged across 5 training seeds:
+**(1) The E-A ablation is a sharper negative result than Gate W3, and it
+is the one worth chasing first.** `ewma` improves on `off` on every
+operational metric on both the training scenario and the held-out one
+(S6: 21.88 → **0.00** exhaustion events, 307.2 → **0.00** deferred
+critical steps). `lstm` is two to three orders of magnitude *worse* than
+`off` (S3 `total_reward` −44,844 → −9,766,367; 976,242 deferred critical
+steps). PLAN2 §11's cut-order treats the LSTM head as the optional part
+and the EWMA as the fallback — on this evidence the fallback is the
+better system.
+
+`docs/report.md` §5.5 states a hypothesis and explicitly marks it
+unverified: the LSTM is a *more sensitive* detector (balanced accuracy
+0.931), the policy-table ratchet is deliberately one-way, so it should
+trip the ratchet earlier and hold posture at HIGH — where mandated hybrid
+demand (~12.28 bits/step) exceeds S3's collapsed refill (~2.25 bits/step)
+and the deferral queue diverges.
+
+**The confirming probe is cheap and was not run:** record the posture
+trajectory and the step at which the ratchet first leaves CALM, per
+foresight arm, on S3. If the LSTM trips it materially earlier, the
+finding is *"a better detector produces a worse operational outcome
+because the ratchet is one-way and the pool cannot fund the floors it
+raises"* — a real interaction between two individually defensible design
+choices, and a more interesting result than a working LSTM would have
+been. If it does not, the cause is elsewhere and the hypothesis in §5.5
+must be withdrawn.
+
+**(2) Gate W3's negative result** — unchanged from the previous entry.
+The tuned threshold beats the masked DQN on `total_reward` on both S1 and
+S3, checkpoint-averaged across 5 training seeds:
 
 | scenario | masked DQN (total_reward) | tuned threshold |
 |---|---|---|
 | S1 | **-3820.8 +/- 1623.9** | **-955.5 +/- 7.7** |
 | S3 | **-97475.6 +/- 204475.5** | **-945.8 +/- 8.6** |
 
-PLAN2 §3.2's disqualification rule is triggered. Two concrete,
-pre-committed options:
+The closing table (§5.4) complicates this in the agent's favour without
+overturning it: on the operational metrics PLAN2 §7.7 asks for, the agent
+is at **zero exhaustion and zero regret on S3, S4 and held-out S6** while
+rekeying proactively (forced-rekey 0.046–0.196 vs 0.86–0.97 for every
+non-random baseline). It buys that with ~6× more rekeys, which
+`total_reward` prices and §7.7's column list does not. Both are true.
 
-**(a) Test the heavy-tailed-reward hypothesis.** The proximate cause is
-visible: the agent rekeys ~6x too often
-(`rekeys_per_100_requests` 66.8 vs 10.6 for baselines), which at ~2.5
-reward units per rekey accounts for almost the whole S1 gap. With a
-genuinely scarce pool the reward is now heavy-tailed -- a single step can
-score -442 while a typical step scores -0.4 -- which is a hard
-regression target for an unclipped DQN. Reward clipping or normalization
-is standard practice (the DQN Nature paper clips to [-1,1]), is an
-*agent-side* change that touches neither the environment nor the
-reported objective, and does not go near Hard Rule 1. Pre-commit the
-decision rule before running: if clipped training does not clear the
-tuned threshold on S1 within the same 25,000-step budget across 5 seeds,
+Two pre-committed options, unchanged:
+
+**(a) Test the heavy-tailed-reward hypothesis.** With a genuinely scarce
+pool a single step can score −442 while a typical step scores −0.4, which
+is a hard regression target for an unclipped DQN. Reward clipping is
+standard practice (the DQN Nature paper clips to [−1,1]), is an
+*agent-side* change touching neither the environment nor the reported
+objective, and goes nowhere near Hard Rule 1. Pre-commit the stopping
+rule before running: if clipped training does not clear the tuned
+threshold on S1 within the same 25,000-step budget across 5 seeds, take
 option (b).
 
-**(b) Report the negative result and reframe.** This is already written
-up honestly in `docs/report.md` §5.1 and §6.3, and the project's stated
-contribution (PLAN2 §2.3, the steering result) does not depend on it.
-"The masking is what resists steering, and a tuned threshold behind the
-same mask would be equally immune" is a defensible and arguably more
-interesting thesis than a marginal RL win.
+**(b) Report the negative result and reframe.** `docs/report.md` §5.1 and
+§6.3 already do this. "The masking is what resists steering, and a tuned
+threshold behind the same mask would be equally immune" is a defensible
+and arguably more interesting thesis than a marginal RL win.
 
 **Do NOT** add a security term, weaken masking, or move an environment
-parameter toward the agent. Every environment change this session was
-made *before* any training run and in the direction that makes the
-agent's case harder; that property is worth more than the gate.
+parameter toward the agent. Every environment change was made *before*
+any training run and in the direction that makes the agent's case harder;
+that property is worth more than either gate.
 
-### Unfinished when this session stopped
+### Both long runs completed 2026-08-20
 
-Two **experiment artefacts** were still generating and are NOT in the
-repo. The code that produces them is complete and tested; only the long
-runs are outstanding:
-
-```bash
-python -m experiments.ablation       # -> results/foresight_ablation.json  (~25 min)
-python -m experiments.results_table  # -> results/closing_table.json       (~15 min)
-python -m dashboard.app              # -> dashboard/index.html + results/dashboard_payload.json
-```
-
-Until they exist, dashboard Panels 1 (foresight arm) and 7 (closing
-table) render an explicit **"not yet run"** with the command to run —
-by design, never a placeholder number
-(`tests/test_dashboard_app.py::test_missing_artifacts_render_as_not_yet_run_never_as_a_placeholder`).
-`results/steering_dose_response.json` **is** committed, so Panel 5 (the
-headline) renders real numbers already.
-
-Consequence for the report: `docs/report.md` §5.4 describes the closing
-table and the ablation as commands rather than quoting numbers from
-them. That section is the one place in the report awaiting real figures;
-§5.1, §5.2 and §5.3 are complete and quote runs that were done.
+`results/foresight_ablation.json`, `results/closing_table.json` and
+`dashboard/index.html` are generated and committed. The dashboard renders
+zero "not yet run" placeholders; `docs/report.md` §5.4 (closing table) and
+§5.5 (E-A ablation) carry the real numbers. **The repo is
+feature-complete and green: `pytest` 637 passed, and 632 passed / 5
+skipped without the gitignored dataset (the CI condition).**
 
 ### Still open, unchanged
 
@@ -92,6 +104,12 @@ spread a required field so a mean cannot be reported without it.
 
 ### Newly opened this session
 
+0. **Correction to an earlier note in this file:** a previous entry said
+   the ablation artefact feeds dashboard Panel 1. It does not — nothing
+   in `dashboard/data.py` reads `results/foresight_ablation.json`. The
+   artefact-backed panels are 5 (steering) and 7 (closing table); Panel 1
+   was never gated on an artefact. Surfacing the ablation in the
+   dashboard would be new work and was not done.
 1. **With a realistic noisy detector, the one-way ratchet saturates.**
    A single momentary threat peak -- 1 decision in 2,000, score 0.269 --
    trips the ratchet and changes the floor regime for the remaining 795
@@ -415,9 +433,11 @@ behavioral tests, part of the green `pytest` run).
 - **Date:** 2026-08-20
 - **Branch:** `dev` (cut from a fresh `main` baseline — the working copy as
   received had no `.git` directory; see SESSION_LOG.md §0)
-- **`pytest` pass count:** **629 passed**, 0 failed, 3 deselected (`-m "not slow"`;
-  the three deselected are the end-to-end steering-attack runs). Was 400 at the
-  start of the session.
-- **Artefacts:** `results/steering_dose_response.json` regenerated;
-  `results/foresight_ablation.json` and `results/closing_table.json` are produced
-  by long runs and must be regenerated whenever the environment changes.
+- **`pytest` pass count:** **637 passed**, 0 failed. Without the gitignored
+  RT-IoT2022 (the CI condition): **632 passed, 5 skipped**. Was 400 at the start
+  of the session.
+- **Artefacts:** all three committed — `results/steering_dose_response.json`,
+  `results/foresight_ablation.json`, `results/closing_table.json` — plus the
+  rendered `dashboard/index.html`. **Regenerate all of them whenever the
+  environment changes**; `results/dashboard_payload.json` is gitignored
+  (regenerable, ~700 KB of replay traces).

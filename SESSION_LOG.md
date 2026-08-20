@@ -394,3 +394,104 @@ session stopped", then commit `results/foresight_ablation.json`,
    `python -m forecaster.train` (~40 s) before anything that sets
    `use_foresight: lstm`, or the environment raises a `FileNotFoundError`
    that names the command.
+
+---
+
+## 2026-08-20 — both long runs landed; repo feature-complete and green
+
+Continuation of the handoff above. The two outstanding experiment runs
+completed; nothing was re-run with changed settings and no figure was
+hand-written.
+
+```
+[11:57:11] ablation start
+           wrote results/foresight_ablation.json
+[12:18:31] results_table start
+           wrote results/closing_table.json
+[12:21:53] dashboard start
+           wrote dashboard/index.html
+[12:21:54] ALL DONE
+```
+
+### Closing comparison (`results/closing_table.json`)
+
+25 cells, 5 policies × 5 scenarios, agents trained on **S1 only**, 5
+training seeds, checkpoint-averaged, S6 held out.
+
+**`floor_violations` is 0.00 ± 0.00 in all 25 cells** — the one column
+the architecture actually promises.
+
+The agent looks considerably better here than in Gate W3: **zero
+pool-exhaustion and zero regret events on S3, S4 and held-out S6**
+(matching the tuned threshold, beating always-hybrid's 87–144 by two
+orders of magnitude) while rekeying **proactively** — forced-rekey ratio
+0.046–0.196 against 0.86–0.97 for every non-random baseline. Two things
+keep that from being a win, and `docs/report.md` §5.4 says both: the
+agent buys the record with ~6× more rekeys, which `total_reward` prices
+and PLAN2 §7.7's column list does not; and **S2 is bad and unstable**
+(211.44 ± 290.46 exhaustion events — stdev larger than the mean).
+
+`p99_latency` is omitted from the reported table and the omission is
+stated: every policy in every scenario scores exactly **1.500**. It takes
+one of four discrete values and saturates whenever any hybrid serve
+occurs, which is essentially always.
+
+### E-A foresight ablation (`results/foresight_ablation.json`) — sharp negative
+
+Trained on S3, 5 seeds, checkpoint-averaged; all arms on
+`threat_input.source: rt_iot2022`.
+
+| eval | metric | `off` | `ewma` | `lstm` |
+|---|---|---|---|---|
+| S3 | total_reward | −44,844 ± 75,685 | **−4,669 ± 5,569** | −9,766,367 ± 1,723,435 |
+| S3 | exhaustion | 23.61 ± 23.30 | **2.00 ± 4.47** | 787.25 ± 99.38 |
+| S6 | total_reward | −5,165 ± 7,154 | **−2,166 ± 1,175** | −10,944,541 ± 5,066,929 |
+| S6 | exhaustion | 21.88 ± 48.93 | **0.00 ± 0.00** | 890.56 ± 256.69 |
+| S6 | deferred steps | 307.2 ± 686.9 | **0.00 ± 0.00** | 1,094,059.8 ± 506,541.1 |
+
+**Anticipation is worth a lot; the *learned* forecaster is a disaster.**
+`ewma` improves on `off` on every operational metric on both scenarios
+and reaches zero exhaustion and zero deferral on the held-out one.
+`lstm` is two to three orders of magnitude worse than `off`.
+
+This is the sharpest negative in the project and it inverts PLAN2 §11's
+cut-order, which treats the LSTM head as the optional part and the EWMA
+as the fallback. On this evidence the fallback is the better system.
+
+`docs/report.md` §5.5 records a **hypothesis, explicitly marked
+unverified**: the LSTM is a more sensitive detector (balanced accuracy
+0.931), the ratchet is deliberately one-way, so it should trip earlier
+and hold posture at HIGH — where mandated demand (~12.28 bits/step)
+exceeds S3's collapsed refill (~2.25 bits/step) and the deferral queue
+diverges. **The confirming posture-trajectory probe was not run**, and is
+now the first item under "Next task".
+
+### Wiring and corrections
+
+- `docs/report.md` §5.4 (closing table) and a new §5.5 (ablation) carry
+  the real numbers; abstract, §6.1, §6.2 and the conclusion updated to
+  carry both negative results.
+- `dashboard/index.html` regenerated: **zero "Not yet run" placeholders**,
+  all 25 "0 — structural" cells.
+- Five test assertions added for the now-populated panels (the
+  missing/corrupt-artefact tests are unchanged — they monkeypatch
+  `RESULTS_DIR` to an empty directory and still exercise the placeholder
+  path).
+- **Correction:** an earlier note in `PROGRESS.md` said the ablation
+  artefact feeds dashboard Panel 1. It does not — nothing reads
+  `results/foresight_ablation.json` in `dashboard/data.py`. The
+  artefact-backed panels are 5 and 7. Surfacing the ablation in the
+  dashboard would be new work and was not done.
+- `results/dashboard_payload.json` gitignored (~700 KB of regenerable
+  replay traces; a build input to the HTML, not a result).
+
+### State
+
+**No config, environment or experiment knob was touched.**
+`refill_bits_per_step`, graph size, arrival rate, key lifetime and the
+floor table are all exactly as they were when the runs were launched, so
+the committed numbers correspond to the committed code.
+
+`pytest`: **637 passed**; **632 passed / 5 skipped** without the
+gitignored dataset. Nothing left running in the background. Not pushed —
+there is still no remote (see the handoff note's gotcha 1).
