@@ -55,6 +55,30 @@ parameter toward the agent. Every environment change this session was
 made *before* any training run and in the direction that makes the
 agent's case harder; that property is worth more than the gate.
 
+### Unfinished when this session stopped
+
+Two **experiment artefacts** were still generating and are NOT in the
+repo. The code that produces them is complete and tested; only the long
+runs are outstanding:
+
+```bash
+python -m experiments.ablation       # -> results/foresight_ablation.json  (~25 min)
+python -m experiments.results_table  # -> results/closing_table.json       (~15 min)
+python -m dashboard.app              # -> dashboard/index.html + results/dashboard_payload.json
+```
+
+Until they exist, dashboard Panels 1 (foresight arm) and 7 (closing
+table) render an explicit **"not yet run"** with the command to run —
+by design, never a placeholder number
+(`tests/test_dashboard_app.py::test_missing_artifacts_render_as_not_yet_run_never_as_a_placeholder`).
+`results/steering_dose_response.json` **is** committed, so Panel 5 (the
+headline) renders real numbers already.
+
+Consequence for the report: `docs/report.md` §5.4 describes the closing
+table and the ablation as commands rather than quoting numbers from
+them. That section is the one place in the report awaiting real figures;
+§5.1, §5.2 and §5.3 are complete and quote runs that were done.
+
 ### Still open, unchanged
 
 The **checkpoint-to-checkpoint oscillation** (items 1-6 below, six

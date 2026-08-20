@@ -297,3 +297,100 @@ simulated and says so on every response). Seven-panel dashboard from real
 runs, with explicit "not yet run" where an artefact is missing.
 
 `pytest`: **400 → 629 passed** (3 slow deselected).
+
+---
+
+## 2026-08-20 — handoff note (session stopped at a clean point)
+
+Stopped deliberately, not blocked. The working tree is clean, `pytest` is
+**632 passed** (629 + the 3 `slow` end-to-end steering runs), and every
+unit of work below is committed on `dev`.
+
+### What is done
+
+All eleven `NotImplementedError` stubs the session started with are
+implemented and behaviourally tested. `pytest` went 400 → 632.
+
+| area | state |
+|---|---|
+| Tenant graph + graph-driven `RequestGenerator` | done, Hard Rule 3 swappability asserted by test |
+| S1–S6 scenario dispatch | done, each scenario's distinguishing behaviour pinned by test |
+| Dual-head LSTM forecaster (Addition A) | trained; balanced accuracy 0.9312 vs a 0.6817 base rate |
+| **Gate W3** | attempted for real — **FAILED**, reported as measured |
+| **S5 steering attack** | **HOLDS** — masked arm 0.0% at every dose |
+| S6 migration wave | done, held-out, lowering schedules rejected at construction |
+| E-A ablation / closing table | code done and smoke-tested; **long runs outstanding** |
+| Decision trace (Hard Rule 10) | done, one source of truth for `api/` and `dashboard/` |
+| API facade | done, primitive-honesty matrix on `/Health` |
+| Dashboard (all 7 panels) | done, Dash app + static export, real runs only |
+| `docs/report.md` | written; §5.4 awaits the two artefacts above |
+
+Four environment defects and two Hard Rule 2 violations were found by
+measurement and fixed — all before any training run, all in the direction
+that makes the agent's case harder. Detail in this file's main entry.
+
+### What is next
+
+**The single decision** (also at the top of `PROGRESS.md`): what to do
+about Gate W3's negative result. Two pre-committed options are written
+out there — (a) test the heavy-tailed-reward hypothesis with standard
+reward clipping, with the stopping rule stated in advance, or (b) report
+the negative result and reframe around the steering contribution, which
+`docs/report.md` §6.3 already does.
+
+**Mechanically next**, before anything else: run the two outstanding
+experiment commands listed in `PROGRESS.md` → "Unfinished when this
+session stopped", then commit `results/foresight_ablation.json`,
+`results/closing_table.json` and `dashboard/index.html`, and fill in
+`docs/report.md` §5.4.
+
+### Gotchas for whoever picks this up
+
+1. **There is no git remote.** The working copy as received had no
+   `.git` at all (it was an extracted archive; the enclosing repository
+   was the user's home directory on an unrelated branch). `main` is a
+   verbatim baseline of the received tree and `dev` holds all the work,
+   so `git diff main..dev` is the whole session. `git push` cannot work
+   until a remote is added.
+
+2. **`configs/default.yaml`'s `pool:` block is load-bearing and is not a
+   tuning knob.** `refill_bits_per_step: 15.0` must stay strictly inside
+   the measured demand bracket (floor-mandated 4.66–12.28 bits/step,
+   maximal 20.98). Outside it, the budgeting problem stops existing in
+   one direction or the other — that was the repo's state as received.
+   `tests/test_pool_sim.py::test_configured_refill_sits_inside_the_measured_demand_bracket`
+   pins it. **If you change the graph size, the arrival rate, the key
+   lifetime, or the floor table, re-measure the bracket** (the probe is
+   `AlwaysPQC` vs `AlwaysHybrid` with an unlimited pool) and update both
+   the config comment and that test's constants.
+
+3. **Never report a DQN number outside `experiments/campaign.py`.** The
+   checkpoint oscillation is unresolved after six sessions and is present
+   at full amplitude (within-run `total_reward` stdev 1447 ± 1411 on S1,
+   comparable to the mean). `evaluate_against_baseline` in
+   `experiments/train.py` is single-checkpoint and is kept only for
+   `main()`'s human-readable summary and for tests — its docstring says
+   so.
+
+4. **`use_foresight: lstm` needs `threat_input.source: rt_iot2022`.**
+   The model trained on 16-dimensional flow windows; the `scenario`
+   source emits one scalar, which the provider broadcasts, and the result
+   is a distribution mismatch rather than a forecast. `experiments/ablation.py`
+   sets this for every arm; anything else running the LSTM must too.
+
+5. **RT-IoT2022 is gitignored and operator-placed.** Both
+   `data/raw/RT_IOT2022.csv` and `data/raw/rt_iot2022/RT_IOT2022.csv`
+   resolve. Tests that need it skip cleanly (verified: 624 passed,
+   5 skipped with the file removed), so CI stays green without it.
+   **Do not move or rename it while a background experiment is running**
+   — doing exactly that killed the first ablation run this session.
+
+6. **`env/contracts.py` is untouched and should stay that way.** Every
+   change this session lives in `masking.py`, `environment.py` or a new
+   module. Masking gained rules 4 and 5 via an *optional* parameter, so
+   every pre-existing call shape is byte-identical.
+
+7. **The forecaster checkpoint (`checkpoints/*.pt`) is gitignored.** Run
+   `python -m forecaster.train` (~40 s) before anything that sets
+   `use_foresight: lstm`, or the environment raises a `FileNotFoundError`
+   that names the command.
