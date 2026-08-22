@@ -215,9 +215,26 @@ class MPCOracle:
         lifetime_cap = self._lifetime_cap()
         horizon_fraction = self.horizon / max(1e-9, lifetime_cap)
         expires_within_horizon = key_age_fraction + horizon_fraction >= 1.0
-        pool_can_fund_now = surplus > 1.0
 
-        if mask[int(Action.REUSE)] and not (expires_within_horizon and pool_can_fund_now):
+        # Would refreshing now actually consume a QKD key? ONLY a hybrid-tier
+        # re-establishment draws from the pool; classical and PQC rekeys cost
+        # latency and energy but no key material at all.
+        #
+        # This gated EVERY rekey on `surplus > 1.0` until 2026-08-19, which is
+        # wrong and was costly: whenever the pool was tight the oracle declined
+        # even a free PQC refresh, held the key to its hard cap, and then ate a
+        # FORCED rekey at a moment it did not choose -- precisely the failure
+        # the freshness/forced-rekey machinery exists to avoid. The effect was
+        # that the "perfect foresight" oracle degenerated to plain REUSE-always
+        # and scored *identically to `greedy_recommender`* while LOSING to the
+        # tuned threshold (-354.3 against -332.3). An upper bound that loses to
+        # a causal policy is not an upper bound, which is exactly what §S7
+        # test 5 exists to catch -- and that test had never been written.
+        prospective_floor = future_floor if surplus > 1.0 else floor
+        refresh_would_draw_a_key = prospective_floor >= int(Action.SERVE_HYBRID)
+        can_afford_refresh = (not refresh_would_draw_a_key) or surplus > 1.0
+
+        if mask[int(Action.REUSE)] and not (expires_within_horizon and can_afford_refresh):
             return Action.REUSE
 
         # 2. A key must be established. Serve the CHEAPEST tier that clears
@@ -381,9 +398,26 @@ class MPCForecast(MPCOracle):
         lifetime_cap = self._lifetime_cap()
         horizon_fraction = self.horizon / max(1e-9, lifetime_cap)
         expires_within_horizon = key_age_fraction + horizon_fraction >= 1.0
-        pool_can_fund_now = surplus > 1.0
 
-        if mask[int(Action.REUSE)] and not (expires_within_horizon and pool_can_fund_now):
+        # Would refreshing now actually consume a QKD key? ONLY a hybrid-tier
+        # re-establishment draws from the pool; classical and PQC rekeys cost
+        # latency and energy but no key material at all.
+        #
+        # This gated EVERY rekey on `surplus > 1.0` until 2026-08-19, which is
+        # wrong and was costly: whenever the pool was tight the oracle declined
+        # even a free PQC refresh, held the key to its hard cap, and then ate a
+        # FORCED rekey at a moment it did not choose -- precisely the failure
+        # the freshness/forced-rekey machinery exists to avoid. The effect was
+        # that the "perfect foresight" oracle degenerated to plain REUSE-always
+        # and scored *identically to `greedy_recommender`* while LOSING to the
+        # tuned threshold (-354.3 against -332.3). An upper bound that loses to
+        # a causal policy is not an upper bound, which is exactly what §S7
+        # test 5 exists to catch -- and that test had never been written.
+        prospective_floor = future_floor if surplus > 1.0 else floor
+        refresh_would_draw_a_key = prospective_floor >= int(Action.SERVE_HYBRID)
+        can_afford_refresh = (not refresh_would_draw_a_key) or surplus > 1.0
+
+        if mask[int(Action.REUSE)] and not (expires_within_horizon and can_afford_refresh):
             return Action.REUSE
 
         target_tier = max(floor, future_floor)

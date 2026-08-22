@@ -288,6 +288,21 @@ def _assert_schedule_only_ratchets_up(schedule: tuple[FloorChange, ...]) -> None
         highest_so_far[change.tenant_cohort] = int(change.new_floor)
 
 
+_S3_CRUNCH_INTENSITY: float = 8.0
+"""Threat intensity during S3's supply trough.
+
+On the same 0-8 scale as `_S2_THREAT_WINDOWS`, normalised by
+`SmartKeyNetEnv._MAX_THREAT_BOOST`. 8.0 is the HIGH-posture value, matching
+S2's peak window: the floors it raises are what make the collapsed link
+genuinely unable to fund demand.
+
+Set to 0.75 on first attempt, which is 0.09 after normalisation and did
+nothing at all -- the measured posture during the crunch was 0.03, floors never
+ratcheted, and no rekey was ever forced. Worth recording because the failure
+was silent: the scenario ran, the supply collapse was real, and the mechanism
+this window exists to create simply never fired."""
+
+
 def build_scenario(name: str, config: dict[str, Any], episode_steps: int) -> ScenarioSpec:
     """Build the `ScenarioSpec` for `name`.
 
@@ -322,7 +337,38 @@ def build_scenario(name: str, config: dict[str, Any], episode_steps: int) -> Sce
             peak_qber=peak_frac * qber_abort,
             residual_frac=residual_frac,
         )
-        return ScenarioSpec(name="S3", eval_only=False, qber_drift=drift)
+        # CORRELATED NON-STATIONARITY (SMARTKEYNET_BUILD_SPEC.md §7.1 fix A,
+        # final bullet): "Add correlated non-stationarity: SKR dips that
+        # *coincide* with demand spikes (a realistic correlation on shared
+        # infrastructure). This is where forecasting earns its keep and
+        # thresholds cannot follow."
+        #
+        # WHY S3 NEEDED THIS. Until 2026-08-19 supply and demand moved
+        # independently here, and the consequence was measured rather than
+        # guessed: every forward-looking behaviour was a net *loss*. The
+        # perfect-foresight MPC oracle scored identically to the myopic
+        # `greedy_recommender` and lost to the tuned threshold, because
+        # pre-provisioning cost latency that nothing ever repaid. With no
+        # foresight value, no agent could beat a static rule -- §7.1's
+        # diagnostic 1, and the reason Gate W3 failed for reasons that had
+        # nothing to do with the agent.
+        #
+        # The threat window is aligned to the drift's PEAK-HOLD window, so the
+        # floors ratchet up (raising hybrid-mandatory demand) exactly while
+        # reconciliation has collapsed the refill rate. A policy that reads the
+        # SKR trend can pre-provision before the crunch; one that reacts to the
+        # present cannot, because by the time the pool is empty the keys it
+        # needed no longer exist.
+        #
+        # It raises floors ONLY -- `ThreatWindow.intensity` is validated
+        # non-negative, so this cannot lower protection anywhere (Hard Rule 2).
+        peak_start, peak_end = drift.peak_hold_window()
+        crunch = ThreatWindow(
+            start_step=peak_start,
+            end_step=peak_end,
+            intensity=_S3_CRUNCH_INTENSITY,
+        )
+        return ScenarioSpec(name="S3", eval_only=False, qber_drift=drift, threat_windows=(crunch,))
 
     if normalised == "S4":
         flood = TenantFlood(

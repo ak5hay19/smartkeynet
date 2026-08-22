@@ -1,0 +1,127 @@
+% ---------------------------------------------------------------
+% SmartKeyNet — filled results tables
+% Generated from results/gate_w3.json, results/steering_attack.json,
+% results/ea_ablation.json (repo state 2026-08-19).
+% Every cell is a real run. Cells that were never computed are marked
+% "not instrumented" rather than estimated.
+% ---------------------------------------------------------------
+
+% =========================== TABLE V ===========================
+% Replaces the unfilled Table V. Three changes from the placeholder
+% are forced by what the harness actually records — see notes below.
+
+\begin{table}[t]
+\caption{Comparison on S3 (QKD degradation), ten evaluation seeds,
+disjoint from the three training seeds, common random numbers across
+policies. Values are means over seeds; reward is reported as IQM
+because one training seed diverged by an order of magnitude.
+Lower is better in every column except overflow.}
+\label{tab:s3}
+\centering
+\begin{tabular}{lrrrrr}
+\hline
+Policy & p99 lat. & Exhaust. & Regret & Overflow & $V(\pi)$ \\
+       & (ms)     & (events) & (events) & (keys) &        \\
+\hline
+Masked DQN (ours)        & 150.0 & 86.2  & 86.2  & 108.0 & 0 \\
+Static threshold ($\tau{=}0.95$) & 150.0 & 0.8   & 0.8   & 231.8 & 0 \\
+Greedy recommender       & \textbf{135.1} & \textbf{0.0} & \textbf{0.0} & 242.5 & 0 \\
+Always-PQC               & 150.0 & 262.3 & 262.3 & 95.8  & 0 \\
+Always-hybrid            & 150.0 & 366.9 & 366.9 & 0.0   & 0 \\
+Random (safe set)        & 150.0 & 278.5 & 278.5 & 2.0   & 0 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\caption{IQM episode reward on S3 with bootstrap 95\% CI over the same
+ten evaluation seeds. Descriptive only: the gate is scored on regret
+events, not on a scalar return.}
+\label{tab:s3reward}
+\centering
+\begin{tabular}{lr}
+\hline
+Policy & IQM reward [95\% CI] \\
+\hline
+Masked DQN (ours)        & $-72\,716$ $[-194\,354,\ -21\,098]$ \\
+Static threshold         & $\mathbf{-603}$ $[-648,\ -593]$ \\
+Greedy recommender       & $-627$ $[-637,\ -616]$ \\
+Always-PQC               & $-918\,779$ $[-1\,385\,014,\ -586\,323]$ \\
+Always-hybrid            & $-1\,059\,163$ $[-1\,514\,899,\ -720\,102]$ \\
+Random (safe set)        & $-953\,892$ $[-1\,281\,604,\ -656\,693]$ \\
+\hline
+\end{tabular}
+\end{table}
+
+% =========================== TABLE VI ==========================
+\begin{table}[t]
+\caption{Comparison on S1 (steady mixed traffic), same protocol.
+On the benign scenario the DQN, the tuned threshold and the myopic
+recommender are indistinguishable on the primary metric.}
+\label{tab:s1}
+\centering
+\begin{tabular}{lrrrrr}
+\hline
+Policy & p99 lat. & Exhaust. & Regret & Overflow & $V(\pi)$ \\
+       & (ms)     & (events) & (events) & (keys) &        \\
+\hline
+Masked DQN (ours)        & 150.0 & 0.0   & 0.0   & 508.9 & 0 \\
+Static threshold ($\tau{=}0.0$) & 150.0 & 0.0 & 0.0 & 490.8 & 0 \\
+Greedy recommender       & \textbf{135.1} & 0.0 & 0.0 & 510.6 & 0 \\
+Always-PQC               & 150.0 & 11.6  & 11.6  & 206.7 & 0 \\
+Always-hybrid            & 150.0 & 249.2 & 249.2 & 0.0   & 0 \\
+Random (safe set)        & 150.0 & 73.4  & 73.4  & 4.3   & 0 \\
+\hline
+\end{tabular}
+\end{table}
+
+% ===================== GATE OUTCOME SENTENCE ===================
+% Paired per-seed difference (threshold - DQN) on regret events,
+% bootstrap 95% CI, 10 000 resamples:
+%   S1: 0.00 [0.00, 0.00]      -- cannot discriminate; both are zero
+%   S3: -44.67 [-66.33, -25.33] -- excludes zero, DQN is WORSE
+% Gate W3: NOT PASSED.
+
+% =========================== TABLE VII =========================
+\begin{table}[t]
+\caption{Steering ladder. The tier each design serves as a function of
+the \emph{reported} threat, with the true posture held fixed. The
+soft-reward row is the argmax of $r_{\text{soft}}$, so it is a property
+of the reward function and holds for any agent maximising it; the
+masked row is the floor $\varphi(c_t,\hat p_t)$ resolved by the policy
+table. Tier 0 = classical, 1 = PQC, 2 = hybrid.}
+\label{tab:steer}
+\centering
+\begin{tabular}{lcccccccccc}
+\hline
+Reported threat & 0.0 & 0.1 & 0.2 & 0.3 & 0.4 & 0.5 & 0.6 & 0.7 & 0.8 & 0.9 \\
+\hline
+Soft-reward: preferred tier & \textbf{0} & \textbf{0} & 1 & 1 & 1 & 1 & 1 & 2 & 2 & 2 \\
+Masked: enforced floor      & \textbf{1} & \textbf{1} & 1 & 2 & 2 & 2 & 2 & 2 & 2 & 2 \\
+\hline
+\end{tabular}
+\end{table}
+
+% Empirical sweep, S2, attack window [1200, 2500], doses
+% alpha in {0, 0.25, 0.5, 0.75, 1.0}, three seeds, 7500 decisions each:
+%   floor violations:          0  (every agent, every dose, every seed)
+%   posture-ratchet reversals: 0  (every agent, every dose, every seed)
+%   attack detectability at alpha=1.0: mean suppression 0.50,
+%     duty cycle 0.52, max first-difference 0.02
+
+% =========================== TABLE VIII ========================
+\begin{table}[t]
+\caption{Experiment E-A: foresight source ablation. Two training seeds,
+five evaluation seeds, 60\,000 steps. S6 is held out from training.}
+\label{tab:ea}
+\centering
+\begin{tabular}{lrrr}
+\hline
+Foresight & S3 regret & S3 reward & S6 regret (held out) \\
+\hline
+off   & 31.5 & $-98\,769$ & \textbf{3.1} \\
+EWMA  & 37.6 & $-56\,920$ & 1.0 \\
+LSTM  & \textbf{8.4}  & $\mathbf{-5\,825}$ & 16.9 \\
+\hline
+\end{tabular}
+\end{table}

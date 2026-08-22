@@ -5,28 +5,29 @@
     "max_steps": 300,
     "seed": 4242
   },
-  "actions_sha_prefix": "14738745f395c8c7",
+  "actions_sha_prefix": "ceee2cc642b59567",
   "n_decisions": 300,
-  "regret_events": 13,
+  "regret_events": 20,
   "forced_rekeys": 20,
   "pool_overflow_keys": 0,
   "final_pool_keys": 0,
-  "final_queue_depth": 11,
+  "final_queue_depth": 18,
   "event_type_counts": {
-    "defer_onset": 13,
+    "defer_onset": 20,
     "defer_resolved": 2,
-    "defer_step": 544,
+    "defer_step": 833,
     "forced_rekey": 20,
-    "pool_exhausted": 92,
-    "pool_refill": 308,
+    "pool_exhausted": 99,
+    "pool_refill": 315,
+    "posture_change": 1,
     "serve": 300
   },
   "reward_terms": {
-    "latency": -299.5,
-    "energy": -30.96,
-    "freshness": 29.6622,
+    "latency": -300.3,
+    "energy": -31.08,
+    "freshness": 29.633,
     "qkd": -87.0,
-    "starve": -5440.0,
+    "starve": -8330.0,
     "rekey": -356.5
   }
 }

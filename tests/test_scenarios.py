@@ -75,8 +75,21 @@ def test_only_the_expected_channel_is_populated_per_scenario():
 
     assert (s1.qber_drift, s1.tenant_flood, s1.threat_windows) == (None, None, ())
     assert s2.threat_windows and s2.qber_drift is None and s2.tenant_flood is None
-    assert s3.qber_drift is not None and s3.tenant_flood is None and not s3.threat_windows
     assert s4.tenant_flood is not None and s4.qber_drift is None and not s4.threat_windows
+
+    # S3 DELIBERATELY uses two channels as of 2026-08-19.
+    #
+    # It is the one scenario that models *correlated* non-stationarity, which
+    # §7.1 fix A asks for in as many words: "SKR dips that coincide with demand
+    # spikes ... This is where forecasting earns its keep and thresholds cannot
+    # follow." One channel cannot express a correlation between two quantities.
+    # The threat window is pinned to the drift's peak-hold window, so the two
+    # are coincident by construction rather than by coincidence.
+    assert s3.qber_drift is not None and s3.tenant_flood is None
+    assert s3.threat_windows, "S3 must carry the demand-side half of its stress"
+    peak_start, peak_end = s3.qber_drift.peak_hold_window()
+    assert s3.threat_windows[0].start_step == peak_start
+    assert s3.threat_windows[0].end_step == peak_end
 
 
 # ---------------------------------------------------------------------------
