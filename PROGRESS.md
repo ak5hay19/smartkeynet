@@ -378,6 +378,6 @@ behavioral tests, part of the green `pytest` run).
 ## Last verified
 
 - **Date:** 2026-08-19
-- **Commit:** `7f4d88a` ("log: [solo] dashboard/explain.py -- Explain Decision backend, DQN thread paused -- 2026-08-19") — the commit this session started from; see SESSION_LOG.md for this session's own commit
-- **`pytest` pass count:** 434 passed, 0 failed (426 prior + 8 new in `tests/test_environment.py`, S2/S3 scenario dispatch)
-- **Branch:** local checkout is `dev21` (2 commits ahead of `main` in a straight line, no divergence — checked explicitly this session, see SESSION_LOG.md's step-0 branch check). Continued working on `dev21`, did not force a switch.
+- **Commit:** `f38fff0` ("log: [solo] S2+S3 scenario dispatch wired, S4/S6 deferred pending tenant-identity decision -- 2026-08-19") — the commit this session started from; see SESSION_LOG.md for this session's own commit
+- **`pytest` pass count:** 434 passed, 0 failed (unchanged — this was a pure git-history/ref reconciliation session, no source file content touched)
+- **Branch:** `main` and `dev21` reconciled this session via `git merge dev21 --ff-only` + `git push origin main` — both now point at the identical commit `f38fff0fc0afd8fba120c7b09087e862568eae2d`, verified via `git rev-parse main dev21 origin/main`. Neither branch was deleted. **`main` is once again the correct single source of truth for future session prompts, per instruction** — see SESSION_LOG.md's 2026-08-19 repo-hygiene entry for the full investigation, including an unresolved, unrelated finding (`origin/capstone-build-2026-08-20`, a disconnected history with what reads as much more complete project state) flagged there for the user's attention, not acted on.
