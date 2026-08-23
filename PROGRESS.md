@@ -11,6 +11,43 @@
 
 ## Next task
 
+**Two independent threads are open. Pick whichever this session serves.**
+
+**Thread 1 — DQN training-instability (PAUSED 2026-08-19, not resolved, not
+abandoned).** Five sessions deep with a genuine fork left unpicked, not more
+solo running. The fork, unchanged since 2026-08-18:
+(a) a direct Q-value-margin inspection at a known swing (e.g. seed 1's
+step `71250->72000` transition, `forced_rekey_ratio` mean dropping from
+`~0.90` to `0.149`) — check whether the greedy action at the eval
+episode's early, trajectory-determining decision points sits at a
+near-tie in Q-value between two actions; or (b) treat "the greedy policy
+genuinely oscillates checkpoint-to-checkpoint, mechanism unknown" as a
+standing, now twice-confirmed property of this training setup and move on
+to real S4 regardless, using **checkpoint-averaged** (not single-checkpoint)
+comparisons for any future DQN-vs-baseline number. See item 6 below for the
+full 2026-08-18 result this fork comes from. Do not touch `agents/dqn.py`
+or `experiments/train.py` for anything short of a deliberate, sign-off'd
+decision on this fork.
+
+**Thread 2 — Dashboard v2 (started 2026-08-19).** `dashboard/explain.py`
+(the Explain Decision panel's backend, PLAN2.md §7.3) is now
+implemented+tested — see its `dashboard/` per-file row below. The
+concrete next Dashboard v2 step is the Threat Input panel (PLAN2.md
+§7.1), but that's blocked on Person A's feature-extraction work (the
+shared RT-IoT2022/pcap feature-extraction function PLAN2.md §6 and
+Hard Rule 11 require) — dataset ingestion hasn't started (see `data/`
+below). Until that exists, do not stub a placeholder extraction path for
+Threat Input (Hard Rule 11: one shared extraction path, no parallel
+pipeline). Other dashboard-adjacent, unblocked options: Panel 2 (Living
+System) could start against `dashboard/explain.py`'s real trace output
+plus `StateDict`/event-log fields, no new dependency; or start on
+`agents/soft_reward_baseline.py` (needed before the steering attack,
+PLAN2.md §7.5/§9 S5, can be built).
+
+---
+
+**2026-08-18's diagnostic recap (Thread 1, unchanged from before the pause):**
+
 **A second 2026-08-18 diagnostic tested both candidate explanations for the
 checkpoint-to-checkpoint swings and disfavored both — the mechanism is
 still unknown, and even 8-eval-seed averaging doesn't tame it.** See item 6
@@ -277,6 +314,7 @@ behavioral tests, part of the green `pytest` run).
 | File | Status | Notes |
 |---|---|---|
 | `dashboard/app.py` | not started | Stub, `test_dashboard_app.py` is 1 import-smoke test. |
+| `dashboard/explain.py` | implemented+tested | **2026-08-19 (new file):** Explain Decision panel backend (PLAN2.md §7.3, Addition D; Hard Rule 10) -- Person D's first real code this project. `explain_decision(...)` (pure function, all six inputs explicit) + `explain_decision_from_env(env, state, chosen_action)` (convenience wrapper pulling those inputs off a live `SmartKeyNetEnv`, mirroring `experiments/harness.py`'s established precedent for reaching into a few private env attributes the public Gym API doesn't yet surface). Returns a `DecisionTrace` dataclass covering all six PLAN2.md §7.3 steps: threat score + source, posture probs + resolved posture, floor lookup (+ the full real floor table, imported from `env.masking`, never re-typed), the action mask (calls `env.masking.compute_mask()` directly -- zero possible drift between this module's legal/reason fields and the masking layer's real behavior, by construction, not by convention), cost comparison (reads `env.environment`'s real `_LATENCY_UNITS`/`_ENERGY_UNITS`/`_KEY_TYPE_TO_SERVE_ACTION`, never re-derived), and a deterministically templated final sentence. Policy-agnostic by design (no dependency on `agents/dqn.py`) -- verified in a scratchpad sanity script against `StaticThresholdPolicy` on real S1 steps, which also caught and fixed one real bug: the final-sentence template originally said "a learned preference from the policy" for the cost-tradeoff case, which is wrong for a non-learning baseline; reworded to "the policy's own preference among legal options." 26 tests (`test_explain.py`), incl. every (sensitivity_class, posture) floor-table cell checked against a fresh `PolicyTable`, 6 parametrized mask edge cases (pool empty, key age at/over cap, cold start, all-legal, HYBRID-floor-with-empty-pool) each checked against a real `compute_mask()` call, REKEY_NOW cost-resolution cases (existing-tier and cold-start-adopts-floor), and an end-to-end test stepping a real `SmartKeyNetEnv` and cross-checking every trace against a fresh `compute_mask()` call built from the same env state. Explicitly out of scope this session (per PLAN2.md's Hard Rule 11 and Hard Rule 10's scoping): pcap ingestion / Threat Input panel (§7.1) and any dashboard HTML/frontend -- this is a Python module returning structured data only. |
 
 ### api/
 
@@ -309,6 +347,6 @@ behavioral tests, part of the green `pytest` run).
 
 ## Last verified
 
-- **Date:** 2026-08-18
-- **Commit:** `6337d33` ("log: [solo] training-stability diagnostic — 2026-08-18") — the commit this session started from; see SESSION_LOG.md for this session's own commit
-- **`pytest` pass count:** 400 passed, 0 failed (unchanged — no repo source file touched this session, only a non-committed scratchpad probe script)
+- **Date:** 2026-08-19
+- **Commit:** `5993937` ("docs: add PLAN2.md + dashboard v2 mockup") — the commit this session started from (after committing the reference docs); see SESSION_LOG.md for this session's own commit
+- **`pytest` pass count:** 426 passed, 0 failed (400 prior + 26 new in `tests/test_explain.py`)
