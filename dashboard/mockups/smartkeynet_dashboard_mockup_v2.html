@@ -1,0 +1,1161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartKeyNet — Dashboard (mockup)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0A0E13;
+    --bg-grid:#0C1117;
+    --panel:#111820;
+    --panel-2:#151D27;
+    --line:#212C39;
+    --line-soft:#171F29;
+    --text:#E9EEF4;
+    --text-dim:#8FA0B3;
+    --text-faint:#4C5A6B;
+
+    --classical:#8B95A5;
+    --pqc:#E8A33D;
+    --hybrid:#33D687;
+    --quantum:#6E7EFF;
+    --danger:#FF5C6C;
+
+    --radius:12px;
+    --radius-sm:7px;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --disp:'Space Grotesk',sans-serif;
+    --body:'Inter',sans-serif;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(circle at 1px 1px, #16202C 1px, transparent 0) 0 0/28px 28px,
+      var(--bg);
+    color:var(--text);
+    font-family:var(--body);
+    -webkit-font-smoothing:antialiased;
+    min-height:100vh;
+  }
+
+  ::selection{background:var(--quantum);color:#fff;}
+  a{color:inherit;}
+  button{font-family:inherit;}
+
+  /* ---------------- topbar ---------------- */
+  .topbar{
+    display:flex;align-items:center;gap:18px;
+    padding:14px 22px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg, rgba(17,24,32,.9), rgba(17,24,32,.55));
+    backdrop-filter:blur(6px);
+    position:sticky;top:0;z-index:50;
+    flex-wrap:wrap;
+  }
+  .brand{display:flex;align-items:center;gap:10px;margin-right:auto;}
+  .brand svg{display:block;}
+  .brand-name{font-family:var(--disp);font-weight:700;font-size:17px;letter-spacing:.06em;}
+  .brand-sub{font-family:var(--mono);font-size:10px;color:var(--text-faint);letter-spacing:.14em;text-transform:uppercase;margin-top:1px;}
+  .mock-tag{
+    font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+    color:#0A0E13;background:var(--quantum);
+    padding:3px 8px;border-radius:999px;font-weight:600;text-transform:uppercase;
+  }
+
+  .status-pills{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+  .pill{
+    display:flex;align-items:center;gap:6px;
+    font-family:var(--mono);font-size:11.5px;color:var(--text-dim);
+    background:var(--panel-2);border:1px solid var(--line);
+    padding:6px 11px;border-radius:999px;white-space:nowrap;
+  }
+  .pill b{color:var(--text);font-weight:600;}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--hybrid);box-shadow:0 0 0 3px rgba(51,214,135,.18);}
+  .dot.amber{background:var(--pqc);box-shadow:0 0 0 3px rgba(232,163,61,.18);}
+  .dot.live{animation:blink 1.8s ease-in-out infinite;}
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:.35;}}
+
+  /* ---------------- tab nav ---------------- */
+  .beat-nav{display:flex;gap:2px;padding:0 22px;border-bottom:1px solid var(--line);background:var(--bg-grid);overflow-x:auto;}
+  .beat-btn{
+    font-family:var(--disp);font-weight:500;font-size:13.5px;
+    color:var(--text-faint);background:transparent;border:none;
+    padding:13px 16px 11px;cursor:pointer;border-bottom:2px solid transparent;
+    display:flex;align-items:center;gap:8px;white-space:nowrap;transition:color .15s ease;
+  }
+  .beat-btn .n{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);border:1px solid var(--line);border-radius:4px;padding:1px 5px;}
+  .beat-btn:hover{color:var(--text-dim);}
+  .beat-btn.active{color:var(--text);border-bottom-color:var(--quantum);}
+  .beat-btn.active .n{border-color:var(--quantum);color:var(--quantum);}
+
+  /* ---------------- layout ---------------- */
+  main{max-width:1320px;margin:0 auto;padding:26px 22px 60px;}
+  .panel{display:none;}
+  .panel.active{display:block;animation:fade .35s ease;}
+  @keyframes fade{from{opacity:0;transform:translateY(4px);}to{opacity:1;transform:none;}}
+
+  .beat-head{margin-bottom:20px;}
+  .beat-eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--quantum);margin-bottom:6px;}
+  .beat-title{font-family:var(--disp);font-weight:700;font-size:26px;letter-spacing:-.01em;}
+  .beat-desc{color:var(--text-dim);font-size:13.5px;max-width:660px;margin-top:6px;line-height:1.5;}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 18px 16px;}
+  .card-label{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-faint);
+    display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;
+  }
+
+  /* ---------------- shared bits ---------------- */
+  .badge{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--text-dim);}
+  .badge.calm{color:var(--hybrid);border-color:rgba(51,214,135,.35);}
+  .badge.elevated{color:var(--pqc);border-color:rgba(232,163,61,.35);}
+  .badge.high{color:var(--danger);border-color:rgba(255,92,108,.35);}
+  .tier-chip{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;padding:3px 8px;border-radius:5px;text-align:center;white-space:nowrap;}
+  .tier-chip.classical{color:var(--classical);background:rgba(139,149,165,.12);}
+  .tier-chip.pqc{color:var(--pqc);background:rgba(232,163,61,.12);}
+  .tier-chip.hybrid{color:var(--hybrid);background:rgba(51,214,135,.12);}
+  .callout{margin-top:12px;font-size:11.5px;color:var(--text-dim);border-left:2px solid var(--quantum);padding:8px 11px;background:var(--panel-2);border-radius:var(--radius-sm);line-height:1.5;}
+
+  /* ================= TAB: THREAT INPUT ================= */
+  .mode-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:18px;}
+  @media(max-width:820px){.mode-row{grid-template-columns:1fr;}}
+  .mode-card{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:14px 15px;cursor:pointer;transition:border-color .15s ease,background .15s ease;
+  }
+  .mode-card:hover{border-color:#2C3B4C;}
+  .mode-card.active{border-color:var(--quantum);background:linear-gradient(165deg, rgba(110,126,255,.08), var(--panel) 60%);}
+  .mode-name{font-family:var(--disp);font-weight:600;font-size:13.5px;display:flex;align-items:center;justify-content:space-between;}
+  .mode-name .check{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--line);flex-shrink:0;}
+  .mode-card.active .mode-name .check{border-color:var(--quantum);background:var(--quantum);}
+  .mode-desc{font-size:11.5px;color:var(--text-faint);margin-top:5px;line-height:1.5;}
+
+  .input-grid{display:grid;grid-template-columns:1fr 1.15fr;gap:16px;}
+  @media(max-width:980px){.input-grid{grid-template-columns:1fr;}}
+
+  .dropzone{
+    border:1.5px dashed var(--line);border-radius:var(--radius-sm);
+    padding:26px 16px;text-align:center;color:var(--text-faint);
+    display:flex;flex-direction:column;align-items:center;gap:8px;
+  }
+  .dropzone svg{opacity:.6;}
+  .dropzone .dz-title{font-size:12.5px;color:var(--text-dim);}
+  .dropzone .dz-sub{font-family:var(--mono);font-size:10.5px;}
+
+  .file-row{
+    margin-top:12px;display:flex;align-items:center;gap:10px;
+    background:var(--panel-2);border:1px solid var(--line-soft);border-radius:var(--radius-sm);
+    padding:10px 12px;
+  }
+  .file-icon{width:30px;height:30px;border-radius:7px;background:rgba(110,126,255,.12);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .file-meta-name{font-size:12.5px;font-weight:500;}
+  .file-meta-sub{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);margin-top:2px;}
+
+  .playback-bar{margin-top:14px;display:flex;align-items:center;gap:10px;}
+  .play-btn{
+    width:32px;height:32px;border-radius:50%;border:1px solid var(--line);background:var(--panel-2);
+    color:var(--text);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;
+  }
+  .progress-wrap{flex:1;}
+  .progress-track{height:6px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);overflow:hidden;}
+  .progress-fill{height:100%;width:49%;background:linear-gradient(90deg,#4A57D6,var(--quantum));}
+  .progress-labels{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--text-faint);margin-top:5px;}
+  .speed-row{display:flex;gap:6px;}
+  .speed-chip{
+    font-family:var(--mono);font-size:10.5px;color:var(--text-dim);background:var(--panel-2);
+    border:1px solid var(--line);border-radius:6px;padding:4px 9px;cursor:pointer;
+  }
+  .speed-chip.active{color:#0A0E13;background:var(--quantum);border-color:var(--quantum);font-weight:600;}
+
+  .stream-status{
+    margin-top:14px;font-family:var(--mono);font-size:11px;color:var(--text-dim);
+    display:flex;align-items:center;gap:8px;
+  }
+
+  .feat-table{width:100%;border-collapse:collapse;font-size:11.5px;}
+  .feat-table th{
+    text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;
+    color:var(--text-faint);padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;
+  }
+  .feat-table td{padding:9px 10px;font-family:var(--mono);border-bottom:1px solid var(--line-soft);color:var(--text-dim);}
+  .feat-table tr:last-child td{border-bottom:none;}
+  .feat-table tr.now td{color:var(--text);background:rgba(110,126,255,.06);}
+  .feat-table tr.now td:first-child{position:relative;}
+  .feat-table tr.now td:first-child::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--quantum);}
+
+  .pipeline{display:flex;align-items:center;gap:8px;margin-top:14px;flex-wrap:wrap;}
+  .pipe-box{
+    flex:1;min-width:130px;background:var(--panel-2);border:1px solid var(--line-soft);
+    border-radius:var(--radius-sm);padding:11px 12px;
+  }
+  .pipe-title{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);}
+  .pipe-val{font-family:var(--mono);font-weight:700;font-size:15px;margin-top:5px;}
+  .pipe-sub{font-size:10.5px;color:var(--text-dim);margin-top:2px;}
+  .pipe-arrow{color:var(--text-faint);flex-shrink:0;}
+
+  .frozen-note{
+    margin-top:14px;font-family:var(--mono);font-size:10.5px;color:var(--text-faint);
+    border-top:1px solid var(--line-soft);padding-top:12px;line-height:1.6;
+  }
+
+  /* ================= TAB: EXPLAIN DECISION ================= */
+  .chip-select-row{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;}
+  .req-chip{
+    font-family:var(--mono);font-size:11px;color:var(--text-dim);background:var(--panel-2);
+    border:1px solid var(--line);border-radius:999px;padding:6px 13px;cursor:pointer;
+  }
+  .req-chip.active{color:#0A0E13;background:var(--quantum);border-color:var(--quantum);font-weight:600;}
+
+  .trace{position:relative;padding-left:42px;}
+  .trace::before{content:"";position:absolute;left:14px;top:6px;bottom:6px;width:2px;background:var(--line);}
+  .trace-step{position:relative;margin-bottom:26px;}
+  .trace-step:last-child{margin-bottom:0;}
+  .step-num{
+    position:absolute;left:-42px;top:0;width:29px;height:29px;border-radius:50%;
+    background:var(--panel);border:2px solid var(--quantum);display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:12px;font-weight:700;color:var(--quantum);z-index:1;
+  }
+  .step-title{font-family:var(--disp);font-weight:600;font-size:14.5px;margin-bottom:10px;}
+  .step-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 17px;}
+
+  .signal-row{display:flex;align-items:center;gap:18px;flex-wrap:wrap;}
+  .signal-score{font-family:var(--mono);font-weight:700;font-size:30px;color:var(--quantum);}
+  .signal-meta{font-size:12px;color:var(--text-dim);}
+  .signal-meta .src{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);display:block;margin-top:3px;}
+
+  .prob-bars{display:flex;flex-direction:column;gap:8px;}
+  .prob-row{display:grid;grid-template-columns:82px 1fr 42px;align-items:center;gap:10px;}
+  .prob-label{font-family:var(--mono);font-size:10.5px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;}
+  .prob-track{height:9px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);overflow:hidden;}
+  .prob-fill{height:100%;border-radius:999px;background:var(--text-faint);}
+  .prob-row.resolved .prob-label{color:var(--text);font-weight:600;}
+  .prob-row.resolved .prob-fill{background:var(--quantum);}
+  .prob-pct{font-family:var(--mono);font-size:11px;color:var(--text-dim);text-align:right;}
+
+  .floor-grid{display:grid;grid-template-columns:64px repeat(3,1fr);gap:6px;margin-top:4px;}
+  .fg-head{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint);text-align:center;padding:6px 2px;}
+  .fg-rowlabel{font-family:var(--mono);font-size:10.5px;color:var(--text-dim);display:flex;align-items:center;padding-left:2px;}
+  .floor-cell{
+    font-family:var(--mono);font-size:11px;font-weight:600;text-align:center;padding:9px 4px;border-radius:6px;
+    border:1px solid var(--line-soft);background:var(--panel-2);color:var(--text-faint);
+    transition:all .2s ease;
+  }
+  .floor-cell.cl{color:var(--classical);}
+  .floor-cell.pqc{color:var(--pqc);}
+  .floor-cell.hy{color:var(--hybrid);}
+  .floor-cell.hit{border-color:var(--quantum);background:rgba(110,126,255,.14);box-shadow:0 0 0 1px var(--quantum) inset;transform:scale(1.04);}
+
+  .floor-result{
+    margin-top:12px;display:flex;align-items:center;justify-content:space-between;
+    background:var(--panel-2);border-radius:var(--radius-sm);padding:10px 13px;
+  }
+  .floor-result .k{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.06em;}
+  .floor-result .v{font-family:var(--mono);font-weight:700;font-size:14px;}
+
+  .mask-row{display:flex;gap:8px;flex-wrap:wrap;}
+  .mask-item{
+    flex:1;min-width:118px;border-radius:var(--radius-sm);padding:11px 10px;text-align:center;
+    border:1px solid var(--line-soft);background:var(--panel-2);
+  }
+  .mask-item.legal{border-color:rgba(51,214,135,.32);background:rgba(51,214,135,.06);}
+  .mask-item .a-name{font-family:var(--mono);font-size:10.5px;font-weight:600;}
+  .mask-item.legal .a-name{color:var(--hybrid);}
+  .mask-item:not(.legal) .a-name{color:var(--text-faint);text-decoration:line-through;}
+  .mask-item .a-reason{font-size:10px;color:var(--text-faint);margin-top:5px;line-height:1.4;min-height:14px;}
+  .mask-item.legal .a-reason{color:var(--hybrid);opacity:.8;}
+
+  .cost-rows{display:flex;flex-direction:column;gap:9px;}
+  .cost-row{display:grid;grid-template-columns:132px 1fr 92px;align-items:center;gap:10px;}
+  .cost-name{font-family:var(--mono);font-size:11px;color:var(--text-dim);}
+  .cost-track{height:10px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);overflow:hidden;}
+  .cost-fill{height:100%;border-radius:999px;background:var(--text-faint);}
+  .cost-row.chosen .cost-name{color:var(--text);font-weight:600;}
+  .cost-row.chosen .cost-fill{background:var(--hybrid);}
+  .cost-nums{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);text-align:right;}
+  .cost-note{margin-top:10px;font-size:11.5px;color:var(--text-dim);}
+
+  .final-pick{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+  .final-chip{
+    font-family:var(--mono);font-weight:700;font-size:15px;letter-spacing:.02em;
+    padding:9px 16px;border-radius:8px;background:rgba(110,126,255,.14);border:1px solid var(--quantum);color:var(--quantum);
+  }
+  .final-text{flex:1;min-width:220px;font-size:12.5px;color:var(--text-dim);line-height:1.55;}
+
+  /* ================= (unchanged tabs below) ================= */
+  .scenario-strip{display:flex;align-items:center;gap:10px;margin-bottom:16px;font-family:var(--mono);font-size:11.5px;color:var(--text-dim);}
+  .scenario-strip .s-chip{padding:4px 10px;border:1px solid var(--line);border-radius:999px;color:var(--text-faint);}
+  .scenario-strip .s-chip.on{color:var(--quantum);border-color:var(--quantum);}
+
+  .grid-1{display:grid;grid-template-columns:1.55fr 1fr;gap:16px;}
+  @media(max-width:980px){.grid-1{grid-template-columns:1fr;}}
+  .graph-wrap svg{width:100%;height:auto;display:block;}
+  .graph-legend{display:flex;gap:16px;margin-top:14px;flex-wrap:wrap;}
+  .legend-item{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-dim);}
+  .legend-swatch{width:16px;height:3px;border-radius:2px;}
+  .node-label{font-family:var(--mono);font-size:9.5px;fill:var(--text-dim);}
+  .node-label.hub{fill:var(--text);font-size:10.5px;}
+  .pulse-edge{stroke-dasharray:6 7;animation:flow 2.2s linear infinite;}
+  @keyframes flow{to{stroke-dashoffset:-52;}}
+  .node-glow{animation:breathe 3.4s ease-in-out infinite;}
+  @keyframes breathe{0%,100%{opacity:.55;}50%{opacity:1;}}
+
+  .side-stack{display:flex;flex-direction:column;gap:14px;}
+  .gauge-track{height:10px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);overflow:hidden;position:relative;}
+  .gauge-fill{height:100%;border-radius:999px;background:linear-gradient(90deg, #4A57D6, var(--quantum));}
+  .gauge-row{display:flex;justify-content:space-between;align-items:baseline;margin-top:9px;}
+  .gauge-big{font-family:var(--mono);font-weight:700;font-size:22px;color:var(--text);}
+  .gauge-meta{font-family:var(--mono);font-size:11px;color:var(--text-dim);}
+  .spark{display:block;width:100%;height:44px;}
+  .metric-row{display:flex;align-items:baseline;justify-content:space-between;}
+  .metric-num{font-family:var(--mono);font-weight:700;font-size:20px;}
+
+  .req-list{margin-top:10px;display:flex;flex-direction:column;gap:6px;}
+  .req-row{
+    display:grid;grid-template-columns:1.3fr .8fr .9fr auto;gap:10px;align-items:center;
+    padding:9px 10px;border-radius:var(--radius-sm);border:1px solid var(--line-soft);
+    cursor:pointer;font-size:12px;background:transparent;transition:background .12s ease,border-color .12s ease;
+  }
+  .req-row:hover{background:var(--panel-2);}
+  .req-row.active{background:var(--panel-2);border-color:var(--quantum);}
+  .req-tenant{font-weight:500;}
+  .req-sub{color:var(--text-faint);font-size:10.5px;font-family:var(--mono);}
+  .req-time{color:var(--text-faint);font-family:var(--mono);font-size:10.5px;text-align:right;}
+
+  .decision-card .dc-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line-soft);font-size:12.5px;}
+  .decision-card .dc-row:last-child{border-bottom:none;}
+  .dc-key{color:var(--text-faint);font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;}
+  .dc-val{font-weight:500;text-align:right;}
+  .dc-why{margin-top:10px;font-size:12px;color:var(--text-dim);line-height:1.5;background:var(--panel-2);border-radius:var(--radius-sm);padding:10px 11px;border-left:2px solid var(--quantum);}
+  .explain-link{
+    margin-top:11px;width:100%;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.03em;
+    color:var(--quantum);background:rgba(110,126,255,.1);border:1px solid rgba(110,126,255,.35);
+    border-radius:var(--radius-sm);padding:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;
+  }
+  .explain-link:hover{background:rgba(110,126,255,.18);}
+
+  .arena{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media(max-width:900px){.arena{grid-template-columns:1fr;}}
+  .arena-card{position:relative;overflow:hidden;}
+  .arena-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;}
+  .arena-title{font-family:var(--disp);font-weight:600;font-size:15px;}
+  .arena-tag{font-family:var(--mono);font-size:10px;color:var(--text-faint);}
+  .area-chart{width:100%;height:120px;display:block;}
+  .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;}
+  .stat-box{background:var(--panel-2);border:1px solid var(--line-soft);border-radius:var(--radius-sm);padding:10px 12px;}
+  .stat-box .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint);}
+  .stat-box .v{font-family:var(--mono);font-weight:700;font-size:19px;margin-top:3px;}
+  .stat-box .v.good{color:var(--hybrid);}
+  .stat-box .v.bad{color:var(--danger);}
+  .exhaust-banner{margin-top:12px;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--danger);background:rgba(255,92,108,.1);border:1px solid rgba(255,92,108,.35);border-radius:var(--radius-sm);padding:8px 11px;display:flex;align-items:center;gap:8px;}
+  .exhaust-banner .x-dot{width:6px;height:6px;border-radius:50%;background:var(--danger);animation:blink 1s infinite;}
+
+  .dose-card{margin-bottom:16px;}
+  .dose-chart{width:100%;height:110px;display:block;}
+  .dose-axis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--text-faint);margin-top:6px;}
+  .split{display:grid;grid-template-columns:1fr auto 1fr;gap:0;align-items:stretch;}
+  @media(max-width:920px){.split{grid-template-columns:1fr;}.split-divider{display:none;}}
+  .split-side{padding:20px;border-radius:var(--radius);}
+  .split-side.soft{background:linear-gradient(165deg, rgba(255,92,108,.08), var(--panel) 55%);border:1px solid rgba(255,92,108,.28);}
+  .split-side.masked{background:linear-gradient(165deg, rgba(51,214,135,.08), var(--panel) 55%);border:1px solid rgba(51,214,135,.28);}
+  .split-title{font-family:var(--disp);font-weight:600;font-size:15px;}
+  .split-sub{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);margin-top:2px;}
+  .split-divider{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px 22px;text-align:center;max-width:210px;}
+  .split-caption{font-family:var(--disp);font-weight:700;font-size:16px;line-height:1.35;letter-spacing:-.01em;}
+  .split-caption .vs{display:block;font-family:var(--mono);font-size:10px;color:var(--text-faint);letter-spacing:.16em;text-transform:uppercase;margin-bottom:10px;}
+  .hist-row{display:flex;gap:14px;margin-top:16px;}
+  .hist-group{flex:1;text-align:center;}
+  .hist-dose-label{font-family:var(--mono);font-size:10px;color:var(--text-faint);margin-bottom:8px;}
+  .hist-bars{display:flex;align-items:flex-end;gap:4px;height:86px;justify-content:center;}
+  .hist-bar{width:12px;border-radius:3px 3px 0 0;}
+  .hist-bar.classical{background:var(--classical);}
+  .hist-bar.pqc{background:var(--pqc);}
+  .hist-bar.hybrid{background:var(--hybrid);}
+  .floor-status{margin-top:16px;display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:11px;padding:9px 12px;border-radius:var(--radius-sm);}
+  .floor-status.warn{background:rgba(255,92,108,.08);color:var(--danger);}
+  .floor-status.safe{background:rgba(51,214,135,.08);color:var(--hybrid);}
+
+  .phase-selector{display:flex;gap:8px;margin-bottom:18px;}
+  .phase-btn{font-family:var(--mono);font-size:11.5px;color:var(--text-dim);background:var(--panel-2);border:1px solid var(--line);border-radius:999px;padding:7px 15px;cursor:pointer;}
+  .phase-btn.active{color:#0A0E13;background:var(--quantum);border-color:var(--quantum);font-weight:600;}
+  .mig-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media(max-width:900px){.mig-grid{grid-template-columns:1fr;}}
+  .subgraph-tags{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;}
+  .sg-tag{font-family:var(--mono);font-size:10.5px;padding:5px 10px;border-radius:999px;border:1px solid var(--line);color:var(--text-dim);display:flex;align-items:center;gap:6px;}
+  .sg-tag .arrow{color:var(--text-faint);}
+  .sg-tag .to{color:var(--hybrid);font-weight:600;}
+  .mig-caption{margin-top:18px;font-family:var(--disp);font-weight:600;font-size:15px;text-align:center;color:var(--text-dim);padding:14px;border-top:1px solid var(--line);}
+  .mig-caption b{color:var(--text);}
+
+  .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:760px;}
+  thead th{text-align:left;font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-faint);background:var(--panel-2);padding:12px 16px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  tbody td{padding:13px 16px;border-bottom:1px solid var(--line-soft);font-family:var(--mono);}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr.hero{background:rgba(110,126,255,.06);}
+  tbody tr.hero td:first-child{position:relative;}
+  tbody tr.hero td:first-child::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--quantum);}
+  .policy-name{font-family:var(--body);font-weight:600;font-size:13px;}
+  .policy-name .tag{display:inline-block;margin-left:8px;font-family:var(--mono);font-size:9px;color:var(--quantum);border:1px solid rgba(110,126,255,.4);border-radius:4px;padding:1px 5px;}
+  .num-good{color:var(--hybrid);}
+  .num-bad{color:var(--danger);}
+  .struct-badge{font-family:var(--mono);font-size:9.5px;color:var(--hybrid);background:rgba(51,214,135,.1);border:1px solid rgba(51,214,135,.3);padding:2px 6px;border-radius:4px;margin-left:6px;}
+
+  footer{max-width:1320px;margin:10px auto 40px;padding:0 22px;font-family:var(--mono);font-size:10.5px;color:var(--text-faint);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+      <polygon points="15,1.5 27,8.25 27,21.75 15,28.5 3,21.75 3,8.25" stroke="#6E7EFF" stroke-width="1.6"/>
+      <path d="M11 15a4 4 0 1 1 4 4v4.2M11 15a4 4 0 0 1 4-4M15 19v-1.4" stroke="#6E7EFF" stroke-width="1.6" stroke-linecap="round"/>
+      <circle cx="19.3" cy="10.7" r="1.4" fill="#6E7EFF"/>
+    </svg>
+    <div>
+      <div class="brand-name">SMARTKEYNET</div>
+      <div class="brand-sub">Hybrid KMS · Decision Layer</div>
+    </div>
+    <span class="mock-tag">mockup · sample data</span>
+  </div>
+  <div class="status-pills">
+    <span class="pill"><span class="dot live"></span> DQN (masked) <b>live</b></span>
+    <span class="pill">Scenario <b>S1 · Benign</b></span>
+    <span class="pill"><span class="dot amber"></span> Threat <b>ELEVATED</b></span>
+    <span class="pill">Source <b>Replayed pcap</b></span>
+    <span class="pill">Pool <b>62%</b></span>
+  </div>
+</header>
+
+<nav class="beat-nav" id="beatNav">
+  <button class="beat-btn active" data-panel="p1"><span class="n">01</span> Threat Input</button>
+  <button class="beat-btn" data-panel="p2"><span class="n">02</span> Living System</button>
+  <button class="beat-btn" data-panel="p3"><span class="n">03</span> Explain Decision</button>
+  <button class="beat-btn" data-panel="p4"><span class="n">04</span> Budgeting Brain</button>
+  <button class="beat-btn" data-panel="p5"><span class="n">05</span> Steering Attack</button>
+  <button class="beat-btn" data-panel="p6"><span class="n">06</span> Migration Wave</button>
+  <button class="beat-btn" data-panel="p7"><span class="n">07</span> Results</button>
+</nav>
+
+<main>
+
+  <!-- ============ TAB 1 — THREAT INPUT ============ -->
+  <section class="panel active" id="p1">
+    <div class="beat-head">
+      <div class="beat-eyebrow">Upstream · feeds every panel</div>
+      <div class="beat-title">Threat signal input</div>
+      <div class="beat-desc">Wherever the threat score comes from, it goes through the same pipeline: feature extraction → autoencoder + classifier → fused posture. Switch the source without touching anything downstream.</div>
+    </div>
+
+    <div class="mode-row">
+      <div class="mode-card">
+        <div class="mode-name">Offline dataset<span class="check"></span></div>
+        <div class="mode-desc">RT-IoT2022, batch-processed. Used to train the autoencoder + classifier offline. Not for live decisions.</div>
+      </div>
+      <div class="mode-card">
+        <div class="mode-name">Uploaded pcap<span class="check"></span></div>
+        <div class="mode-desc">A single capture analyzed in one pass. Feature windows are extracted and scored, then discarded — no streaming state.</div>
+      </div>
+      <div class="mode-card active">
+        <div class="mode-name">Replayed pcap (real-time)<span class="check"></span></div>
+        <div class="mode-desc">A capture streamed at its original packet pace. Every downstream panel updates exactly as it would from a live interface.</div>
+      </div>
+    </div>
+
+    <div class="input-grid">
+      <div class="card">
+        <div class="card-label"><span>Capture source</span><span>replay mode</span></div>
+        <div class="dropzone">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4M12 4l-4 4M12 4l4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+          <div class="dz-title">Drop a .pcap / .pcapng file, or browse</div>
+          <div class="dz-sub">extraction mirrors forecaster/dataset.py's RT-IoT2022 windowing exactly</div>
+        </div>
+
+        <div class="file-row">
+          <div class="file-icon">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6E7EFF" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+          </div>
+          <div>
+            <div class="file-meta-name">capture_2026-08-14.pcapng</div>
+            <div class="file-meta-sub">42.3 MB · 118,402 packets · 2h 00m duration</div>
+          </div>
+        </div>
+
+        <div class="playback-bar">
+          <button class="play-btn" id="playBtn" onclick="togglePlay()">
+            <svg id="playIcon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          </button>
+          <div class="progress-wrap">
+            <div class="progress-track"><div class="progress-fill"></div></div>
+            <div class="progress-labels"><span>59:02 elapsed</span><span>2:00:00 total</span></div>
+          </div>
+        </div>
+        <div class="speed-row" style="margin-top:10px;">
+          <span class="speed-chip">0.5×</span>
+          <span class="speed-chip active">1×</span>
+          <span class="speed-chip">4×</span>
+        </div>
+        <div class="stream-status"><span class="dot live"></span> streaming window 121 / 240 · feeding masking.py in the raise direction only</div>
+      </div>
+
+      <div class="card">
+        <div class="card-label"><span>Extracted feature windows</span><span>30s each</span></div>
+        <table class="feat-table">
+          <thead><tr><th>Window</th><th>Pkt/s</th><th>Bytes/s</th><th>Uniq ports</th><th>SYN ratio</th><th>Guess</th></tr></thead>
+          <tbody>
+            <tr><td>118</td><td>412</td><td>288K</td><td>19</td><td>0.11</td><td>normal</td></tr>
+            <tr><td>119</td><td>388</td><td>261K</td><td>17</td><td>0.09</td><td>normal</td></tr>
+            <tr><td>120</td><td>1,904</td><td>1.2M</td><td>63</td><td>0.47</td><td>probe</td></tr>
+            <tr class="now"><td>121</td><td>1,552</td><td>980K</td><td>58</td><td>0.41</td><td>probe</td></tr>
+          </tbody>
+        </table>
+
+        <div class="pipeline">
+          <div class="pipe-box">
+            <div class="pipe-title">Autoencoder</div>
+            <div class="pipe-val">0.061</div>
+            <div class="pipe-sub">reconstruction error</div>
+          </div>
+          <div class="pipe-arrow">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </div>
+          <div class="pipe-box">
+            <div class="pipe-title">XGBoost classifier</div>
+            <div class="pipe-val">probe</div>
+            <div class="pipe-sub">top class, p = 0.62</div>
+          </div>
+          <div class="pipe-arrow">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </div>
+          <div class="pipe-box" style="border-color:rgba(232,163,61,.35);">
+            <div class="pipe-title">Fusion</div>
+            <div class="pipe-val" style="color:var(--pqc);">ELEVATED</div>
+            <div class="pipe-sub">threat_score 0.51</div>
+          </div>
+        </div>
+
+        <div class="frozen-note">
+          Frozen during DQN training (no gradients flow back from the agent's loss). Output only ever <b style="color:var(--text-dim);">raises</b> a policy floor in env/masking.py — never lowers one, and never bypasses masking directly.
+          <br>→ this is the same threat_score / posture feeding the Threat Forecast panel in <b style="color:var(--text-dim);">02 · Living System</b> and Step 1 of every trace in <b style="color:var(--text-dim);">03 · Explain Decision</b>.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 2 — LIVING SYSTEM ============ -->
+  <section class="panel" id="p2">
+    <div class="beat-head">
+      <div class="beat-eyebrow">Beat 1 — 2 min</div>
+      <div class="beat-title">The living system</div>
+      <div class="beat-desc">Every tenant request flows through the graph in real time. Edge color is the key tier actually served. Click a recent decision to see the short version — or open the full trace in Explain Decision.</div>
+    </div>
+
+    <div class="grid-1">
+      <div class="card graph-wrap">
+        <div class="card-label"><span>Tenant network</span><span id="clock">t + 04:12</span></div>
+
+        <svg viewBox="0 0 640 380" xmlns="http://www.w3.org/2000/svg">
+          <path class="pulse-edge" d="M320 190 L150 100" stroke="#33D687" stroke-width="2.2" fill="none"/>
+          <path class="pulse-edge" d="M150 100 L60 150" stroke="#33D687" stroke-width="1.8" fill="none" style="animation-delay:.3s"/>
+          <path class="pulse-edge" d="M320 190 L500 90" stroke="#E8A33D" stroke-width="2.2" fill="none" style="animation-delay:.6s"/>
+          <path class="pulse-edge" d="M500 90 L565 165" stroke="#E8A33D" stroke-width="1.8" fill="none" style="animation-delay:.9s"/>
+          <path class="pulse-edge" d="M320 190 L500 300" stroke="#8B95A5" stroke-width="1.8" fill="none" style="animation-delay:1.2s"/>
+          <path class="pulse-edge" d="M320 190 L150 300" stroke="#8B95A5" stroke-width="1.8" fill="none" style="animation-delay:1.5s"/>
+          <path class="pulse-edge" d="M150 300 L60 255" stroke="#8B95A5" stroke-width="1.4" fill="none" style="animation-delay:1.8s"/>
+
+          <circle class="node-glow" cx="320" cy="190" r="26" fill="#6E7EFF" opacity=".18"/>
+          <circle cx="320" cy="190" r="15" fill="#151D27" stroke="#6E7EFF" stroke-width="2"/>
+          <text x="320" y="194" text-anchor="middle" class="node-label hub">KMS</text>
+
+          <circle class="node-glow" cx="150" cy="100" r="20" fill="#33D687" opacity=".14"/>
+          <circle cx="150" cy="100" r="11" fill="#151D27" stroke="#33D687" stroke-width="2"/>
+          <text x="150" y="80" text-anchor="middle" class="node-label">hospital</text>
+
+          <circle cx="60" cy="150" r="7" fill="#151D27" stroke="#33D687" stroke-width="1.6"/>
+          <text x="60" y="136" text-anchor="middle" class="node-label">export</text>
+
+          <circle class="node-glow" cx="500" cy="90" r="20" fill="#E8A33D" opacity=".14" style="animation-delay:.4s"/>
+          <circle cx="500" cy="90" r="11" fill="#151D27" stroke="#E8A33D" stroke-width="2"/>
+          <text x="500" y="70" text-anchor="middle" class="node-label">fintech</text>
+
+          <circle cx="565" cy="165" r="7" fill="#151D27" stroke="#E8A33D" stroke-width="1.6"/>
+          <text x="565" y="182" text-anchor="middle" class="node-label">billing</text>
+
+          <circle class="node-glow" cx="500" cy="300" r="18" fill="#8B95A5" opacity=".12" style="animation-delay:.8s"/>
+          <circle cx="500" cy="300" r="10" fill="#151D27" stroke="#8B95A5" stroke-width="2"/>
+          <text x="500" y="322" text-anchor="middle" class="node-label">logging</text>
+
+          <circle class="node-glow" cx="150" cy="300" r="18" fill="#8B95A5" opacity=".12" style="animation-delay:1.1s"/>
+          <circle cx="150" cy="300" r="10" fill="#151D27" stroke="#8B95A5" stroke-width="2"/>
+          <text x="150" y="322" text-anchor="middle" class="node-label">iot-telemetry</text>
+
+          <circle cx="60" cy="255" r="6.5" fill="#151D27" stroke="#8B95A5" stroke-width="1.6"/>
+          <text x="60" y="242" text-anchor="middle" class="node-label">ingest</text>
+        </svg>
+
+        <div class="graph-legend">
+          <div class="legend-item"><span class="legend-swatch" style="background:#8B95A5"></span> Classical</div>
+          <div class="legend-item"><span class="legend-swatch" style="background:#E8A33D"></span> PQC (ML-KEM-768)</div>
+          <div class="legend-item"><span class="legend-swatch" style="background:#33D687"></span> Hybrid (+ QKD)</div>
+        </div>
+
+        <div class="card-label" style="margin-top:22px;"><span>Recent decisions</span><span>click to inspect</span></div>
+        <div class="req-list" id="reqList"></div>
+      </div>
+
+      <div class="side-stack">
+        <div class="card">
+          <div class="card-label"><span>QKD pool</span><span>bits available</span></div>
+          <div class="gauge-track"><div class="gauge-fill" style="width:62%"></div></div>
+          <div class="gauge-row"><span class="gauge-big">62%</span><span class="gauge-meta">refill 214 kbps · QBER 2.1%</span></div>
+        </div>
+
+        <div class="card">
+          <div class="card-label"><span>Threat forecast</span><span class="badge elevated">elevated</span></div>
+          <svg class="spark" viewBox="0 0 280 44" preserveAspectRatio="none">
+            <polyline points="0,32 30,30 60,25 90,28 120,18 150,15 180,20 210,14 240,17 270,13" fill="none" stroke="#E8A33D" stroke-width="2"/>
+          </svg>
+          <div class="metric-row" style="margin-top:6px;"><span class="gauge-meta">next 5 steps</span><span class="gauge-meta">source: replayed pcap</span></div>
+        </div>
+
+        <div class="card">
+          <div class="card-label"><span>Latency (p99)</span><span>rolling</span></div>
+          <div class="metric-row"><span class="metric-num">1.4 <span style="font-size:12px;color:var(--text-faint)">ms</span></span></div>
+          <svg class="spark" viewBox="0 0 280 44" preserveAspectRatio="none">
+            <polyline points="0,24 30,20 60,26 90,18 120,22 150,15 180,20 210,17 240,21 270,16" fill="none" stroke="#33D687" stroke-width="2"/>
+          </svg>
+        </div>
+
+        <div class="card decision-card">
+          <div class="card-label"><span>Decision detail</span><span id="dcTime">now</span></div>
+          <div class="dc-row"><span class="dc-key">Tenant / Service</span><span class="dc-val" id="dcTenant">—</span></div>
+          <div class="dc-row"><span class="dc-key">Sensitivity</span><span class="dc-val" id="dcSens">—</span></div>
+          <div class="dc-row"><span class="dc-key">Policy floor</span><span class="dc-val" id="dcFloor">—</span></div>
+          <div class="dc-row"><span class="dc-key">Action taken</span><span class="dc-val" id="dcAction">—</span></div>
+          <div class="dc-why" id="dcWhy">—</div>
+          <button class="explain-link" onclick="openExplain()">
+            Open full reasoning trace
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 3 — EXPLAIN DECISION ============ -->
+  <section class="panel" id="p3">
+    <div class="beat-head">
+      <div class="beat-eyebrow">Explainability</div>
+      <div class="beat-title">Why this key, not another</div>
+      <div class="beat-desc">There's no narrated reasoning here — the explanation <i>is</i> the pipeline. Signal → posture → floor lookup → action mask → cost comparison → pick. Every step below is a real, inspectable computation.</div>
+    </div>
+
+    <div class="chip-select-row" id="chipRow"></div>
+
+    <div class="trace">
+
+      <div class="trace-step">
+        <div class="step-num">1</div>
+        <div class="step-title">Threat signal ingested</div>
+        <div class="step-card">
+          <div class="signal-row">
+            <div class="signal-score" id="stScore">0.58</div>
+            <div class="signal-meta">threat_score (0–1, EWMA-smoothed)<span class="src" id="stSource">replayed pcap · window 118/240</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="trace-step">
+        <div class="step-num">2</div>
+        <div class="step-title">Posture classified</div>
+        <div class="step-card">
+          <div class="prob-bars" id="probBars"></div>
+        </div>
+      </div>
+
+      <div class="trace-step">
+        <div class="step-num">3</div>
+        <div class="step-title">Policy floor lookup — (sensitivity class × posture)</div>
+        <div class="step-card">
+          <div class="floor-grid">
+            <div class="fg-head"></div><div class="fg-head">Calm</div><div class="fg-head">Elevated</div><div class="fg-head">High</div>
+            <div class="fg-rowlabel">S0</div><div class="floor-cell cl" data-cell="S0-CALM">CL</div><div class="floor-cell cl" data-cell="S0-ELEVATED">CL</div><div class="floor-cell pqc" data-cell="S0-HIGH">PQC</div>
+            <div class="fg-rowlabel">S1</div><div class="floor-cell cl" data-cell="S1-CALM">CL</div><div class="floor-cell pqc" data-cell="S1-ELEVATED">PQC</div><div class="floor-cell pqc" data-cell="S1-HIGH">PQC</div>
+            <div class="fg-rowlabel">S2</div><div class="floor-cell pqc" data-cell="S2-CALM">PQC</div><div class="floor-cell pqc" data-cell="S2-ELEVATED">PQC</div><div class="floor-cell hy" data-cell="S2-HIGH">HY</div>
+            <div class="fg-rowlabel">S3</div><div class="floor-cell pqc" data-cell="S3-CALM">PQC</div><div class="floor-cell hy" data-cell="S3-ELEVATED">HY</div><div class="floor-cell hy" data-cell="S3-HIGH">HY</div>
+          </div>
+          <div class="floor-result"><span class="k" id="frKey">S3 + ELEVATED</span><span class="v" id="frVal">floor = SERVE_HYBRID</span></div>
+        </div>
+      </div>
+
+      <div class="trace-step">
+        <div class="step-num">4</div>
+        <div class="step-title">Action mask computed</div>
+        <div class="step-card">
+          <div class="mask-row" id="maskRow"></div>
+        </div>
+      </div>
+
+      <div class="trace-step">
+        <div class="step-num">5</div>
+        <div class="step-title">Cost comparison among legal actions</div>
+        <div class="step-card">
+          <div class="cost-rows" id="costRows"></div>
+          <div class="cost-note" id="costNote"></div>
+        </div>
+      </div>
+
+      <div class="trace-step">
+        <div class="step-num">6</div>
+        <div class="step-title">Final decision</div>
+        <div class="step-card">
+          <div class="final-pick">
+            <span class="final-chip" id="finalChip">SERVE_HYBRID</span>
+            <span class="final-text" id="finalText">—</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ TAB 4 — BUDGETING BRAIN ============ -->
+  <section class="panel" id="p4">
+    <div class="beat-head">
+      <div class="beat-eyebrow">Beat 2 — 3 min</div>
+      <div class="beat-title">The budgeting brain</div>
+      <div class="beat-desc">Same QKD degradation scenario, two policies. The baseline spends hybrid on everything until the pool is gone; the agent reads the forecast and starts conserving before it has to.</div>
+    </div>
+
+    <div class="scenario-strip">
+      <span>Scenario</span>
+      <span class="s-chip">S1</span><span class="s-chip">S2</span><span class="s-chip on">S3 · QKD degradation</span><span class="s-chip">S4</span><span class="s-chip">S6</span>
+    </div>
+
+    <div class="arena">
+      <div class="card arena-card">
+        <div class="arena-head">
+          <div><div class="arena-title">DQN Agent (masked)</div><div class="arena-tag">foresight: ewma</div></div>
+          <span class="badge calm">stable</span>
+        </div>
+        <svg class="area-chart" viewBox="0 0 300 120" preserveAspectRatio="none">
+          <defs><linearGradient id="gAgent" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#6E7EFF" stop-opacity=".35"/><stop offset="100%" stop-color="#6E7EFF" stop-opacity="0"/></linearGradient></defs>
+          <polygon points="0,40 20,42 40,46 60,50 80,58 100,64 120,66 140,62 160,55 180,48 200,44 220,42 240,40 260,38 280,36 300,35 300,120 0,120" fill="url(#gAgent)"/>
+          <polyline points="0,40 20,42 40,46 60,50 80,58 100,64 120,66 140,62 160,55 180,48 200,44 220,42 240,40 260,38 280,36 300,35" fill="none" stroke="#6E7EFF" stroke-width="2.2"/>
+          <circle cx="120" cy="66" r="3.4" fill="#0A0E13" stroke="#6E7EFF" stroke-width="2"/>
+        </svg>
+        <div class="callout">Started conserving here — pool-head forecast (SKR trending down) crossed threshold at t≈120.</div>
+        <div class="stat-grid">
+          <div class="stat-box"><div class="k">Regret events</div><div class="v good">0</div></div>
+          <div class="stat-box"><div class="k">Pool exhaustion</div><div class="v good">0</div></div>
+          <div class="stat-box"><div class="k">p99 latency</div><div class="v">1.2 ms</div></div>
+          <div class="stat-box"><div class="k">Forced-rekey ratio</div><div class="v">0.26</div></div>
+        </div>
+      </div>
+
+      <div class="card arena-card">
+        <div class="arena-head">
+          <div><div class="arena-title">Always-Hybrid (baseline)</div><div class="arena-tag">no budgeting</div></div>
+          <span class="badge high">exhausted</span>
+        </div>
+        <svg class="area-chart" viewBox="0 0 300 120" preserveAspectRatio="none">
+          <defs><linearGradient id="gBase" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#FF5C6C" stop-opacity=".3"/><stop offset="100%" stop-color="#FF5C6C" stop-opacity="0"/></linearGradient></defs>
+          <polygon points="0,32 20,38 40,48 60,60 80,74 100,86 120,98 140,106 160,112 180,116 200,118 220,118 240,118 260,118 280,118 300,118 300,120 0,120" fill="url(#gBase)"/>
+          <polyline points="0,32 20,38 40,48 60,60 80,74 100,86 120,98 140,106 160,112 180,116 200,118 220,118 240,118 260,118 280,118 300,118" fill="none" stroke="#FF5C6C" stroke-width="2.2"/>
+        </svg>
+        <div class="exhaust-banner"><span class="x-dot"></span> POOL EXHAUSTED — hospital · export deferred, waiting on refill</div>
+        <div class="stat-grid">
+          <div class="stat-box"><div class="k">Regret events</div><div class="v bad">7</div></div>
+          <div class="stat-box"><div class="k">Pool exhaustion</div><div class="v bad">4</div></div>
+          <div class="stat-box"><div class="k">p99 latency</div><div class="v">1.5 ms</div></div>
+          <div class="stat-box"><div class="k">Forced-rekey ratio</div><div class="v">0.08</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 5 — STEERING ATTACK ============ -->
+  <section class="panel" id="p5">
+    <div class="beat-head">
+      <div class="beat-eyebrow">Beat 3 — 4 min · never cut</div>
+      <div class="beat-title">The steering attack</div>
+      <div class="beat-desc">The same adversarially-suppressed threat trace, fed to both agents. One of them has security as a soft reward term. One of them doesn't.</div>
+    </div>
+
+    <div class="card dose-card">
+      <div class="card-label"><span>Dose–response · share of decisions served below PQC tier</span><span>attack strength 0.0 → 1.0</span></div>
+      <svg class="dose-chart" viewBox="0 0 560 110" preserveAspectRatio="none">
+        <line x1="0" y1="95" x2="560" y2="95" stroke="#212C39" stroke-width="1"/>
+        <polyline points="0,90 140,72 280,48 420,22 560,8" fill="none" stroke="#FF5C6C" stroke-width="2.4"/>
+        <polyline points="0,90 140,90 280,90 420,90 560,90" fill="none" stroke="#33D687" stroke-width="2.4"/>
+        <circle cx="0" cy="90" r="3" fill="#33D687"/><circle cx="140" cy="90" r="3" fill="#33D687"/>
+        <circle cx="280" cy="90" r="3" fill="#33D687"/><circle cx="420" cy="90" r="3" fill="#33D687"/><circle cx="560" cy="90" r="3" fill="#33D687"/>
+        <circle cx="0" cy="90" r="3" fill="#FF5C6C"/><circle cx="140" cy="72" r="3" fill="#FF5C6C"/>
+        <circle cx="280" cy="48" r="3" fill="#FF5C6C"/><circle cx="420" cy="22" r="3" fill="#FF5C6C"/><circle cx="560" cy="8" r="3" fill="#FF5C6C"/>
+      </svg>
+      <div class="dose-axis"><span>0.0</span><span>0.25</span><span>0.5</span><span>0.75</span><span>1.0</span></div>
+      <div class="graph-legend" style="margin-top:10px;">
+        <div class="legend-item"><span class="legend-swatch" style="background:#FF5C6C"></span> Soft-reward baseline (Noetzold-style)</div>
+        <div class="legend-item"><span class="legend-swatch" style="background:#33D687"></span> Masked DQN — flat at zero, by construction</div>
+      </div>
+    </div>
+
+    <div class="split card" style="padding:0;">
+      <div class="split-side soft">
+        <div class="split-title">Soft-reward baseline</div>
+        <div class="split-sub">security ∈ reward · no masking</div>
+        <div class="hist-row">
+          <div class="hist-group"><div class="hist-dose-label">dose 0.0</div><div class="hist-bars"><div class="hist-bar classical" style="height:8%"></div><div class="hist-bar pqc" style="height:30%"></div><div class="hist-bar hybrid" style="height:60%"></div></div></div>
+          <div class="hist-group"><div class="hist-dose-label">dose 0.5</div><div class="hist-bars"><div class="hist-bar classical" style="height:35%"></div><div class="hist-bar pqc" style="height:40%"></div><div class="hist-bar hybrid" style="height:25%"></div></div></div>
+          <div class="hist-group"><div class="hist-dose-label">dose 1.0</div><div class="hist-bars"><div class="hist-bar classical" style="height:65%"></div><div class="hist-bar pqc" style="height:28%"></div><div class="hist-bar hybrid" style="height:7%"></div></div></div>
+        </div>
+        <div class="floor-status warn"><span>Structural floor</span><span>none</span></div>
+      </div>
+
+      <div class="split-divider">
+        <div class="split-caption"><span class="vs">the thesis, in one glance</span>“Security isn't in our reward, so it isn't for sale.”</div>
+      </div>
+
+      <div class="split-side masked">
+        <div class="split-title">Masked DQN (SmartKeyNet)</div>
+        <div class="split-sub">security = hard constraint · action masking</div>
+        <div class="hist-row">
+          <div class="hist-group"><div class="hist-dose-label">dose 0.0</div><div class="hist-bars"><div class="hist-bar classical" style="height:8%"></div><div class="hist-bar pqc" style="height:37%"></div><div class="hist-bar hybrid" style="height:55%"></div></div></div>
+          <div class="hist-group"><div class="hist-dose-label">dose 0.5</div><div class="hist-bars"><div class="hist-bar classical" style="height:4%"></div><div class="hist-bar pqc" style="height:31%"></div><div class="hist-bar hybrid" style="height:65%"></div></div></div>
+          <div class="hist-group"><div class="hist-dose-label">dose 1.0</div><div class="hist-bars"><div class="hist-bar classical" style="height:0%"></div><div class="hist-bar pqc" style="height:22%"></div><div class="hist-bar hybrid" style="height:78%"></div></div></div>
+        </div>
+        <div class="floor-status safe"><span>Floor violations</span><span>0 — structurally guaranteed</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 6 — MIGRATION WAVE ============ -->
+  <section class="panel" id="p6">
+    <div class="beat-head">
+      <div class="beat-eyebrow">Beat 4 — 3 min</div>
+      <div class="beat-title">The migration wave</div>
+      <div class="beat-desc">A scripted, exogenous compliance timeline — never chosen by the agent. Floors ratchet up cohort by cohort; the agent, never trained on this schedule, holds latency steady anyway.</div>
+    </div>
+
+    <div class="phase-selector">
+      <button class="phase-btn">Phase 1</button>
+      <button class="phase-btn active">Phase 2</button>
+      <button class="phase-btn">Phase 3</button>
+    </div>
+
+    <div class="mig-grid">
+      <div class="card">
+        <div class="card-label"><span>Affected cohort</span><span>t = week 5</span></div>
+        <p style="font-size:13px;color:var(--text-dim);line-height:1.6;margin:0 0 4px;">Phase 2 of the CNSA-2.0-style rollout hits the patient-records subgraph. Every session under this cohort now carries a hybrid-mandatory floor, regardless of instantaneous threat posture.</p>
+        <div class="subgraph-tags">
+          <span class="sg-tag">hospital · auth <span class="arrow">→</span> <span class="to">HYBRID mandatory</span></span>
+          <span class="sg-tag">hospital · export <span class="arrow">→</span> <span class="to">HYBRID mandatory</span></span>
+          <span class="sg-tag">fintech · billing <span class="arrow">unchanged</span></span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-label"><span>Pool response</span><span>agent-managed</span></div>
+        <svg class="area-chart" viewBox="0 0 300 110" preserveAspectRatio="none">
+          <polyline points="0,30 40,32 80,38 110,55 130,66 160,60 190,50 220,44 250,40 280,38 300,37" fill="none" stroke="#6E7EFF" stroke-width="2.2"/>
+          <line x1="110" y1="10" x2="110" y2="100" stroke="#212C39" stroke-dasharray="3 4"/>
+          <text x="115" y="16" font-family="JetBrains Mono" font-size="9" fill="#4C5A6B">phase 2 hit</text>
+        </svg>
+        <div class="callout">Demand for hybrid surges, pool dips, agent reallocates from discretionary hybrid serves elsewhere — recovers within ~40 steps without breaching any floor.</div>
+      </div>
+    </div>
+
+    <div class="mig-caption">Trained on steady state — <b>survives a staged enterprise migration</b> it never saw during training.</div>
+  </section>
+
+  <!-- ============ TAB 7 — RESULTS ============ -->
+  <section class="panel" id="p7">
+    <div class="beat-head">
+      <div class="beat-eyebrow">Closing table</div>
+      <div class="beat-title">Results across S1–S4, S6</div>
+      <div class="beat-desc">One number per policy, same scenarios, same seeds. Floor violations for the masked agent are zero by construction — not a result to be beaten, a guarantee.</div>
+    </div>
+
+    <div class="scenario-strip">
+      <span>Scenario</span>
+      <span class="s-chip on">S1</span><span class="s-chip">S2</span><span class="s-chip">S3</span><span class="s-chip">S4</span><span class="s-chip">S6</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Policy</th><th>p99 latency</th><th>Pool exhaustion events</th><th>Regret events</th><th>Forced-rekey ratio</th><th>Floor violations</th></tr></thead>
+        <tbody>
+          <tr class="hero"><td class="policy-name">DQN (masked) <span class="tag">ours</span></td><td>1.20 ms</td><td class="num-good">0</td><td class="num-good">0</td><td>0.26</td><td class="num-good">0 <span class="struct-badge">structural</span></td></tr>
+          <tr><td class="policy-name">Static-threshold (tuned)</td><td>1.50 ms</td><td>2</td><td>3</td><td>0.08</td><td class="num-good">0</td></tr>
+          <tr><td class="policy-name">Always-hybrid</td><td>1.50 ms</td><td class="num-bad">4</td><td class="num-bad">7</td><td>0.08</td><td class="num-good">0</td></tr>
+          <tr><td class="policy-name">Always-PQC</td><td>1.20 ms</td><td class="num-good">0</td><td class="num-good">0</td><td>0.91</td><td class="num-good">0</td></tr>
+          <tr><td class="policy-name">Random</td><td>1.42 ms</td><td>3</td><td>5</td><td>0.47</td><td class="num-good">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <span>SmartKeyNet — decision layer for a multi-tenant hybrid-crypto KMS</span>
+  <span>All figures on this page are illustrative placeholders for layout review only</span>
+</footer>
+
+<script>
+  // ---- tab switching ----
+  const navBtns = document.querySelectorAll('.beat-btn');
+  const panels = document.querySelectorAll('.panel');
+  function activateTab(id){
+    navBtns.forEach(b => b.classList.toggle('active', b.dataset.panel === id));
+    panels.forEach(p => p.classList.toggle('active', p.id === id));
+  }
+  navBtns.forEach(btn => btn.addEventListener('click', () => activateTab(btn.dataset.panel)));
+
+  // ---- mode cards (Threat Input tab) ----
+  document.querySelectorAll('.mode-card').forEach(card => {
+    card.addEventListener('click', () => {
+      document.querySelectorAll('.mode-card').forEach(c => c.classList.remove('active'));
+      card.classList.add('active');
+    });
+  });
+
+  // ---- speed chips + play/pause (cosmetic) ----
+  document.querySelectorAll('.speed-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('.speed-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+    });
+  });
+  let playing = true;
+  function togglePlay(){
+    playing = !playing;
+    document.getElementById('playIcon').innerHTML = playing
+      ? '<path d="M8 5v14l11-7z"/>'
+      : '<rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/>';
+  }
+
+  // ---- phase selector (visual only) ----
+  document.querySelectorAll('.phase-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.phase-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  // ---- shared request data (drives Living System + Explain Decision) ----
+  const requests = [
+    {
+      tenant:'hospital', service:'export', sensLabel:'S3 — patient records', sensClass:'S3',
+      tier:'hybrid', action:'SERVE_HYBRID', floor:'SERVE_HYBRID', time:'2s ago',
+      threatScore:'0.58', source:'replayed pcap · window 118/240',
+      posture:'ELEVATED', probs:{CALM:18,ELEVATED:61,HIGH:21},
+      mask:[
+        {a:'SERVE_CLASSICAL', legal:false, reason:'below floor'},
+        {a:'SERVE_PQC', legal:false, reason:'below floor'},
+        {a:'SERVE_HYBRID', legal:true, reason:'clears floor'},
+        {a:'REUSE', legal:false, reason:'no existing key (cold start)'},
+        {a:'REKEY_NOW', legal:true, reason:'cold start → adopts floor tier'}
+      ],
+      costs:[{name:'SERVE_HYBRID', lat:1.5, en:1.6, chosen:true}],
+      costNote:'Only one legal tier this time — the floor leaves no cost tradeoff to make.',
+      final:'Floor requires \u2265 SERVE_HYBRID at S3 + ELEVATED posture. SERVE_HYBRID was the only legal tier \u2014 chosen because it\u2019s required, not preferred.'
+    },
+    {
+      tenant:'fintech', service:'billing', sensLabel:'S2 — regulated financial', sensClass:'S2',
+      tier:'pqc', action:'SERVE_PQC', floor:'SERVE_PQC', time:'6s ago',
+      threatScore:'0.12', source:'replayed pcap · window 119/240',
+      posture:'CALM', probs:{CALM:71,ELEVATED:24,HIGH:5},
+      mask:[
+        {a:'SERVE_CLASSICAL', legal:false, reason:'below floor'},
+        {a:'SERVE_PQC', legal:true, reason:'clears floor'},
+        {a:'SERVE_HYBRID', legal:true, reason:'clears floor'},
+        {a:'REUSE', legal:false, reason:'no existing key (cold start)'},
+        {a:'REKEY_NOW', legal:true, reason:'cold start → adopts floor tier'}
+      ],
+      costs:[{name:'SERVE_PQC', lat:1.2, en:1.3, chosen:true},{name:'SERVE_HYBRID', lat:1.5, en:1.6, chosen:false}],
+      costNote:'',
+      final:'Floor requires \u2265 SERVE_PQC at S2 + CALM posture. SERVE_HYBRID was also legal but costs more and wasn\u2019t required \u2014 SERVE_PQC is the cheapest option that clears the floor.'
+    },
+    {
+      tenant:'iot-telemetry', service:'ingest', sensLabel:'S0 — public telemetry', sensClass:'S0',
+      tier:'classical', action:'SERVE_CLASSICAL', floor:'SERVE_CLASSICAL', time:'9s ago',
+      threatScore:'0.05', source:'replayed pcap · window 119/240',
+      posture:'CALM', probs:{CALM:82,ELEVATED:15,HIGH:3},
+      mask:[
+        {a:'SERVE_CLASSICAL', legal:true, reason:'clears floor'},
+        {a:'SERVE_PQC', legal:true, reason:'clears floor'},
+        {a:'SERVE_HYBRID', legal:true, reason:'clears floor'},
+        {a:'REUSE', legal:false, reason:'no existing key (cold start)'},
+        {a:'REKEY_NOW', legal:true, reason:'cold start → adopts floor tier'}
+      ],
+      costs:[{name:'SERVE_CLASSICAL', lat:1.0, en:1.0, chosen:true},{name:'SERVE_PQC', lat:1.2, en:1.3, chosen:false},{name:'SERVE_HYBRID', lat:1.5, en:1.6, chosen:false}],
+      costNote:'',
+      final:'Floor only requires \u2265 SERVE_CLASSICAL at S0 + CALM posture \u2014 nothing forces a stronger tier. SERVE_CLASSICAL is the cheapest legal option.'
+    },
+    {
+      tenant:'logging', service:'notify', sensLabel:'S1 — routine business', sensClass:'S1',
+      tier:'pqc', action:'REUSE', floor:'SERVE_CLASSICAL', time:'14s ago',
+      threatScore:'0.09', source:'replayed pcap · window 120/240',
+      posture:'CALM', probs:{CALM:77,ELEVATED:19,HIGH:4},
+      mask:[
+        {a:'SERVE_CLASSICAL', legal:true, reason:'clears floor'},
+        {a:'SERVE_PQC', legal:true, reason:'clears floor'},
+        {a:'SERVE_HYBRID', legal:true, reason:'clears floor'},
+        {a:'REUSE', legal:true, reason:'key age within cap'},
+        {a:'REKEY_NOW', legal:true, reason:'always legal above floor'}
+      ],
+      costs:[{name:'REUSE', lat:0.2, en:0.1, chosen:true},{name:'SERVE_CLASSICAL', lat:1.0, en:1.0, chosen:false},{name:'SERVE_PQC', lat:1.2, en:1.3, chosen:false},{name:'SERVE_HYBRID', lat:1.5, en:1.6, chosen:false}],
+      costNote:'',
+      final:'Existing session key is still within its age cap and already clears the S1 + CALM floor. REUSE costs a fraction of any fresh handshake \u2014 nothing here justifies rekeying.'
+    },
+    {
+      tenant:'fintech', service:'auth', sensLabel:'S2 — regulated financial', sensClass:'S2',
+      tier:'hybrid', action:'REKEY_NOW', floor:'SERVE_PQC', time:'21s ago',
+      threatScore:'0.51', source:'replayed pcap · window 121/240',
+      posture:'ELEVATED', probs:{CALM:22,ELEVATED:55,HIGH:23},
+      mask:[
+        {a:'SERVE_CLASSICAL', legal:false, reason:'below floor'},
+        {a:'SERVE_PQC', legal:true, reason:'clears floor'},
+        {a:'SERVE_HYBRID', legal:true, reason:'clears floor'},
+        {a:'REUSE', legal:false, reason:'key age exceeded cap'},
+        {a:'REKEY_NOW', legal:true, reason:'refreshes existing HYBRID tier'}
+      ],
+      costs:[{name:'SERVE_PQC', lat:1.2, en:1.3, chosen:false},{name:'REKEY_NOW \u2192 HYBRID', lat:1.5, en:1.6, chosen:true},{name:'SERVE_HYBRID (fresh)', lat:1.5, en:1.6, chosen:false}],
+      costNote:'Not a deterministic pick this time \u2014 a cheaper legal option existed. See note below.',
+      final:'Forced: REUSE was masked out because key age exceeded its cap. REKEY_NOW refreshes the session at its existing HYBRID tier rather than stepping down to the new, lower PQC floor. A direct SERVE_PQC was legal and cheaper, but wasn\u2019t chosen \u2014 this one is a learned preference from the trained policy, not a rule the masking layer enforces.'
+    }
+  ];
+
+  let selectedIndex = 0;
+
+  function tierClass(action){
+    if(action.indexOf('HYBRID') !== -1) return 'hybrid';
+    if(action.indexOf('PQC') !== -1) return 'pqc';
+    if(action.indexOf('CLASSICAL') !== -1) return 'classical';
+    return 'pqc';
+  }
+
+  function renderReqList(){
+    const reqList = document.getElementById('reqList');
+    reqList.innerHTML = '';
+    requests.forEach((r, i) => {
+      const row = document.createElement('div');
+      row.className = 'req-row' + (i === selectedIndex ? ' active' : '');
+      row.innerHTML = `
+        <div><div class="req-tenant">${r.tenant}</div><div class="req-sub">${r.service}</div></div>
+        <div class="req-sub">${r.sensClass}</div>
+        <div class="tier-chip ${r.tier}">${r.action}</div>
+        <div class="req-time">${r.time}</div>
+      `;
+      row.addEventListener('click', () => selectRequest(i));
+      reqList.appendChild(row);
+    });
+  }
+
+  function renderChipRow(){
+    const chipRow = document.getElementById('chipRow');
+    chipRow.innerHTML = '';
+    requests.forEach((r, i) => {
+      const chip = document.createElement('button');
+      chip.className = 'req-chip' + (i === selectedIndex ? ' active' : '');
+      chip.textContent = `${r.tenant} · ${r.service}`;
+      chip.addEventListener('click', () => selectRequest(i));
+      chipRow.appendChild(chip);
+    });
+  }
+
+  function renderDecisionCard(r){
+    document.getElementById('dcTenant').textContent = `${r.tenant} · ${r.service}`;
+    document.getElementById('dcSens').textContent = r.sensLabel;
+    document.getElementById('dcFloor').textContent = r.floor;
+    document.getElementById('dcAction').textContent = r.action;
+    document.getElementById('dcWhy').textContent = r.final;
+    document.getElementById('dcTime').textContent = r.time;
+  }
+
+  function renderTrace(r){
+    document.getElementById('stScore').textContent = r.threatScore;
+    document.getElementById('stSource').textContent = r.source;
+
+    const probBars = document.getElementById('probBars');
+    probBars.innerHTML = '';
+    ['CALM','ELEVATED','HIGH'].forEach(p => {
+      const resolved = p === r.posture;
+      const row = document.createElement('div');
+      row.className = 'prob-row' + (resolved ? ' resolved' : '');
+      row.innerHTML = `
+        <div class="prob-label">${p}</div>
+        <div class="prob-track"><div class="prob-fill" style="width:${r.probs[p]}%"></div></div>
+        <div class="prob-pct">${r.probs[p]}%</div>
+      `;
+      probBars.appendChild(row);
+    });
+
+    document.querySelectorAll('.floor-cell').forEach(c => c.classList.remove('hit'));
+    const cell = document.querySelector(`[data-cell="${r.sensClass}-${r.posture}"]`);
+    if(cell) cell.classList.add('hit');
+    document.getElementById('frKey').textContent = `${r.sensClass} + ${r.posture}`;
+    document.getElementById('frVal').textContent = `floor = ${r.floor}`;
+
+    const maskRow = document.getElementById('maskRow');
+    maskRow.innerHTML = '';
+    r.mask.forEach(m => {
+      const item = document.createElement('div');
+      item.className = 'mask-item' + (m.legal ? ' legal' : '');
+      item.innerHTML = `<div class="a-name">${m.a}</div><div class="a-reason">${m.reason}</div>`;
+      maskRow.appendChild(item);
+    });
+
+    const costRows = document.getElementById('costRows');
+    costRows.innerHTML = '';
+    const maxCost = Math.max(...r.costs.map(c => c.lat + c.en));
+    r.costs.forEach(c => {
+      const width = ((c.lat + c.en) / maxCost * 100).toFixed(0);
+      const row = document.createElement('div');
+      row.className = 'cost-row' + (c.chosen ? ' chosen' : '');
+      row.innerHTML = `
+        <div class="cost-name">${c.name}${c.chosen ? ' ✓' : ''}</div>
+        <div class="cost-track"><div class="cost-fill" style="width:${width}%"></div></div>
+        <div class="cost-nums">lat ${c.lat} · en ${c.en}</div>
+      `;
+      costRows.appendChild(row);
+    });
+    document.getElementById('costNote').textContent = r.costNote;
+
+    document.getElementById('finalChip').textContent = r.action;
+    document.getElementById('finalChip').className = 'final-chip';
+    document.getElementById('finalText').textContent = r.final;
+  }
+
+  function selectRequest(i){
+    selectedIndex = i;
+    const r = requests[i];
+    renderReqList();
+    renderChipRow();
+    renderDecisionCard(r);
+    renderTrace(r);
+  }
+
+  function openExplain(){
+    activateTab('p3');
+  }
+
+  selectRequest(0);
+
+  // ---- ambient clock ticker (cosmetic only) ----
+  let secs = 252;
+  setInterval(() => {
+    secs++;
+    const m = String(Math.floor(secs / 60)).padStart(2, '0');
+    const s = String(secs % 60).padStart(2, '0');
+    document.getElementById('clock').textContent = `t + ${m}:${s}`;
+  }, 1000);
+</script>
+
+</body>
+</html>
