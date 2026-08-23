@@ -1429,25 +1429,28 @@ class SmartKeyNetEnv(gym.Env[StateDict, int]):
         # sub-floor tier before the agent ever saw it. That unreachability is
         # the guarantee; this counter is how the victim demonstrates its
         # absence.
-        if not self._masking_enabled and cost_action in _TIER_ACTIONS_FOR_VIOLATIONS:
-            if int(cost_action) < int(floor):
-                self._floor_violations += 1
-                self._event_log.emit(
-                    "serve",
-                    self._step_count,
-                    request_id=request["request_id"],
-                    tenant=request["tenant"],
-                    sensitivity_class=int(request["sensitivity_class"]),
-                    floor=int(floor),
-                    action=int(action),
-                    tier_served=int(cost_action),
-                    latency_ms=float(latency_ms),
-                    energy_mj=float(energy_mj),
-                    keys_drawn=0,
-                    was_deferred=False,
-                    wait_steps=0,
-                    floor_violation=True,
-                )
+        if (
+            not self._masking_enabled
+            and cost_action in _TIER_ACTIONS_FOR_VIOLATIONS
+            and int(cost_action) < int(floor)
+        ):
+            self._floor_violations += 1
+            self._event_log.emit(
+                "serve",
+                self._step_count,
+                request_id=request["request_id"],
+                tenant=request["tenant"],
+                sensitivity_class=int(request["sensitivity_class"]),
+                floor=int(floor),
+                action=int(action),
+                tier_served=int(cost_action),
+                latency_ms=float(latency_ms),
+                energy_mj=float(energy_mj),
+                keys_drawn=0,
+                was_deferred=False,
+                wait_steps=0,
+                floor_violation=True,
+            )
 
         load = self._current_load()
 

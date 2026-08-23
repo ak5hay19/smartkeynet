@@ -1,0 +1,71 @@
+{
+  "scenario": "S3",
+  "eval_seeds": [
+    1000,
+    1001,
+    1002,
+    1003,
+    1004,
+    1005,
+    1006,
+    1007,
+    1008,
+    1009
+  ],
+  "train_seeds": [
+    0,
+    1,
+    2
+  ],
+  "statistic": "median",
+  "rows": [
+    {
+      "policy": "Masked DQN (ours)",
+      "p99_latency_ms": 150.0,
+      "pool_exhaustion_events": 0.0,
+      "regret_events": 0.0,
+      "rekeys_per_100_requests": 12.133333333333333,
+      "floor_violations_total": 0
+    },
+    {
+      "policy": "Soft-reward DQN",
+      "p99_latency_ms": 120.0,
+      "pool_exhaustion_events": 19.5,
+      "regret_events": 19.5,
+      "rekeys_per_100_requests": 9.533333333333333,
+      "floor_violations_total": 27301
+    },
+    {
+      "policy": "Static threshold",
+      "p99_latency_ms": 150.0,
+      "pool_exhaustion_events": 42.0,
+      "regret_events": 42.0,
+      "rekeys_per_100_requests": 6.866666666666667,
+      "floor_violations_total": 0
+    },
+    {
+      "policy": "Always-hybrid",
+      "p99_latency_ms": 150.0,
+      "pool_exhaustion_events": 676.0,
+      "regret_events": 676.0,
+      "rekeys_per_100_requests": 93.46666666666667,
+      "floor_violations_total": 0
+    },
+    {
+      "policy": "Always-PQC",
+      "p99_latency_ms": 150.0,
+      "pool_exhaustion_events": 531.0,
+      "regret_events": 531.0,
+      "rekeys_per_100_requests": 95.53333333333333,
+      "floor_violations_total": 0
+    },
+    {
+      "policy": "Random (safe set)",
+      "p99_latency_ms": 150.0,
+      "pool_exhaustion_events": 510.5,
+      "regret_events": 510.5,
+      "rekeys_per_100_requests": 66.0,
+      "floor_violations_total": 0
+    }
+  ]
+}
