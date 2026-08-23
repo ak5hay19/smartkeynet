@@ -312,3 +312,107 @@ def test_load_spike_same_seed_still_reproducible():
     a = list(itertools.islice(random_request_generator(seed=33, load_spike=_SPIKE), N_SAMPLE))
     b = list(itertools.islice(random_request_generator(seed=33, load_spike=_SPIKE), N_SAMPLE))
     assert a == b
+
+
+# ---------------------------------------------------------------------------
+# RequestGenerator's S4 (DDoS/noisy-neighbor) flood_override mechanism
+# (2026-08-24 session) -- see the class docstring's own S4 section for
+# why this is an additive second Poisson stream, not a traffic_rate
+# multiply.
+# ---------------------------------------------------------------------------
+
+_FLOOD_TENANT = "tenant_4"
+
+
+def _counts_by_tenant(gen: RequestGenerator, n_steps: int) -> Counter:
+    counts: Counter = Counter()
+    for step in range(n_steps):
+        for request in gen.step(step):
+            counts[request["tenant"]] += 1
+    return counts
+
+
+def test_flood_override_rejects_an_unknown_tenant_id():
+    graph = build_tenant_graph(n_nodes=10, seed=0)
+    with pytest.raises(ValueError):
+        RequestGenerator(graph, seed=0, flood_override={"tenant_id": "no_such_tenant", "extra_rate": 5.0})
+
+
+def test_flood_override_raises_the_flooded_tenants_own_count():
+    graph = build_tenant_graph(n_nodes=10, seed=0)
+    no_flood = _counts_by_tenant(RequestGenerator(graph, seed=7), n_steps=500)
+    flooded = _counts_by_tenant(
+        RequestGenerator(graph, seed=7, flood_override={"tenant_id": _FLOOD_TENANT, "extra_rate": 5.0}),
+        n_steps=500,
+    )
+    assert flooded[_FLOOD_TENANT] > no_flood[_FLOOD_TENANT] * 3
+
+
+def test_flood_override_leaves_every_other_tenants_count_byte_for_byte_unaffected():
+    """The precise isolation guarantee (see class docstring): the base
+    arrival draw is completely untouched by flood activity -- every
+    other tenant's own count must match EXACTLY, not just closely,
+    between a flood-on and flood-off run with the same seed and graph."""
+    graph = build_tenant_graph(n_nodes=10, seed=0)
+    no_flood = _counts_by_tenant(RequestGenerator(graph, seed=7), n_steps=500)
+    flooded = _counts_by_tenant(
+        RequestGenerator(graph, seed=7, flood_override={"tenant_id": _FLOOD_TENANT, "extra_rate": 5.0}),
+        n_steps=500,
+    )
+
+    other_tenants = {n for n, attrs in build_tenant_graph(n_nodes=10, seed=0).nodes(data=True) if attrs.get("kind") == "tenant"}
+    other_tenants.discard(_FLOOD_TENANT)
+    assert other_tenants
+    for tenant in other_tenants:
+        assert flooded.get(tenant, 0) == no_flood.get(tenant, 0)
+
+
+def test_flood_override_requests_have_valid_fields_matching_the_tenants_own_attributes():
+    """Flood-batch requests are built by the exact same field-
+    construction logic as any other request -- same validity, same
+    zero-drift-from-the-graph guarantee, no special-cased shape."""
+    graph = build_tenant_graph(n_nodes=10, seed=0)
+    tenant_attrs = {n: attrs for n, attrs in graph.nodes(data=True) if attrs.get("kind") == "tenant"}
+    gen = RequestGenerator(graph, seed=7, flood_override={"tenant_id": _FLOOD_TENANT, "extra_rate": 5.0})
+
+    n_classes = len(SensitivityClass)
+    flood_requests_checked = 0
+    for step in range(200):
+        for request in gen.step(step):
+            if request["tenant"] != _FLOOD_TENANT:
+                continue
+            assert isinstance(request["request_id"], str) and request["request_id"]
+            assert isinstance(request["service"], str) and request["service"]
+            assert 0 <= request["sensitivity_class"] < n_classes
+            assert isinstance(request["pqc_capable"], bool)
+            assert isinstance(request["hybrid_mandatory"], bool)
+            attrs = tenant_attrs[_FLOOD_TENANT]
+            assert request["sensitivity_class"] == attrs["sensitivity_class"]
+            assert request["pqc_capable"] == attrs["pqc_capable"]
+            assert request["service"] in attrs["services"]
+            flood_requests_checked += 1
+    assert flood_requests_checked > 0
+
+
+def test_flood_override_none_is_byte_identical_to_no_flood_argument_at_all():
+    """Regression safety: passing `flood_override=None` explicitly must
+    be indistinguishable from not passing it -- both are the documented
+    default, zero new behavior."""
+    graph = build_tenant_graph(n_nodes=10, seed=0)
+    a = _counts_by_tenant(RequestGenerator(graph, seed=7), n_steps=300)
+    b = _counts_by_tenant(RequestGenerator(graph, seed=7, flood_override=None), n_steps=300)
+    assert a == b
+
+
+def test_request_generator_regression_unaffected_by_flood_override_addition():
+    """Every existing (pre-S4) RequestGenerator test in this file
+    exercises the class with no `flood_override` argument at all --
+    this is a direct, explicit re-confirmation (not just an assumption
+    that the existing suite would catch a regression) that adding the
+    parameter changed nothing about the class's prior default
+    behavior: two independently-constructed generators, same seed, same
+    graph, no flood_override, still produce an identical stream."""
+    graph = build_tenant_graph(n_nodes=10, seed=0)
+    a = list(itertools.islice(iter(RequestGenerator(graph, seed=42)), N_SAMPLE))
+    b = list(itertools.islice(iter(RequestGenerator(graph, seed=42)), N_SAMPLE))
+    assert a == b

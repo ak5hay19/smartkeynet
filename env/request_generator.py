@@ -195,9 +195,46 @@ class RequestGenerator:
     `request_stream_factory` constructor parameter) without that
     module needing to special-case which generator is in use (Hard
     Rule 3).
+
+    ---------------------------------------------------------------------
+    S4 (DDoS/noisy-neighbor) mechanism -- `flood_override` (2026-08-24
+    session), read this before touching S4 config:
+
+    `flood_override`, if given, is `{"tenant_id": str, "extra_rate":
+    float}`. It does **not** mutate the base weighted-sampling loop
+    above at all (that code is untouched, byte-for-byte, whether or not
+    a flood is active). Instead, every `step()` call additionally draws
+    an **independent** `Poisson(extra_rate)` batch of extra requests,
+    all attributed to `tenant_id`, using its same persistent node
+    attributes as any normal request from that tenant -- drawn from a
+    **second, separate RNG stream** (`_flood_rng`) that the base loop's
+    `_rng` never touches and is never touched by. This is deliberate,
+    not incidental: this class's actual sampling model is a single
+    shared `Poisson(_ARRIVAL_RATE_PER_STEP)` total, split across
+    tenants by a weighted multinomial draw -- multiplying one tenant's
+    `traffic_rate` attribute in that model would *mechanically* steal
+    share from every other tenant (a fixed pie resliced), which fails
+    this project's own requirement that a flood be *isolated* to the
+    designated tenant (verified in `tests/test_environment.py`'s S4
+    regression test: other tenants' request counts are measured
+    byte-for-byte unaffected by flood activity, not just "close"). A
+    second, independent Poisson stream, added on top of the unmodified
+    base draw, is what actually delivers that isolation while still
+    keeping the flood entirely upstream, in the arrival process, with
+    zero visibility to anything downstream (Hard Rule 3) -- a flood
+    request is a completely ordinary `Request`, built by the exact same
+    field-construction logic (`_build_request`) as any other.
+    `flood_override=None` (the default) leaves every line of this
+    class's behavior identical to before this addition.
+    ---------------------------------------------------------------------
     """
 
-    def __init__(self, graph: nx.Graph, seed: int | None = None) -> None:
+    def __init__(
+        self,
+        graph: nx.Graph,
+        seed: int | None = None,
+        flood_override: dict[str, Any] | None = None,
+    ) -> None:
         self._graph = graph
         self._seed = seed
 
@@ -209,44 +246,68 @@ class RequestGenerator:
                 "graph has no tenant nodes (kind='tenant') -- build it with build_tenant_graph(), "
                 "not an empty or hand-built nx.Graph()"
             )
+        self._tenant_attrs_by_id: dict[str, dict[str, Any]] = dict(self._tenants)
+
         traffic_rates = np.array([attrs["traffic_rate"] for _, attrs in self._tenants], dtype=float)
         self._tenant_weights = traffic_rates / traffic_rates.sum()
 
+        if flood_override is not None and flood_override["tenant_id"] not in self._tenant_attrs_by_id:
+            raise ValueError(
+                f"flood_override tenant_id {flood_override['tenant_id']!r} is not a tenant node in this graph"
+            )
+        self._flood_override = flood_override
+
         self._rng: np.random.Generator = np.random.default_rng(seed)
+        self._flood_rng: np.random.Generator = np.random.default_rng(seed)
         self._request_index = 0
 
     def reset(self) -> None:
-        """Rewind the request stream for a new episode -- re-seeds from
-        the original `seed`, so a fresh `reset()` reproduces the exact
-        same stream `__init__` would have produced."""
+        """Rewind the request stream for a new episode -- re-seeds both
+        RNG streams from the original `seed`, so a fresh `reset()`
+        reproduces the exact same stream `__init__` would have
+        produced."""
         self._rng = np.random.default_rng(self._seed)
+        self._flood_rng = np.random.default_rng(self._seed)
         self._request_index = 0
 
     def step(self, step: int) -> list[Request]:
         """Return the requests that arrive at this step (possibly
-        empty). Arrival count is Poisson(`_ARRIVAL_RATE_PER_STEP`) --
-        same rate `random_request_generator` uses, so the two
+        empty). Base arrival count is Poisson(`_ARRIVAL_RATE_PER_STEP`)
+        -- same rate `random_request_generator` uses, so the two
         generators are comparable in overall traffic volume, not just
-        interface shape."""
+        interface shape. If `flood_override` is set, an additional,
+        independent Poisson(`extra_rate`) batch for that one tenant is
+        appended -- see the class docstring's S4 section."""
         n_arrivals = int(self._rng.poisson(_ARRIVAL_RATE_PER_STEP))
         requests: list[Request] = []
         for _ in range(n_arrivals):
             tenant_idx = int(self._rng.choice(len(self._tenants), p=self._tenant_weights))
             tenant_id, attrs = self._tenants[tenant_idx]
-            service = str(self._rng.choice(attrs["services"]))
-            self._request_index += 1
-            requests.append(
-                Request(
-                    request_id=f"graph-{self._request_index}",
-                    step=step,
-                    tenant=tenant_id,
-                    service=service,
-                    sensitivity_class=int(attrs["sensitivity_class"]),
-                    pqc_capable=bool(attrs["pqc_capable"]),
-                    hybrid_mandatory=bool(self._rng.random() < _HYBRID_MANDATORY_PROB),
-                )
-            )
+            requests.append(self._build_request(step, tenant_id, attrs, self._rng))
+
+        if self._flood_override is not None:
+            flood_tenant_id = self._flood_override["tenant_id"]
+            flood_attrs = self._tenant_attrs_by_id[flood_tenant_id]
+            n_flood_arrivals = int(self._flood_rng.poisson(self._flood_override["extra_rate"]))
+            for _ in range(n_flood_arrivals):
+                requests.append(self._build_request(step, flood_tenant_id, flood_attrs, self._flood_rng))
+
         return requests
+
+    def _build_request(
+        self, step: int, tenant_id: str, attrs: dict[str, Any], rng: np.random.Generator
+    ) -> Request:
+        service = str(rng.choice(attrs["services"]))
+        self._request_index += 1
+        return Request(
+            request_id=f"graph-{self._request_index}",
+            step=step,
+            tenant=tenant_id,
+            service=service,
+            sensitivity_class=int(attrs["sensitivity_class"]),
+            pqc_capable=bool(attrs["pqc_capable"]),
+            hybrid_mandatory=bool(rng.random() < _HYBRID_MANDATORY_PROB),
+        )
 
     def __iter__(self) -> Iterator[Request]:
         self.reset()

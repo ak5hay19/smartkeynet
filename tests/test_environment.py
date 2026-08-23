@@ -713,28 +713,175 @@ def test_s3_pool_trajectory_is_genuinely_worse_than_s1():
     assert min_fill_s3 < min_fill_s1
 
 
-def test_s4_and_s6_scenarios_are_not_yet_dispatched():
-    """S4 (DDoS/noisy-neighbor) and S6 (migration wave) both need a
-    "which tenant is this" concept env/request_generator.py's current
-    random stream doesn't have (see PROGRESS.md/SESSION_LOG.md
-    2026-08-19) -- deliberately deferred, not an oversight. Selecting
-    either must currently be a pure no-op, identical to any other
-    unrecognized scenario string, and must not require any new config
-    block the way S2/S3 now do."""
-    for scenario in ("S4", "S5", "S6"):
+# ---------------------------------------------------------------------------
+# S4 (DDoS / noisy-neighbor) scenario dispatch (2026-08-24, design decision 13)
+# ---------------------------------------------------------------------------
+
+_DDOS_ON = {"graph_seed": 0, "tenant_index": 4, "extra_rate": 5.0}
+_DDOS_OFF = {"graph_seed": 0, "tenant_index": 4, "extra_rate": 0.0}
+_S4_NOISY_TENANT = "tenant_4"  # real S0 (low-sensitivity) tenant under graph_seed 0, n_nodes 10
+_S4_CRITICAL_TENANT = "tenant_9"  # real S3 (highest-sensitivity) tenant under the same graph
+
+
+def _run_s4_and_count_by_tenant(ddos_cfg: dict[str, Any], seed: int, n_steps: int, pool_override=None):
+    """Drives a real S4 episode under AlwaysHybridPolicy (see rationale
+    in the docstring below) and returns, per tenant: decision count,
+    regret-event count, and summed reward -- plus the env's own final
+    `_step_count` (real elapsed simulator time), for a fair flood-on vs
+    flood-off comparison that isn't confounded by "less time elapsed."
+    `AlwaysHybridPolicy` is used (not a grid-searched threshold or
+    random policy) because it deterministically maximizes and
+    stabilizes hybrid-draw demand -- the cleanest, least-confounded
+    lens for measuring whether one tenant's flood degrades another
+    tenant's access to a shared resource, isolating the flood's effect
+    from any baseline-policy-choice variance."""
+    overrides: dict[str, Any] = {"scenario": "S4", "ddos": ddos_cfg}
+    if pool_override is not None:
+        overrides["pool"] = pool_override
+    env = SmartKeyNetEnv(load_test_config(overrides=overrides))
+    state, info = env.reset(seed=seed)
+    policy = AlwaysHybridPolicy()
+
+    decisions: dict[str, int] = {}
+    regret: dict[str, int] = {}
+    reward_sum: dict[str, float] = {}
+    for _ in range(n_steps):
+        mask = info["action_mask"]
+        tenant = env._current_request["tenant"]
+        decisions[tenant] = decisions.get(tenant, 0) + 1
+        action = policy.act(state, mask)
+        state, reward, terminated, truncated, info = env.step(action)
+        reward_sum[tenant] = reward_sum.get(tenant, 0.0) + reward
+        for event in info["regret_events"]:
+            regret[event["tenant"]] = regret.get(event["tenant"], 0) + 1
+
+    return decisions, regret, reward_sum, env._step_count
+
+
+def test_s4_requires_ddos_config():
+    config = load_test_config(overrides={"scenario": "S4"})
+    assert "ddos" not in config  # default.yaml never carries this key -- only s4_ddos.yaml does
+    with pytest.raises(KeyError):
+        SmartKeyNetEnv(config)
+
+
+def test_s4_flooded_tenants_request_count_is_measurably_higher_than_unflooded():
+    """The designated noisy tenant's own request count must be
+    measurably higher with S4's flood active than with it inactive,
+    same seed, same graph."""
+    decisions_off, _, _, _ = _run_s4_and_count_by_tenant(_DDOS_OFF, seed=7, n_steps=500)
+    decisions_on, _, _, _ = _run_s4_and_count_by_tenant(_DDOS_ON, seed=7, n_steps=500)
+
+    assert decisions_on[_S4_NOISY_TENANT] > decisions_off[_S4_NOISY_TENANT] * 3
+
+
+# NOTE on "other tenants isolated" -- the exact, byte-for-byte isolation
+# guarantee (every OTHER tenant's own arrival stream is completely
+# unaffected by flood activity) is a property of RequestGenerator's
+# arrival process itself, and is tested directly against the generator
+# in tests/test_request_generator.py (bypassing the environment).
+# Tested here, THROUGH the environment, it does NOT hold at the
+# decision-count level over a *fixed external step budget* -- not
+# because the flood leaks into other tenants' own arrival draws (it
+# provably doesn't, see the generator-level test), but because
+# env/environment.py's `_advance_to_next_decision` renders exactly one
+# decision per external env.step() call and drains the pending FIFO
+# queue in arrival order: a much bigger backlog under flood means
+# *every* tenant's realized share of a bounded external decision
+# budget shifts, not just the deliberately-targeted critical tenant's.
+# This was found empirically this session (see SESSION_LOG.md) and is
+# an honest, additional confirmation that the flood's crowd-out effect
+# generalizes across the whole non-flooded neighborhood, not narrowly
+# to whichever one victim tenant a test happens to check.
+
+
+def test_s4_critical_tenant_service_throughput_collapses_under_flood():
+    """The scenario's actual point: does a HIGH-sensitivity tenant's
+    service hold up under the flood? Under AlwaysHybridPolicy -- which
+    has no notion of protecting any tenant -- it does not: within the
+    same span of real elapsed simulator time (`env._step_count`, held
+    equal between the two runs, not just the same external step
+    budget), the critical tenant's own decision throughput collapses
+    once the noisy neighbor floods. This is this environment's
+    dominant, clearly measurable "noisy neighbor" effect (see
+    configs/scenarios/s4_ddos.yaml's own comments for the full
+    empirical numbers this session found)."""
+    decisions_off, _, _, step_count_off = _run_s4_and_count_by_tenant(_DDOS_OFF, seed=7, n_steps=2000)
+    decisions_on, _, _, step_count_on = _run_s4_and_count_by_tenant(_DDOS_ON, seed=7, n_steps=2000)
+
+    # confirms the comparison isn't confounded by one run simply covering
+    # less real simulator time than the other
+    assert step_count_on == pytest.approx(step_count_off, rel=0.1)
+
+    critical_off = decisions_off.get(_S4_CRITICAL_TENANT, 0)
+    critical_on = decisions_on.get(_S4_CRITICAL_TENANT, 0)
+    assert critical_off > 0  # sanity: the critical tenant must appear at all under no flood
+    assert critical_on < critical_off * 0.5  # a real, large collapse, not a marginal dip
+
+
+def test_s4_critical_tenant_regret_rate_is_visible_only_under_pool_scarcity():
+    """Secondary check, reported honestly rather than oversold: under
+    this file's default `pool:` scale, regret events stay at exactly 0
+    regardless of the flood (same pre-existing calibration-headroom
+    property S3's own regression test already found) -- so a
+    per-decision regret-rate effect for the critical tenant is only
+    even possible to observe under the same small-pool scarcity
+    override this suite's other regret tests use."""
+    decisions_default, regret_default, _, _ = _run_s4_and_count_by_tenant(_DDOS_ON, seed=7, n_steps=500)
+    assert sum(regret_default.values()) == 0
+
+    decisions_scarce, regret_scarce, _, _ = _run_s4_and_count_by_tenant(
+        _DDOS_ON, seed=7, n_steps=500, pool_override=_SCARCITY_POOL
+    )
+    assert sum(regret_scarce.values()) > 0
+
+
+def test_hard_rule_3_no_scenario_aware_branching_downstream_of_request_generation():
+    """Code-level check, not just a behavioral assertion: no file the
+    agent's decision actually depends on may branch on scenario/S4/ddos
+    at all. `env/environment.py` itself legitimately branches on
+    `self._scenario` (that's the one sanctioned dispatch point, same as
+    S2/S3) -- masking.py, the reward calculation, and state
+    construction must not."""
+    masking_source = Path("env/masking.py").read_text(encoding="utf-8")
+    assert "scenario" not in masking_source.lower()
+    assert "ddos" not in masking_source.lower()
+    assert "tenant" not in masking_source.lower()
+
+    contracts_source = Path("env/contracts.py").read_text(encoding="utf-8")
+    assert "ddos" not in contracts_source.lower()
+
+    reward_calc_source = Path("env/environment.py").read_text(encoding="utf-8")
+    apply_action_start = reward_calc_source.index("def _apply_action")
+    apply_action_body = reward_calc_source[apply_action_start : apply_action_start + 3000]
+    assert "scenario" not in apply_action_body.lower()
+    assert "ddos" not in apply_action_body.lower()
+
+
+def test_s5_and_s6_scenarios_are_not_yet_dispatched():
+    """S5 (steering attack) and S6 (migration wave) still need
+    mechanisms this repo doesn't have yet (see PROGRESS.md/
+    SESSION_LOG.md) -- deliberately deferred, not an oversight.
+    Selecting either must currently be a pure no-op, identical to any
+    other unrecognized scenario string, and must not require any new
+    config block the way S2/S3/S4 now do."""
+    for scenario in ("S5", "S6"):
         config = load_test_config(overrides={"scenario": scenario})
         env = SmartKeyNetEnv(config)
         assert env._threat_schedule_cfg is None
         assert env._qkd_degradation_cfg is None
+        assert env._ddos_cfg is None
+        assert env._tenant_graph is None
         env.reset(seed=0)  # must not raise -- no scenario-specific config required
 
 
 def test_scenario_config_files_load_and_construct_a_working_env():
-    """The two committed, standalone scenario files must actually be
+    """The committed, standalone scenario files must actually be
     loadable and runnable, not just referenced."""
     for path, expected_scenario in (
         ("configs/scenarios/s2_hndl.yaml", "S2"),
         ("configs/scenarios/s3_degradation.yaml", "S3"),
+        ("configs/scenarios/s4_ddos.yaml", "S4"),
     ):
         config = load_full_config(path)
         config["max_steps"] = 20

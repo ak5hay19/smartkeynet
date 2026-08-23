@@ -1,0 +1,160 @@
+# SmartKeyNet S4 (DDoS / noisy neighbor) scenario config -- PLAN.md §5:
+# "One low-sensitivity tenant floods the API -- tests protecting
+# critical tenants' pool share."
+#
+# A standalone, directly-loadable config (same shape as
+# configs/default.yaml -- load via experiments/train.py's
+# load_full_config(path)). Differs from default.yaml only in
+# `scenario:` and the added `ddos:` block below; every other section,
+# including `pool:`, is copied unchanged -- S1 and S4 describe the
+# same deployment under different traffic conditions, not two
+# different pieces of hardware (same convention s3_degradation.yaml
+# already established).
+#
+# What S4 actually changes (env/environment.py design decision 13,
+# 2026-08-24): `ddos`'s parameters build a real NetworkX tenant graph
+# once (env/request_generator.py::build_tenant_graph) and select one
+# designated tenant to flood for the whole episode via
+# RequestGenerator's `flood_override` mechanism -- entirely upstream,
+# in the request-arrival process. Nothing in env/masking.py, the
+# reward calculation, or state construction is aware S4 is active
+# (Hard Rule 3) -- a flood request is a completely ordinary `Request`.
+#
+# Mechanism note (see env/request_generator.py's RequestGenerator class
+# docstring for the full reasoning): the flood is an *additive*, second,
+# independent Poisson(extra_rate) arrival stream for the designated
+# tenant, layered on top of its normal (unmodified) weighted share of
+# the base arrival draw -- NOT a multiply of its `traffic_rate` node
+# attribute. This codebase's actual sampling model is a single shared
+# Poisson(1.0/step) total split across tenants by a weighted multinomial
+# draw; multiplying one tenant's weight in that model would mechanically
+# steal share from every OTHER tenant too (a fixed pie resliced) --
+# verified this session that a bare traffic_rate multiply measurably
+# changes every other tenant's expected count, failing this project's
+# own tenant-isolation requirement. The additive mechanism instead
+# leaves every other tenant's own arrival stream exactly, byte-for-byte
+# unaffected (verified directly, not just approximately -- see
+# tests/test_environment.py's S4 regression test).
+#
+# Empirical finding, this session (see SESSION_LOG.md for full numbers):
+# under AlwaysHybridPolicy, seed 7, 2000-step run, `extra_rate: 5.0`
+# below floods tenant_4 from ~182 to ~1701 of its own decisions while
+# leaving every other tenant's own decision count byte-identical to a
+# flood-off control -- but the SHARED single-decision-per-tick queue
+# (env/environment.py's `_advance_to_next_decision`) means this
+# dramatically crowds out how many decisions OTHER tenants get within
+# the same span of external env.step() calls: tenant_9 (a real S3,
+# high-sensitivity tenant under this graph_seed) drops from ~390 to
+# ~59 decisions rendered over the same ~2000 ticks of real elapsed
+# simulator time (confirmed via env._step_count, not just external
+# step count -- the two runs elapse essentially the same amount of
+# real simulator time, so this is genuine service-opportunity
+# crowd-out, not an artifact of less time having passed). This is the
+# dominant, clearly measurable effect this baseline exposes -- per-
+# decision regret rate for the surviving tenant_9 decisions changes
+# only mildly (0.090 -> 0.102), reported honestly, not oversold.
+# Observability caveat, same pattern as s3_degradation.yaml: under this
+# file's default (unmodified) `pool:` settings, regret/pool-exhaustion
+# events stay at exactly 0 regardless of the flood (refill dwarfs any
+# plausible draw pattern by orders of magnitude, same pre-existing
+# `pool:` calibration-headroom property S3's config already
+# documented) -- the throughput/crowd-out effect above is real and
+# visible at this default scale; the pool-scarcity/regret-event effect
+# is not, and needs the same small-pool override convention
+# tests/test_environment.py already uses for S3's regression test.
+
+scenario: S4  # one of S1..S6 (PLAN.md §5); S6 is held-out eval only (Hard Rule 8)
+
+seed: 0
+
+# --- env/forecast_provider.py, forecaster/model.py (Addition A) ---
+use_foresight: ewma  # off | ewma | lstm
+
+# --- env/pool_sim.py ---
+pool:
+  capacity_bits: 1_000_000
+  initial_fill_frac: 0.5
+  bits_per_hybrid_draw: 256  # ETSI GS QKD 014 key size (256-bit); PLAN.md §4 Datasets & Provenance:
+                              # "ETSI GS QKD 014 gives key sizes (256-bit)" -- Hard Rule 4, no invented number
+
+# --- env/masking.py (Hard Rule 2, 4, 5) ---
+key_lifetime:
+  max_key_age_steps: 500  # SP 800-57-derived cap L; forced rekey at/above this (Addition C)
+
+# --- env/environment.py reward (PLAN.md §4; Hard Rule 1 -- no security term, ever) ---
+reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_fr: 0.1
+  w_qkd: 1.0
+  r_starve: 10.0
+  c_rekey_base: 1.0
+  c_rekey_load_beta: 1.0
+
+# --- env/request_generator.py::build_tenant_graph (structural node count for S4's real graph) ---
+tenant_graph:
+  n_nodes: 10  # matches every other config's tenant_graph.n_nodes -- unused by S1/S2/S3 (they still use
+                # random_request_generator), real and load-bearing under S4 (see ddos: below).
+
+# --- env/request_generator.py random_request_generator's optional load-spike diagnostic (unrelated to S4
+# -- and inert under S4 anyway, since S4 doesn't use random_request_generator at all -- left present only
+# so this file has the same complete key set as every other scenario config) ---
+load_spike:
+  enabled: false
+  period_steps: 500
+  spike_duration_steps: 20
+  spike_rate_multiplier: 3.0
+  low_rate_multiplier: 0.3
+
+# --- env/environment.py S4 dispatch (Hard Rule 3, 4; design decision 13, 2026-08-24) ---
+# Required only when scenario: S4 (SmartKeyNetEnv.__init__ reads this key directly and raises KeyError
+# if it's missing under S4, same fail-fast convention as pool/key_lifetime/reward above).
+ddos:
+  graph_seed: 0     # dedicated seed for build_tenant_graph -- deliberately decoupled from the episode
+                      # seed above, so which tenant tenant_index refers to (and its sensitivity_class)
+                      # is a fixed structural fact of this config, not something that reshuffles across
+                      # eval seeds. Also decoupled from tenant_graph.n_nodes's value only in principle --
+                      # both come from this same file, kept together deliberately.
+  tenant_index: 4    # f"tenant_{tenant_index}" -- verified this session: under graph_seed 0/n_nodes 10,
+                       # tenant_4 is a real sensitivity_class S0 (public/non-sensitive) tenant (Hard Rule
+                       # 4 -- a real, already-sampled tenant, not an invented special-cased entity) --
+                       # "one low-sensitivity tenant floods the API" per PLAN.md §5's S4 row.
+  extra_rate: 5.0    # additional Poisson(extra_rate) requests/step for tenant_index's tenant, on top of
+                       # its own normal weighted share of the base arrival stream, for the entire episode
+                       # (no ramp/partial-episode window -- see SESSION_LOG.md for why a full-episode
+                       # flood was chosen over an S2/S3-style step-triggered window: RequestGenerator's
+                       # traffic_rate is deliberately a *persistent*, never-time-varying tenant property
+                       # by last session's own design decision, and PLAN.md's S4 description ("one tenant
+                       # floods") doesn't call for a partial-episode ramp the way S2's threat elevation or
+                       # S3's QBER spike window do).
+
+# --- agents/dqn.py (unchanged from default.yaml -- copied for a self-contained config file) ---
+dqn:
+  gamma: 0.99
+  lr: 0.001
+  batch_size: 64
+  target_update_every: 1000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 12_500
+
+# --- experiments/harness.py, agents/baselines.py ---
+baselines:
+  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+# --- attack/steering_trace.py (PLAN.md §5 S5) ---
+steering_attack:
+  doses: [0.0, 0.25, 0.5, 0.75, 1.0]
+  duration_steps: 1000
+
+# --- env/environment.py S6 migration wave (Hard Rule 3, 8 -- scripted, exogenous, held-out eval only) ---
+migration_schedule: []
+
+# --- experiments/train.py ---
+training:
+  total_steps: 25_000
+  seed: 0
+  eval_every: 2_500
+  eval_seed: 999
+  eval_max_steps: 250
+  checkpoint_path: checkpoints/dqn_s4.pt

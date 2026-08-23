@@ -181,6 +181,27 @@ summarized here for anyone reading the code cold):
     code) to be a genuine drop-in replacement, per Hard Rule 3's swap
     test. `None` (the default) reproduces prior behavior exactly; no
     other line in this file branches on which generator is in use.
+13. **Real S4 (DDoS/noisy-neighbor) scenario dispatch (2026-08-24)**:
+    `config["ddos"]` (required only under `scenario: S4`, same
+    fail-fast convention as `threat_schedule`/`qkd_degradation`) picks
+    a designated tenant (`tenant_index`, resolved against a tenant
+    graph built once at construction time from `ddos.graph_seed` --
+    see the `__init__` comment above the graph-build call for why that
+    seed is deliberately decoupled from `episode_seed`) and floods it
+    for the whole episode via `RequestGenerator`'s `flood_override`
+    mechanism (`env/request_generator.py`'s class docstring has the
+    full mechanism and why it's an *additive* second Poisson stream,
+    not a `traffic_rate` multiply, given this codebase's actual
+    weighted-multinomial-split sampling model). `reset()`'s
+    request-stream selection gains one new `elif self._scenario ==
+    "S4"` branch, parallel to the existing `if
+    self._request_stream_factory is not None` branch -- same dispatch
+    site, no special-casing anywhere else in this file, masking.py, or
+    the reward calculation (Hard Rule 3): a flood request is a
+    completely ordinary `Request`, indistinguishable in shape from any
+    other, and the mask/reward/state-construction code downstream of
+    `_prepare_decision` never learns which generator produced the
+    `Request` it's holding.
 ---------------------------------------------------------------------
 """
 
@@ -191,6 +212,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterator
 
 import gymnasium as gym
+import networkx as nx
 import numpy as np
 
 from env.contracts import (
@@ -211,7 +233,7 @@ from env.deferral_queue import DeferralQueue
 from env.forecast_provider import MovingAverageForecaster
 from env.masking import PolicyTable, compute_mask
 from env.pool_sim import PoolSim, SyntheticSKRQBERTrace
-from env.request_generator import random_request_generator
+from env.request_generator import RequestGenerator, build_tenant_graph, random_request_generator
 
 
 class IllegalActionError(Exception):
@@ -288,10 +310,10 @@ class SmartKeyNetEnv(gym.Env):
     `ForecastProvider` is constructed and how long the flattened state
     vector is.
 
-    S1 (benign baseline), S2 (HNDL posture), and S3 (QKD degradation)
-    scenario dispatch are implemented (see module docstring design
-    decision 10). S4 (DDoS/noisy-neighbor), S5 (steering attack), and
-    S6 (migration wave) are not yet dispatched -- `config["scenario"]`
+    S1 (benign baseline), S2 (HNDL posture), S3 (QKD degradation), and
+    S4 (DDoS/noisy-neighbor) scenario dispatch are implemented (see
+    module docstring design decisions 10 and 13). S5 (steering attack)
+    and S6 (migration wave) are not yet dispatched -- `config["scenario"]`
     is read but has no effect for those values, same as before.
     """
 
@@ -345,17 +367,37 @@ class SmartKeyNetEnv(gym.Env):
         self._max_steps = config.get("max_steps")
         self._load_spike_cfg = self._build_load_spike_cfg(config.get("load_spike"))
 
-        # Real scenario dispatch (design decision 10 -- S2/S3 only this
-        # session; see module docstring). `config["threat_schedule"]`/
-        # `config["qkd_degradation"]` are required *only* when the
-        # matching scenario is selected -- a plain KeyError here is the
-        # same fail-fast convention as `pool`/`key_lifetime`/`reward`
-        # above, not a new pattern. Any scenario string other than
-        # "S2"/"S3" (including "S1" and the not-yet-dispatched "S4"/
-        # "S5"/"S6") behaves exactly as before this session.
+        # Real scenario dispatch (design decision 10 -- S2/S3; design
+        # decision 13 -- S4, added 2026-08-24; see module docstring).
+        # `config["threat_schedule"]`/`config["qkd_degradation"]`/
+        # `config["ddos"]` are required *only* when the matching
+        # scenario is selected -- a plain KeyError here is the same
+        # fail-fast convention as `pool`/`key_lifetime`/`reward` above,
+        # not a new pattern. Any scenario string other than "S2"/"S3"/
+        # "S4" (including "S1" and the not-yet-dispatched "S5"/"S6")
+        # behaves exactly as before.
         self._scenario = config.get("scenario", "S1")
         self._threat_schedule_cfg = config["threat_schedule"] if self._scenario == "S2" else None
         self._qkd_degradation_cfg = config["qkd_degradation"] if self._scenario == "S3" else None
+        self._ddos_cfg = config["ddos"] if self._scenario == "S4" else None
+        # The tenant graph itself is built once, here, from a seed
+        # dedicated to graph structure (`ddos.graph_seed`) --
+        # deliberately decoupled from `episode_seed` (design decision
+        # 13). "Which tenant `tenant_index` refers to" and that
+        # tenant's own `sensitivity_class` must be a fixed structural
+        # fact of this config for `configs/scenarios/s4_ddos.yaml`'s
+        # `tenant_index` to mean anything stable across eval seeds --
+        # if the graph were rebuilt fresh per `reset(seed=...)` call
+        # (like the SKR/QBER trace is), "tenant_4" could denote a
+        # different, possibly high-sensitivity tenant on a different
+        # seed. Reused, unmodified, across every reset() this instance
+        # runs -- analogous to how `pool`'s capacity is fixed
+        # structural config, not a per-episode draw.
+        self._tenant_graph: nx.Graph | None = (
+            build_tenant_graph(n_nodes=config["tenant_graph"]["n_nodes"], seed=self._ddos_cfg["graph_seed"])
+            if self._scenario == "S4"
+            else None
+        )
 
         # Populated fresh by reset(); typed here for clarity.
         self._pool_sim: PoolSim | None = None
@@ -415,6 +457,14 @@ class SmartKeyNetEnv(gym.Env):
         self._forecaster = self._build_forecaster()
         if self._request_stream_factory is not None:
             self._request_stream = self._request_stream_factory(episode_seed)
+        elif self._scenario == "S4":
+            flood_override = {
+                "tenant_id": f"tenant_{self._ddos_cfg['tenant_index']}",
+                "extra_rate": self._ddos_cfg["extra_rate"],
+            }
+            self._request_stream = iter(
+                RequestGenerator(self._tenant_graph, seed=episode_seed, flood_override=flood_override)
+            )
         else:
             self._request_stream = random_request_generator(seed=episode_seed, load_spike=self._load_spike_cfg)
         self._peeked_arrival = None
