@@ -14,45 +14,51 @@
 **Three independent threads are open. Pick whichever this session serves.**
 
 **Thread 1 — DQN training-instability (PAUSED 2026-08-19, not resolved, not
-abandoned).** Five sessions deep with a genuine fork left unpicked, not more
-solo running. **A same-day 2026-08-19 session (see SESSION_LOG.md, "close
-REUSE/REKEY_NOW floor-enforcement gap, Hard Rule 2") found and fixed a real
-bug directly relevant to this fork, without touching `agents/dqn.py` or
-`experiments/train.py` itself: `env/masking.py`'s `compute_mask()` let REUSE
-stay legal past a floor ratchet, and `env/environment.py`'s REKEY_NOW
-resolution could silently refresh a stale below-floor tier — both on S1 too,
-since S1 already ratchets posture mid-episode under the default `ewma`
-foresight. Measured real on S2: 64/279 (22.9%) REUSE/REKEY_NOW decisions
-delivered below-floor key material before the fix, 0/270 after. This means
-all five of this thread's prior sessions' multi-seed `forced_rekey_ratio`
-sweeps ran against an environment with this bug live** — whether it
-contributed to, or explains, the checkpoint-to-checkpoint oscillation is an
-open, testable question, not yet answered (that same session confirmed the
-fix causally changes S1 training-loss dynamics via a `git stash` A/B, which
-is suggestive but not a training-instability answer on its own; one
-pre-existing DQN test, `test_dqn_agent_loss_trends_down_training_against_real_env_s1`,
-is now `xfail(strict=True)` because of this — see that test and SESSION_LOG.md
-for why). The fork is now **three** options, unchanged in spirit, with the
-new one added:
-(a) a direct Q-value-margin inspection at a known swing (e.g. seed 1's
-step `71250->72000` transition, `forced_rekey_ratio` mean dropping from
-`~0.90` to `0.149`) — check whether the greedy action at the eval
-episode's early, trajectory-determining decision points sits at a
-near-tie in Q-value between two actions; or (b) treat "the greedy policy
-genuinely oscillates checkpoint-to-checkpoint, mechanism unknown" as a
-standing, now twice-confirmed property of this training setup and move on
-to real S4 regardless, using **checkpoint-averaged** (not single-checkpoint)
-comparisons for any future DQN-vs-baseline number; or (c) **new, 2026-08-19**:
-re-run the 2026-08-17/2026-08-18 multi-seed `forced_rekey_ratio` probe
-(same seeds `1`/`4`/`7`, same load-spike diagnostic config, same dense
-`eval_every` methodology) with this masking fix in place, to directly check
-whether the previously-unresolved instability shrinks, disappears, or is
-unaffected now that REUSE/REKEY_NOW can no longer silently deliver
-below-floor key material — the cheapest of the three options to attempt
-first, since it reuses existing methodology rather than building anything
-new. See item 6 below for the full 2026-08-18 result the (a)/(b) fork comes
-from. Do not touch `agents/dqn.py` or `experiments/train.py` for anything
-short of a deliberate, sign-off'd decision on this fork.
+abandoned — but substantially re-characterized this session).** A same-day
+2026-08-19 session (see SESSION_LOG.md, "close REUSE/REKEY_NOW
+floor-enforcement gap, Hard Rule 2") found and fixed a real bug directly
+relevant to this thread: `env/masking.py`'s `compute_mask()` let REUSE stay
+legal past a floor ratchet, and `env/environment.py`'s REKEY_NOW resolution
+could silently refresh a stale below-floor tier — both on S1 too, since S1
+already ratchets posture mid-episode under the default `ewma` foresight.
+That session's own fork added a third option: re-run the 2026-08-17/18
+multi-seed `forced_rekey_ratio` probe with the fix in place. **A later
+same-day session did exactly that** (see SESSION_LOG.md, "post-fix re-run of
+forced_rekey_ratio multi-seed probe") — identical methodology, same seeds
+`1`/`4`/`7`, same load-spike S1 config, same 8-fixed-eval-seed/`eval_every=750`
+design, only the underlying masking fix changed. **Result: swings shrank
+substantially (mean swing 0.21-0.30 → 0.17-0.18, max swing ~0.89-0.91 →
+~0.49-0.54, >0.5 frequency 19-27% → 0-3%) and the ceiling-fraction-by-thirds
+drift — the clearest, most consistent pathology across every prior session in
+this thread — is completely gone (0% at ceiling across all nine seed×third
+cells, versus up to 62% pre-fix).** This is strong evidence the masking bug
+was a real, likely-dominant contributor to the checkpoint-to-checkpoint
+instability. **It is not a full resolution**: a genuine, smaller residual
+remains (max swings still `~0.49`-`0.54`, e.g. seed 1's step
+`71250->72000`, mean-of-8 `0.144->0.459`; seed 4 still has 3/99 swings
+`>0.5`) — the dominant, most-damaging component (permanent worst-case
+ceiling stickiness) is gone, not the phenomenon entirely. Full numbers and
+the direct before/after tables are in SESSION_LOG.md's newest entry.
+
+The fork is now **two live options**, both better-justified than before this
+session's result (not "still both open with no new information" — one
+option's premise softened, the other's target sharpened):
+(a) the Q-value-margin inspection is now **more attractive, not less**: it
+would be chasing a real but much smaller, better-characterized signal (swings
+capped around `0.5` rather than approaching `1.0`), a more tractable target
+for "is this a near-tie flip" than the pre-fix data's much larger,
+ceiling-dominated swings ever were; or (b) treat this session's result as
+sufficient on its own — the practical harm (permanent worst-case stickiness)
+is gone, accept the smaller residual swinging as a standing, now
+much-better-characterized property of this training setup, and move to real
+S4 regardless, using **checkpoint-averaged** (not single-checkpoint)
+comparisons for any future DQN-vs-baseline number. `test_dqn_agent_loss_trends_down_training_against_real_env_s1`'s
+`xfail(strict=True)` marker (added when the masking fix landed) was
+deliberately left untouched by the diagnostic-only probe session despite
+today's encouraging numbers — resolving it is part of whichever of (a)/(b)
+gets picked, not a side effect of a diagnostic run. Do not touch
+`agents/dqn.py` or `experiments/train.py` for anything short of a deliberate,
+sign-off'd decision on this fork.
 
 **Thread 2 — Dashboard v2 (started 2026-08-19).** `dashboard/explain.py`
 (the Explain Decision panel's backend, PLAN2.md §7.3) is now
@@ -403,6 +409,6 @@ behavioral tests, part of the green `pytest` run).
 ## Last verified
 
 - **Date:** 2026-08-19
-- **Commit:** `2acc472` ("chore: reconcile dev21/main branch drift, main fast-forwarded -- 2026-08-19") — the commit this session started from (after Step 0's `dev21`/`main` sync); see SESSION_LOG.md for this session's own commit
-- **`pytest` pass count:** 451 passed, 1 xfailed (433 prior + 18 new; the 1 xfail is `test_dqn_agent_loss_trends_down_training_against_real_env_s1`, a deliberate, documented consequence of this session's Hard Rule 2 fix — see SESSION_LOG.md)
-- **Branch:** Step 0 synced `dev21` to `main` (`git merge main --ff-only`, both confirmed at `2acc4729aceddd85ab0c888e53af7287fde5b3f9` before this session's own work began on `main`). This session's fix commit was then ff-merged back into `dev21` at the end — see SESSION_LOG.md for the final shared hash both branches point to now.
+- **Commit:** `830d991` ("fix: close REUSE/REKEY_NOW floor-enforcement gap (Hard Rule 2), floor_violations counter completeness -- 2026-08-19") — the commit this diagnostic-only session started from and ended on; no source file changed this session (see SESSION_LOG.md's "post-fix re-run of forced_rekey_ratio multi-seed probe" entry)
+- **`pytest` pass count:** 451 passed, 1 xfailed (unchanged — no repo source file touched this session, only an uncommitted scratchpad probe script)
+- **Branch:** Confirmed `main`/`dev21` in sync at session start (`git rev-parse main dev21` both `830d991cad085259a37dfc7c2ff8240631b32e2b`). This session's own commit (log-only, SESSION_LOG.md/PROGRESS.md updates) was ff-merged into `dev21` at the end — see SESSION_LOG.md for the final shared hash. Not pushed to origin this session, per instruction.
