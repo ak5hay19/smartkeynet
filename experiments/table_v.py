@@ -7,13 +7,22 @@ configuration in which its V(pi) column can be anything but a structural zero
 
     .venv/bin/python -m experiments.table_v
 """
-import json, yaml, numpy as np
-from experiments.harness import run_scenario
-from experiments.train import train, GreedyDQNPolicy
-from experiments.steering_attack import train_soft_reward_agent
+
+import json
+
+import numpy as np
+import yaml
+
+from agents.baselines import (
+    AlwaysHybridPolicy,
+    AlwaysPQCPolicy,
+    RandomPolicy,
+    StaticThresholdPolicy,
+)
 from agents.soft_reward_baseline import GreedySoftRewardPolicy
-from agents.baselines import (AlwaysHybridPolicy, AlwaysPQCPolicy, RandomPolicy,
-                              StaticThresholdPolicy)
+from experiments.harness import run_scenario
+from experiments.steering_attack import train_soft_reward_agent
+from experiments.train import GreedyDQNPolicy, train
 
 base = yaml.safe_load(open("configs/default.yaml"))
 EVAL_SEEDS = [1000 + i for i in range(10)]
@@ -22,6 +31,7 @@ EVAL_CFG = {**base, "max_steps": 1500, "scenario_steps": 1700}
 # The victim runs with floors ADVISORY (spec §S10), which is the only way its
 # V(pi) column can be anything but a structural zero.
 VICTIM_CFG = {**EVAL_CFG, "masking": {"enabled": False}}
+
 
 def row(name, policy, cfg):
     rs = [run_scenario(policy, "S3", cfg, seed=s) for s in EVAL_SEEDS]
@@ -35,6 +45,7 @@ def row(name, policy, cfg):
         "floor_violations_total": int(sum(r.floor_violations for r in rs)),
     }
 
+
 rows = []
 
 print("training masked DQN (ours) ...", flush=True)
@@ -42,9 +53,13 @@ dqn_rows = []
 for seed in TRAIN_SEEDS:
     agent, _ = train(
         full_config=base,
-        training_overrides={"seed": seed, "total_steps": 250_000,
-                            "eval_every": 250_000, "eval_max_steps": 1500,
-                            "checkpoint_path": f"checkpoints/tablev_dqn_s{seed}.pt"},
+        training_overrides={
+            "seed": seed,
+            "total_steps": 250_000,
+            "eval_every": 250_000,
+            "eval_max_steps": 1500,
+            "checkpoint_path": f"checkpoints/tablev_dqn_s{seed}.pt",
+        },
         scenario="S3",
     )
     dqn_rows.append(row(f"dqn_seed{seed}", GreedyDQNPolicy(agent), EVAL_CFG))
@@ -52,7 +67,8 @@ for seed in TRAIN_SEEDS:
 # median across training seeds of each column
 merged = {"policy": "Masked DQN (ours)"}
 for key in dqn_rows[0]:
-    if key == "policy": continue
+    if key == "policy":
+        continue
     merged[key] = float(np.median([r[key] for r in dqn_rows]))
 merged["floor_violations_total"] = int(sum(r["floor_violations_total"] for r in dqn_rows))
 rows.append(merged)
@@ -65,25 +81,38 @@ for seed in TRAIN_SEEDS:
     print(f"  seed {seed}: violations {victim_rows[-1]['floor_violations_total']}", flush=True)
 merged = {"policy": "Soft-reward DQN"}
 for key in victim_rows[0]:
-    if key == "policy": continue
+    if key == "policy":
+        continue
     merged[key] = float(np.median([r[key] for r in victim_rows]))
 merged["floor_violations_total"] = int(sum(r["floor_violations_total"] for r in victim_rows))
 rows.append(merged)
 
-for name, mk in [("Static threshold", lambda: StaticThresholdPolicy(0.95, 0, 0.9)),
-                 ("Always-hybrid", AlwaysHybridPolicy),
-                 ("Always-PQC", AlwaysPQCPolicy),
-                 ("Random (safe set)", lambda: RandomPolicy(seed=0))]:
+for name, mk in [
+    ("Static threshold", lambda: StaticThresholdPolicy(0.95, 0, 0.9)),
+    ("Always-hybrid", AlwaysHybridPolicy),
+    ("Always-PQC", AlwaysPQCPolicy),
+    ("Random (safe set)", lambda: RandomPolicy(seed=0)),
+]:
     rows.append(row(name, mk(), EVAL_CFG))
 
-json.dump({"scenario": "S3", "eval_seeds": EVAL_SEEDS, "train_seeds": TRAIN_SEEDS,
-           "statistic": "median", "rows": rows},
-          open("results/table_v.json", "w"), indent=2)
+json.dump(
+    {
+        "scenario": "S3",
+        "eval_seeds": EVAL_SEEDS,
+        "train_seeds": TRAIN_SEEDS,
+        "statistic": "median",
+        "rows": rows,
+    },
+    open("results/table_v.json", "w"),
+    indent=2,
+)
 
 print()
 print("TABLE V -- S3, ten evaluation seeds, MEDIAN")
 print(f"{'Policy':22s} {'p99 lat':>8s} {'Exhaust':>8s} {'Regret':>8s} {'Rekey':>7s} {'V(pi)':>7s}")
 for r in rows:
-    print(f"{r['policy']:22s} {r['p99_latency_ms']:8.1f} {r['pool_exhaustion_events']:8.1f} "
-          f"{r['regret_events']:8.1f} {r['rekeys_per_100_requests']:7.1f} "
-          f"{r['floor_violations_total']:7d}")
+    print(
+        f"{r['policy']:22s} {r['p99_latency_ms']:8.1f} {r['pool_exhaustion_events']:8.1f} "
+        f"{r['regret_events']:8.1f} {r['rekeys_per_100_requests']:7.1f} "
+        f"{r['floor_violations_total']:7d}"
+    )
