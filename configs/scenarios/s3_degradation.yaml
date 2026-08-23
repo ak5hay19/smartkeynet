@@ -2,11 +2,7 @@
 #
 # A standalone, directly-loadable config (same shape as
 # configs/default.yaml -- load via experiments/train.py's
-# load_full_config(path)). Differs from default.yaml only in
-# `scenario:` and the added `qkd_degradation:` block below; every
-# other section, including `pool:`, is copied unchanged so S1 and S3
-# describe the same deployment under different QKD-link conditions,
-# not two different pieces of hardware.
+# load_full_config(path)).
 #
 # What S3 actually changes (env/environment.py design decision 10,
 # 2026-08-19): `qkd_degradation`'s spike parameters are threaded
@@ -16,21 +12,86 @@
 # scenario". No new pool-simulation code was written; this only
 # supplies real parameters to a mechanism that already existed.
 #
-# Observability caveat (found while validating this file, 2026-08-19):
-# under `pool:`'s numbers below (unchanged from default.yaml), a
-# single SERVE_HYBRID draw is 256 bits while mean SKR refill is ~200
-# kbps == ~200,000 bits/tick -- refill outweighs a single draw by
-# ~800x, so under light-to-moderate request load the pool simply never
-# gets stressed regardless of scenario, and the degradation below,
-# while real and directionally correct (verified: it does measurably
-# raise regret-event counts and lower minimum pool fill), is only
-# clearly visible under sustained heavy draw pressure or a smaller
-# pool -- see tests/test_environment.py's S3 regression test, which
-# uses the same small-pool override convention as the existing Hard
-# Rule 9 gate test for exactly this reason. This is a pre-existing
-# `pool:` calibration-headroom property, not something introduced or
-# fixed this session -- flagged here rather than silently worked
-# around by shipping a different `pool:` block than S1/S2 use.
+# 2026-08-19 finding (Gate W3 attempt session): under `pool:`'s
+# numbers that were then unchanged from default.yaml, S3's degraded
+# floor/pool/posture trajectories were byte-identical to S1's --
+# refill (~200 kbps == ~200,000 bits/tick) dwarfed a single 256-bit
+# draw by ~800x. Flagged as a real environment-design finding, not
+# fixed that session.
+#
+# 2026-08-24 recalibration (Gate W3 S3 attempt session) -- root cause
+# investigated further, not just retuned by feel:
+#   1. The existing spike_magnitude dial cannot fix this, *at all*,
+#      however large it's set. env/pool_sim.py's spike formula scales
+#      SKR by `(1 - min(qber, 0.5))` -- this saturates at a *50%*
+#      reduction for any qber >= 0.5, so no `spike_magnitude` value
+#      can ever push the SKR-reduction past 50%. Verified directly
+#      this session: spike_magnitude in {0.6, 0.9, 0.99, 5.0} all
+#      produced byte-identical in-window mean SKR (99.74 kbps -- exact
+#      figure, not estimated). Even a full-episode-duration spike
+#      (duration=250 instead of 150) only reached 393x refill:draw,
+#      not materially different from the 150-tick window's 390x.
+#   2. Even a *hypothetical, unbounded* SKR outage cannot fix this
+#      either, at `pool:`'s prior scale (capacity_bits=1,000,000):
+#      with at most one SERVE_HYBRID decision rendered per simulator
+#      tick (env/environment.py's `_advance_to_next_decision`), the
+#      maximum possible draw volume in one 250-step episode is
+#      250 * 256 = 64,000 bits -- under 6.4% of a 1,000,000-bit pool,
+#      *even with refill at exactly zero for the entire episode*. The
+#      real bottleneck was never "the degradation is too mild" -- it's
+#      that `pool:`'s capacity was provisioned for a far longer time
+#      horizon than one training/eval episode represents, so no
+#      episode-bounded SKR/QBER degradation, however severe, could
+#      ever visibly stress it.
+#   3. Two changes below, together, fix this -- both scoped to this
+#      file only; configs/default.yaml (and therefore every S1 result,
+#      including the already-verified Gate W3 S1 win) is untouched,
+#      byte-for-byte, and this file's `scenario: S3` key means S1
+#      never loads this file at all:
+#      a. `pool.capacity_bits` drops to 20,000 -- still *below* the
+#         64,000-bit max-possible-episode-draw-volume computed in
+#         point 2 above, so genuine exhaustion is reachable under
+#         sufficient sustained hybrid demand, not just "somewhat
+#         lower." (`initial_fill_frac` is unchanged at 0.5, so the
+#         episode still starts at half capacity, same as S1's
+#         convention -- only the absolute scale changed.) This
+#         necessarily retires the file's prior "S1 and S3 describe the
+#         same deployment, not two different pieces of hardware"
+#         framing -- honestly revised, not silently dropped: S3 now
+#         models a deployment provisioned with a materially smaller
+#         QKD key buffer, which is what makes an episode-scale
+#         degradation event observable at all. `pool.mean_skr_kbps`
+#         (baseline, non-spike refill rate) is *not* changed -- with
+#         `mean_skr_kbps=200` unchanged, one non-spike tick's refill
+#         (200,000 bits) still vastly exceeds the new, smaller
+#         capacity, so the pool saturates to full within a single tick
+#         both before spike_start and after the window ends -- outside
+#         the degradation window, S3 behaves exactly like an
+#         (always-full) pool, same qualitative behavior as S1's own
+#         pool outside of scarcity conditions, differing only in scale.
+#      b. `qkd_degradation.spike_skr_multiplier` (new field, see
+#         env/pool_sim.py's docstring step 4a) is set to `0.0` during
+#         the window -- grounded in real QKD security-proof literature
+#         (the Shor-Preskill/GLLP line of results for BB84-family
+#         protocols): above a QBER *security threshold* (canonically
+#         cited around 11%), the protocol is required to abort and
+#         provably yields **zero** extractable secret key, not merely
+#         a reduced rate. A near-total collapse during a severe
+#         degradation window is the more physically faithful regime,
+#         not an invented worst case -- the pre-existing formula's own
+#         50% cap (point 1 above) was the unjustified number, not this
+#         one.
+#   4. Verified directly (not assumed): under this recalibration, a
+#      same-seed S1-vs-S3 comparison under AlwaysHybridPolicy (a
+#      deterministic, maximal-draw baseline, isolating the
+#      environment's own mechanics from any policy-choice variance)
+#      shows S3's pool dropping to near-total exhaustion (min fill
+#      32 bits out of 20,000, seed 0) with 21-33 real regret
+#      (deferral) events per 250-step episode across seeds 0/1/4/7,
+#      while S1 under the same seeds stays at 696,506-716,432 out of
+#      1,000,000 (min) with exactly 0 regret events, every time. See
+#      SESSION_LOG.md 2026-08-24 for the full per-seed table and the
+#      Hard Rule 9 deferral-not-downgrade verification.
 
 scenario: S3  # one of S1..S6 (PLAN.md §5); S6 is held-out eval only (Hard Rule 8)
 
@@ -40,8 +101,11 @@ seed: 0
 use_foresight: ewma  # off | ewma | lstm
 
 # --- env/pool_sim.py ---
+# capacity_bits recalibrated 2026-08-24 (1,000,000 -> 20,000) -- see this file's
+# header comment, point 3a, for the full computed justification (kept below the
+# 64,000-bit max-possible-episode-draw-volume so genuine exhaustion is reachable).
 pool:
-  capacity_bits: 1_000_000
+  capacity_bits: 20_000
   initial_fill_frac: 0.5
   bits_per_hybrid_draw: 256  # ETSI GS QKD 014 key size (256-bit); PLAN.md §4 Datasets & Provenance:
                               # "ETSI GS QKD 014 gives key sizes (256-bit)" -- Hard Rule 4, no invented number
@@ -85,14 +149,18 @@ qkd_degradation:
   spike_duration: 150    # ticks the window lasts
   spike_magnitude: 0.6   # added to QBER during the window (baseline QBER mean 0.02 -> ~0.62 in-window);
                            # matches tests/test_pool_sim.py's own S3-labeled degradation test's 0.4-0.9
-                           # range. SyntheticSKRQBERTrace additionally scales SKR down within the window
-                           # by (1 - min(qber, 0.5)) -- at this magnitude that's already the mechanism's
-                           # 50%-SKR-reduction ceiling (min() saturates for any magnitude past ~0.48), so
-                           # this value already produces the mechanism's maximum effective degradation;
-                           # verified this session (see SESSION_LOG.md 2026-08-19) that 0.9 and 0.99
-                           # produce byte-identical pool trajectories to 0.6 -- picked the smaller,
-                           # non-arbitrary value rather than an unnecessarily extreme one that reads no
-                           # differently.
+                           # range. Retained unchanged 2026-08-24 -- this value no longer determines SKR
+                           # severity (spike_skr_multiplier below does, see this file's header comment
+                           # point 3b); QBER itself is still real, reported state (visible to the
+                           # forecaster/dashboard) independent of the SKR mechanism, so a real, in-range
+                           # value is kept rather than an arbitrary one.
+  spike_skr_multiplier: 0.0  # NEW 2026-08-24 -- see env/pool_sim.py docstring step 4a and this file's
+                           # header comment point 3b: replaces the old qber-derived, 50%-capped SKR
+                           # formula with a direct multiplier during the window. 0.0 (near-total SKR
+                           # collapse) is grounded in real QKD security-proof literature (Shor-Preskill/
+                           # GLLP: above a QBER security threshold, ~11% for BB84-family protocols, the
+                           # protocol must abort and yields provably zero extractable secret key) -- not
+                           # an arbitrary worst case chosen to force a result.
 
 # --- agents/dqn.py (unchanged from default.yaml -- copied for a self-contained config file) ---
 dqn:

@@ -34,6 +34,7 @@ from env.environment import (
 )
 from env.masking import PolicyTable
 from env.request_generator import RequestGenerator, build_tenant_graph
+from experiments.harness import run_scenario
 from experiments.train import load_full_config
 
 _TIER_ACTIONS = (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID)
@@ -711,6 +712,59 @@ def test_s3_pool_trajectory_is_genuinely_worse_than_s1():
 
     assert regret_s3 > regret_s1
     assert min_fill_s3 < min_fill_s1
+
+
+def test_real_s3_config_file_genuinely_diverges_from_real_s1_config_no_test_override():
+    """2026-08-24 Gate W3 recalibration: the *real*, committed
+    configs/scenarios/s3_degradation.yaml (as `experiments/train.py`'s
+    train() will actually load it, not a test-only scarcity override,
+    and configs/default.yaml for S1, completely unmodified) must
+    themselves produce a genuinely different pool trajectory under the
+    same seed -- this is the property Gate W3's S3 training run
+    actually depends on. Uses the same seeds this session's
+    SESSION_LOG.md entry reports."""
+    s1_config = load_full_config("configs/default.yaml")
+    s3_config = load_full_config("configs/scenarios/s3_degradation.yaml")
+
+    def run(config: dict[str, Any], seed: int) -> tuple[int, float, float]:
+        cfg = {**config, "seed": seed, "max_steps": 250}
+        env = SmartKeyNetEnv(cfg)
+        state, info = env.reset(seed=seed)
+        policy = AlwaysHybridPolicy()
+        regret_events = len(info["regret_events"])
+        min_fill = env._pool_sim.fill
+        terminated = truncated = False
+        while not (terminated or truncated):
+            mask = info["action_mask"]
+            action = policy.act(state, mask)
+            state, reward, terminated, truncated, info = env.step(action)
+            regret_events += len(info["regret_events"])
+            min_fill = min(min_fill, env._pool_sim.fill)
+        return regret_events, min_fill, env._pool_sim.capacity
+
+    for seed in (0, 1, 4, 7):
+        regret_s1, min_fill_s1, cap_s1 = run(s1_config, seed)
+        regret_s3, min_fill_s3, cap_s3 = run(s3_config, seed)
+
+        assert regret_s1 == 0  # S1's real pool (1,000,000 bits) never gets stressed -- pre-existing property
+        assert regret_s3 > 0  # S3's recalibrated pool (20,000 bits) genuinely exhausts under sustained demand
+        # S3's own capacity is smaller by design (point 3a) -- compare fill *fractions*, not raw bit counts
+        assert (min_fill_s3 / cap_s3) < (min_fill_s1 / cap_s1)
+        assert (min_fill_s3 / cap_s3) < 0.01  # near-total exhaustion, not merely "somewhat lower"
+
+
+def test_real_s3_config_exhaustion_defers_never_downgrades_hard_rule_9():
+    """Hard Rule 9, verified explicitly under the new, more severe
+    real S3 config (not assumed to transfer from the pre-recalibration
+    S3, and not just from the small-pool test override elsewhere in
+    this file): a pool that genuinely exhausts under S3 must still
+    produce zero floor violations -- every request is deferred, never
+    served below its floor."""
+    s3_config = load_full_config("configs/scenarios/s3_degradation.yaml")
+    for seed in (0, 1, 4, 7):
+        result = run_scenario(AlwaysHybridPolicy(), "S3", s3_config, seed=seed)
+        assert result.pool_exhaustion_events > 0  # confirms this run actually exercised scarcity
+        assert result.floor_violations == 0  # Hard Rule 9: deferred, never downgraded
 
 
 # ---------------------------------------------------------------------------

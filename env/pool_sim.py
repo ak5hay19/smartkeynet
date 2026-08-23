@@ -206,6 +206,37 @@ class SyntheticSKRQBERTrace:
          shrinks the fraction of exchanged bits that survive error
          correction / privacy amplification into secret key. This is
          a documented monotonic stand-in, not a fitted physical model.
+         **This formula has a hard ceiling**: since `min(qber, 0.5)`
+         saturates at `0.5` for any `qber_after_spike >= 0.5`, the
+         resulting SKR reduction can never exceed 50% *regardless of
+         `spike_magnitude`* -- verified empirically 2026-08-19
+         (`configs/scenarios/s3_degradation.yaml`'s own comments) and
+         re-verified independently 2026-08-24 (magnitudes `0.6`,
+         `0.9`, `0.99`, `5.0` all produce byte-identical in-window SKR).
+      4a. **`spike_skr_multiplier` (added 2026-08-24, optional,
+          default `None`)**: when set, replaces step 4's
+          `qber`-derived, 50%-capped formula entirely with a direct
+          `skr *= spike_skr_multiplier` during the spike window --
+          decoupling degradation severity from `qber`'s own noisy,
+          clipped value and its formula's 50% ceiling. Motivation,
+          grounded rather than arbitrary (Hard Rule 4): published
+          QKD security proofs (the Shor-Preskill/GLLP line of results
+          for BB84-family protocols) establish a QBER *security
+          threshold* -- canonically cited around 11% -- above which
+          the protocol is required to abort and yields **zero**
+          provably-secure extractable key, not merely a reduced rate.
+          A near-total collapse (`spike_skr_multiplier` close to `0`)
+          during a severe degradation window is therefore the
+          *more* physically faithful regime, not a less faithful one
+          -- the pre-existing `1 - min(qber, 0.5)` formula's own 50%
+          cap was an implementation shortcut with no citation behind
+          it (already flagged as "a documented monotonic stand-in,
+          not a fitted physical model" in step 4 above), not a
+          modeled floor on how bad a real link can get. `None`
+          (the default) leaves every existing caller -- and every
+          config that doesn't set the corresponding
+          `qkd_degradation.spike_skr_multiplier` key -- byte-identical
+          to step 4's pre-existing formula.
       5. Draws use `numpy.random.default_rng(seed)`, re-seeded fresh
          each time `__iter__` is called, so the same trace object
          yields an identical sequence every time it is iterated --
@@ -221,6 +252,7 @@ class SyntheticSKRQBERTrace:
     spike_start: int | None = None
     spike_duration: int = 0
     spike_magnitude: float = 0.0
+    spike_skr_multiplier: float | None = None
     seed: int = 0
 
     def __iter__(self) -> Iterator[tuple[float, float]]:
@@ -238,7 +270,10 @@ class SyntheticSKRQBERTrace:
 
             skr = float(rng.normal(self.mean_skr_kbps, self.skr_noise_frac * self.mean_skr_kbps))
             if in_spike:
-                skr *= max(0.0, 1.0 - min(qber, 0.5))
+                if self.spike_skr_multiplier is not None:
+                    skr *= self.spike_skr_multiplier
+                else:
+                    skr *= max(0.0, 1.0 - min(qber, 0.5))
             skr = max(0.0, skr)
 
             yield skr, qber

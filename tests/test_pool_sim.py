@@ -265,3 +265,64 @@ def test_pool_drains_correctly_under_synthetic_trace_s3_degradation():
     refill_pre_spike_equivalent = pool.fill
 
     assert refill_during_spike < refill_pre_spike_equivalent
+
+
+# ---------------------------------------------------------------------------
+# spike_skr_multiplier (2026-08-24, Gate W3 S3 recalibration -- see this
+# module's docstring step 4a and configs/scenarios/s3_degradation.yaml)
+# ---------------------------------------------------------------------------
+
+
+def test_spike_skr_multiplier_none_is_byte_identical_to_prior_formula():
+    """Default (unset) must reproduce the pre-existing qber-derived,
+    50%-capped formula exactly -- every caller/config that predates
+    this session must be completely unaffected."""
+    kwargs = dict(n_steps=250, seed=0, spike_start=50, spike_duration=150, spike_magnitude=0.6)
+    trace_default = SyntheticSKRQBERTrace(**kwargs)
+    trace_explicit_none = SyntheticSKRQBERTrace(**kwargs, spike_skr_multiplier=None)
+    assert list(trace_default) == list(trace_explicit_none)
+
+
+def test_spike_skr_multiplier_breaks_the_50_percent_ceiling():
+    """The pre-existing formula can never reduce in-window SKR by more
+    than 50% (verified: magnitudes 0.6/0.9/0.99/5.0 all saturate
+    identically). `spike_skr_multiplier` must be able to go far
+    beyond that ceiling when set."""
+    old_formula = SyntheticSKRQBERTrace(
+        n_steps=250, seed=0, spike_start=50, spike_duration=150, spike_magnitude=5.0
+    )
+    old_in_window = [s for s, _ in old_formula][50:200]
+    old_mean = sum(old_in_window) / len(old_in_window)
+
+    new_formula = SyntheticSKRQBERTrace(
+        n_steps=250,
+        seed=0,
+        spike_start=50,
+        spike_duration=150,
+        spike_magnitude=0.6,
+        spike_skr_multiplier=0.0,
+    )
+    new_in_window = [s for s, _ in new_formula][50:200]
+
+    # old formula's ceiling: at most ~50% reduction from the ~200 kbps mean
+    assert old_mean == pytest.approx(99.7448, rel=0.01)
+    # new mechanism: a literal 0.0 multiplier drives in-window SKR to exactly zero
+    assert all(s == 0.0 for s in new_in_window)
+
+
+def test_spike_skr_multiplier_is_decoupled_from_qber_value():
+    """The multiplier must apply regardless of what qber itself lands
+    on that step -- it directly scales skr, it does not derive from
+    qber (unlike the pre-existing formula)."""
+    trace = SyntheticSKRQBERTrace(
+        n_steps=100,
+        seed=2,
+        spike_start=20,
+        spike_duration=30,
+        spike_magnitude=0.01,  # deliberately tiny -- qber barely moves in-window
+        spike_skr_multiplier=0.001,  # but skr should still collapse ~1000x
+    )
+    pairs = list(trace)
+    pre_spike_mean_skr = sum(s for s, _ in pairs[:20]) / 20
+    in_window_mean_skr = sum(s for s, _ in pairs[20:50]) / 30
+    assert in_window_mean_skr < pre_spike_mean_skr / 100  # collapsed despite tiny qber shift

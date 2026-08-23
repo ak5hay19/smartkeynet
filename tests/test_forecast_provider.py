@@ -151,3 +151,88 @@ def test_threat_horizon_scores_are_also_flat_held():
     horizon_scores = forecaster.get_threat_forecast().horizon_scores
     assert len(horizon_scores) == 5
     assert all(s == horizon_scores[0] for s in horizon_scores)
+
+
+# ---------------------------------------------------------------------------
+# Posture-saturation investigation (2026-08-24, S3 recalibration session).
+#
+# PROGRESS.md/SESSION_LOG.md 2026-08-19 found that under real S1/S3
+# config, floor *and* posture sequences were byte-identical -- read at
+# the time as "posture is already saturated at ELEVATED, load
+# dominates QBER." This session investigated the precise mechanism,
+# directly against this real class (env/environment.py's
+# `_threat_features_placeholder` returns `[qber, load]`, both in
+# [0, 1]; `MovingAverageForecaster.update` averages them, squashes via
+# sigmoid, then argmax's the RBF-softmax posture_probs -- see
+# env/environment.py line ~753). Finding, precise and two-sided (not
+# fixed here -- read/investigate only, per instruction; flagged as a
+# separate, standing item, distinct from S3's pool/scarcity fix above):
+#   (a) QBER genuinely, measurably moves threat_score and posture_probs
+#       -- it is NOT negligible, contrary to a "load totally dominates"
+#       reading.
+#   (b) But the *discrete* posture classification (argmax(posture_probs),
+#       the only thing env/masking.py's floor table actually reads)
+#       can mathematically never reach HIGH for ANY (qber, load) in
+#       [0, 1]^2 -- both features are bounded in [0, 1], so
+#       raw_signal = mean(qber, load) is bounded in [0, 1], so
+#       squashed_signal = sigmoid(raw_signal) is bounded in
+#       [0.5, ~0.731] (sigmoid(0)=0.5, sigmoid(1)=0.731) -- a range
+#       that, under the RBF-softmax's anchors {0.0, 0.5, 1.0} and
+#       temperature 0.15, always sits closer to the ELEVATED anchor
+#       (0.5) than the HIGH anchor (1.0), even at the theoretical
+#       maximum of both features simultaneously. This is a real,
+#       structural property of the current placeholder formula, not a
+#       load-vs-QBER competition -- HIGH is architecturally
+#       unreachable via this path regardless of which feature
+#       dominates. (S2's threat_schedule sidesteps this entirely by
+#       injecting a scripted signal unbounded by [0, 1] -- see
+#       `_threat_features_placeholder`'s S2 branch -- which is exactly
+#       why S2 can and does reach HIGH while S3, driven by real
+#       qber/load, cannot.)
+# Not fixed this session: env/forecast_provider.py is investigate-only
+# per instruction; S3's own purpose is pool/scarcity budgeting (this
+# module's row above), not posture/floor behavior (S2's territory).
+# Flagged in PROGRESS.md as a new, separate open item.
+# ---------------------------------------------------------------------------
+
+
+def test_qber_alone_measurably_moves_threat_score_and_posture_probs():
+    """(a) above: QBER is not negligible when load is held fixed --
+    contrary to a naive "load totally dominates, QBER doesn't matter"
+    reading of the 2026-08-19 byte-identical-posture finding."""
+    for load in (0.0, 0.3, 0.5, 1.0):
+        low_qber_forecaster = MovingAverageForecaster(alpha=0.3)
+        high_qber_forecaster = MovingAverageForecaster(alpha=0.3)
+        for _ in range(80):  # let the EWMA settle to steady state
+            low_qber_forecaster.update(make_observation(threat_features=[0.02, load], qber=0.02))
+            high_qber_forecaster.update(make_observation(threat_features=[0.62, load], qber=0.62))
+
+        low = low_qber_forecaster.get_threat_forecast()
+        high = high_qber_forecaster.get_threat_forecast()
+
+        # threat_score moves by a real, non-trivial margin purely from qber
+        assert high.threat_score - low.threat_score > 0.03
+        # the HIGH-anchor posture probability (index 2) rises measurably too
+        assert high.posture_probs[2] > low.posture_probs[2] * 1.3
+
+
+def test_posture_argmax_can_never_reach_high_via_qber_load_placeholder():
+    """(b) above: the *discrete* posture (what env/masking.py's floor
+    table actually consumes) is structurally capped at ELEVATED for
+    every possible (qber, load) combination in [0, 1]^2 -- swept
+    exhaustively across the corners and center of the space, including
+    the theoretical worst case (both features maxed simultaneously)."""
+    HIGH_INDEX = 2
+    ELEVATED_INDEX = 1
+    for qber in (0.0, 0.02, 0.5, 0.62, 0.9, 0.999):
+        for load in (0.0, 0.3, 0.5, 0.7, 1.0):
+            forecaster = MovingAverageForecaster(alpha=0.3)
+            for _ in range(80):
+                forecaster.update(make_observation(threat_features=[qber, load], qber=qber))
+            probs = forecaster.get_threat_forecast().posture_probs
+            argmax = max(range(len(probs)), key=lambda i: probs[i])
+            assert argmax != HIGH_INDEX, (
+                f"qber={qber} load={load} reached HIGH posture ({probs}) -- "
+                "this would contradict the confirmed structural ceiling"
+            )
+            assert argmax == ELEVATED_INDEX or argmax == 0

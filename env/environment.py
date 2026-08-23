@@ -577,14 +577,27 @@ class SmartKeyNetEnv(gym.Env):
         S3 'QKD degradation' scenario"), so this is real reuse, not a
         new mechanism. Empty for every other scenario -- `reset()`'s
         trace construction is then byte-identical to before this
-        session."""
+        session.
+
+        **2026-08-24 (design decision 14, Gate W3 S3 recalibration)**:
+        `spike_skr_multiplier` is read only if the S3 config's
+        `qkd_degradation` block sets it -- `.get(...)`, not `[...]`,
+        so every existing S3 config/test that doesn't set this key
+        (none did before this session) still gets `None` here, which
+        `SyntheticSKRQBERTrace` treats as "use the pre-existing
+        `qber`-derived formula, unchanged" (see that module's
+        docstring, step 4a). Only `configs/scenarios/s3_degradation.yaml`
+        sets it now."""
         if self._qkd_degradation_cfg is None:
             return {}
-        return {
+        kwargs: dict[str, Any] = {
             "spike_start": int(self._qkd_degradation_cfg["spike_start"]),
             "spike_duration": int(self._qkd_degradation_cfg["spike_duration"]),
             "spike_magnitude": float(self._qkd_degradation_cfg["spike_magnitude"]),
         }
+        if "spike_skr_multiplier" in self._qkd_degradation_cfg:
+            kwargs["spike_skr_multiplier"] = float(self._qkd_degradation_cfg["spike_skr_multiplier"])
+        return kwargs
 
     def _build_forecaster(self) -> ForecastProvider | None:
         if self._use_foresight == "off":
