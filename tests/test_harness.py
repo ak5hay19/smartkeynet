@@ -24,7 +24,14 @@ from agents.baselines import (
     StaticThresholdPolicy,
 )
 from env.contracts import Action, KeyType
-from experiments.harness import ScenarioResult, _delivered_tier, run_grid, run_scenario
+from experiments.harness import (
+    MultiSeedEvalResult,
+    ScenarioResult,
+    _delivered_tier,
+    evaluate_multi_seed,
+    run_grid,
+    run_scenario,
+)
 from metrics.regret import EpisodeMetrics
 
 _TIER_ACTIONS = (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID)
@@ -220,3 +227,89 @@ def test_run_grid_returns_one_result_per_combination():
         assert result.scenario == "S1"
         assert result.seed in seeds
         assert result.floor_violations == 0
+
+
+# ---------------------------------------------------------------------------
+# evaluate_multi_seed (2026-08-19, Gate W3 attempt session)
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_multi_seed_runs_every_seed_and_keeps_the_raw_results():
+    config = load_test_config(overrides={"max_steps": 50})
+    eval_seeds = [1, 2, 3]
+
+    result = evaluate_multi_seed(AlwaysPQCPolicy(), "S1", config, eval_seeds)
+
+    assert isinstance(result, MultiSeedEvalResult)
+    assert result.scenario == "S1"
+    assert result.eval_seeds == eval_seeds
+    assert len(result.results) == len(eval_seeds)
+    for seed, r in zip(eval_seeds, result.results):
+        assert isinstance(r, ScenarioResult)
+        assert r.seed == seed
+
+
+def test_evaluate_multi_seed_means_match_a_manual_average_of_run_scenario():
+    """The summary stats must be exactly derived from the same
+    `run_scenario` calls `evaluate_multi_seed` itself makes -- not a
+    re-fetched or independently-computed number that could drift."""
+    config = load_test_config(overrides={"max_steps": 50})
+    eval_seeds = [10, 11, 12, 13]
+    policy = StaticThresholdPolicy(pool_fill_threshold=0.5)
+
+    result = evaluate_multi_seed(policy, "S1", config, eval_seeds)
+
+    manual_results = [run_scenario(policy, "S1", config, seed=s) for s in eval_seeds]
+    manual_p99 = [r.p99_latency for r in manual_results]
+    manual_reward = [r.total_reward for r in manual_results]
+
+    assert result.p99_latency_mean == pytest.approx(sum(manual_p99) / len(manual_p99))
+    assert result.total_reward_mean == pytest.approx(sum(manual_reward) / len(manual_reward))
+
+
+def test_evaluate_multi_seed_std_is_zero_for_a_deterministic_policy_on_identical_conditions():
+    """Sanity check on the std computation itself: a policy whose
+    behavior doesn't depend on the eval seed at all (AlwaysPQCPolicy,
+    on a config where the request stream's seed dependence doesn't
+    change which action gets chosen) should show near-zero spread only
+    if the underlying runs are actually similar -- this just confirms
+    std is computed correctly, not hardcoded to some placeholder."""
+    config = load_test_config(overrides={"max_steps": 100})
+    result = evaluate_multi_seed(AlwaysPQCPolicy(), "S1", config, eval_seeds=[1, 2, 3])
+
+    import numpy as np
+
+    manual_std = float(np.std([r.p99_latency for r in result.results]))
+    assert result.p99_latency_std == pytest.approx(manual_std)
+
+
+def test_evaluate_multi_seed_floor_violations_total_is_summed_not_averaged():
+    """`floor_violations_total` must sum across seeds, not average --
+    averaging could hide a single bad seed behind a small-looking mean.
+    Since every masked policy has zero violations by construction
+    (Hard Rule 2), this also doubles as a real zero-violations check
+    across multiple seeds at once."""
+    config = load_test_config(overrides={"max_steps": 50})
+    result = evaluate_multi_seed(AlwaysHybridPolicy(), "S1", config, eval_seeds=[1, 2, 3, 4])
+    assert result.floor_violations_total == 0
+
+
+def test_evaluate_multi_seed_rejects_empty_eval_seeds():
+    config = load_test_config(overrides={"max_steps": 50})
+    with pytest.raises(ValueError):
+        evaluate_multi_seed(AlwaysPQCPolicy(), "S1", config, eval_seeds=[])
+
+
+def test_evaluate_multi_seed_single_seed_matches_run_scenario_exactly():
+    """A single-eval-seed call must reduce to exactly `run_scenario`'s
+    own result, with zero std -- the multi-seed machinery shouldn't
+    change behavior in the degenerate n=1 case."""
+    config = load_test_config(overrides={"max_steps": 50})
+    policy = AlwaysPQCPolicy()
+
+    direct = run_scenario(policy, "S1", config, seed=42)
+    multi = evaluate_multi_seed(policy, "S1", config, eval_seeds=[42])
+
+    assert multi.p99_latency_mean == pytest.approx(direct.p99_latency)
+    assert multi.p99_latency_std == pytest.approx(0.0)
+    assert multi.total_reward_mean == pytest.approx(direct.total_reward)

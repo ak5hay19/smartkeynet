@@ -233,3 +233,89 @@ def run_grid(
             for seed in seeds:
                 results.append(run_scenario(policy, scenario, config, seed))
     return results
+
+
+@dataclass
+class MultiSeedEvalResult:
+    """Mean + spread of one policy's performance across several eval
+    seeds on one scenario -- the fix at the *measurement* layer for
+    what 2026-08-18's checkpoint-oscillation diagnostics found: a
+    single fixed `eval_seed` (as `experiments/train.py`'s
+    `evaluate_against_baseline` used) is not a reliable point estimate
+    of a policy's real performance, even for a policy (like a trained
+    DQN) that could itself swing checkpoint-to-checkpoint -- see
+    SESSION_LOG.md's 2026-08-18/2026-08-19 entries. This is
+    complementary to, not a substitute for, 2026-08-19's Hard Rule 2
+    masking fix at the environment layer -- that fix reduced how much
+    the *policy itself* swings between training checkpoints; this
+    reduces how much any *one measurement* of a fixed policy's
+    performance can mislead.
+
+    `results` holds every real per-seed `ScenarioResult`, never
+    discarded -- the summary statistics below are computed from it, not
+    a separate source of truth, so a caller that wants to check the
+    spread's shape (not just mean/std) always has the raw runs to look
+    at.
+    """
+
+    scenario: str
+    eval_seeds: list[int]
+    results: list[ScenarioResult]
+    p99_latency_mean: float
+    p99_latency_std: float
+    total_reward_mean: float
+    total_reward_std: float
+    forced_rekey_ratio_mean: float
+    forced_rekey_ratio_std: float
+    regret_events_mean: float
+    pool_exhaustion_events_mean: float
+    floor_violations_total: int
+    """Summed, not averaged -- Hard Rule 2's guarantee is that this is
+    always 0, for every seed; summing (rather than meaning) makes a
+    single non-zero seed impossible to average away into a
+    reassuring-looking small number."""
+
+
+def evaluate_multi_seed(
+    policy: Policy,
+    scenario: str,
+    config: dict[str, Any],
+    eval_seeds: list[int],
+) -> MultiSeedEvalResult:
+    """Run `policy` on `scenario` across every seed in `eval_seeds` via
+    `run_scenario`, and summarize the metrics PLAN.md's closing table
+    (and Gate W3's comparison) care about as mean + std, never a bare
+    single-seed point estimate.
+
+    Policy-agnostic (works for `GreedyDQNPolicy`, any of
+    `agents/baselines.py`'s policies, or anything else satisfying the
+    `Policy` protocol) and scenario-agnostic -- lives here rather than
+    in `experiments/train.py` because it's a generic evaluation
+    primitive, matching this file's existing role ("runs any Policy"),
+    not something DQN-specific.
+    """
+    if not eval_seeds:
+        raise ValueError("eval_seeds must be non-empty")
+
+    results = [run_scenario(policy, scenario, config, seed) for seed in eval_seeds]
+
+    p99_latencies = [r.p99_latency for r in results]
+    total_rewards = [r.total_reward for r in results]
+    forced_rekey_ratios = [r.episode_metrics.forced_rekey_ratio for r in results]
+    regret_events = [r.episode_metrics.regret_events for r in results]
+    pool_exhaustion_events = [r.pool_exhaustion_events for r in results]
+
+    return MultiSeedEvalResult(
+        scenario=scenario,
+        eval_seeds=list(eval_seeds),
+        results=results,
+        p99_latency_mean=float(np.mean(p99_latencies)),
+        p99_latency_std=float(np.std(p99_latencies)),
+        total_reward_mean=float(np.mean(total_rewards)),
+        total_reward_std=float(np.std(total_rewards)),
+        forced_rekey_ratio_mean=float(np.mean(forced_rekey_ratios)),
+        forced_rekey_ratio_std=float(np.std(forced_rekey_ratios)),
+        regret_events_mean=float(np.mean(regret_events)),
+        pool_exhaustion_events_mean=float(np.mean(pool_exhaustion_events)),
+        floor_violations_total=sum(r.floor_violations for r in results),
+    )
