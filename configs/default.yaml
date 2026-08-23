@@ -19,7 +19,7 @@ scenario: S1  # one of S1..S6 (PLAN.md §5); S6 is held-out eval only (Hard Rule
 seed: 0
 
 # --- env/forecast_provider.py, forecaster/model.py (Addition A) ---
-use_foresight: ewma  # off | ewma | lstm
+use_foresight: lstm  # off | ewma | lstm
 
 # --- env/pool_sim.py ---
 #

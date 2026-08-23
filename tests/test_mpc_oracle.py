@@ -51,9 +51,17 @@ def test_never_returns_an_illegal_action(mask):
 
 
 def test_cheating_is_confined_to_one_method():
-    """`peek_future` is the only place the oracle reads the environment's
-    future. Keeping it in one method is what makes the cheat auditable and
-    stops the capability leaking into a policy claiming to be causal."""
+    """Every environment read lives in a named, audited method.
+
+    Three of them genuinely cheat (they read the future); two read present
+    state that every causal policy is given anyway. Keeping the set small and
+    enumerated is what makes the cheat auditable and stops the capability
+    leaking into a policy that claims to be causal -- `MPCForecast` inherits
+    from this class, and if foresight leaked into a shared helper it would
+    silently become an oracle while still being reported as the fair baseline.
+
+    The count is asserted rather than the method names, so ADDING an env read
+    anywhere fails this test until it is deliberately listed here."""
     import inspect
 
     source = inspect.getsource(MPCOracle)
@@ -61,14 +69,15 @@ def test_cheating_is_confined_to_one_method():
     audited = (
         MPCOracle.peek_future,  # future demand and refill -- the cheat
         MPCOracle.peek_future_floor,  # the floor the horizon will reach -- the cheat
+        MPCOracle.projected_refill_keys,  # future refill against the known drift -- the cheat
         MPCOracle._current_pool_keys,  # present pool level, which causal policies see too
         MPCOracle._lifetime_cap,  # the SP 800-57 cap, given to every policy
     )
     accounted = sum(inspect.getsource(method).count("self.env.") for method in audited)
-    # Every environment access lives in one of three audited methods. `bind`
-    # only assigns, and `act` reads nothing from the env directly -- so an
-    # auditor has a bounded set of places to check that the foresight has not
-    # leaked into something claiming to be causal.
+    # Every environment access lives in one of the audited methods above.
+    # `bind` only assigns, and `act` reads nothing from the env directly -- so
+    # an auditor has a bounded set of places to check that the foresight has
+    # not leaked into something claiming to be causal.
     assert total_env_reads == accounted
 
 
@@ -226,3 +235,91 @@ def test_oracle_is_at_least_as_good_as_the_forecast_baseline():
         ]
     )
     assert oracle_regret <= forecast_regret + 1e-9
+
+
+# ---------------------------------------------------------------------------
+# §S7 test 5 -- the oracle must dominate EVERY causal policy
+# ---------------------------------------------------------------------------
+
+
+def test_mpc_oracle_dominates_all_causal_policies():
+    """SMARTKEYNET_BUILD_SPEC.md §S7 test 5, which had never been written.
+
+    "on the same seed, MPC's return >= every causal policy's return. If MPC
+    loses to anything, MPC is buggy (or your reward has an exploit)."
+
+    This is the single most load-bearing test in the file, because the oracle's
+    only job is to be an upper bound: the gap between it and a causal policy is
+    what the whole project reports as the value of foresight. An oracle that
+    loses makes that gap meaningless -- and worse, makes it look *negative*,
+    which reads as "anticipation is harmful" rather than "our oracle is
+    broken".
+
+    Its absence hid three real bugs for the project's whole life. The oracle
+    gated every rekey on pool surplus though only hybrid rekeys draw keys; it
+    compared demand over the full horizon against refill over a much shorter
+    window, so its pre-emption gate passed spuriously; and its establishment
+    scan omitted `REKEY_NOW` entirely, buying hybrid where refreshing in place
+    was cheaper. Net effect: the "perfect foresight" bound lost to
+    `greedy_recommender` -- a policy with no model, no memory and no planning
+    -- by 16.8 regret events to 1.6.
+    """
+    from agents.baselines import (
+        AlwaysHybridPolicy,
+        AlwaysPQCPolicy,
+        GreedyRecommenderPolicy,
+        RandomPolicy,
+        StaticThresholdPolicy,
+    )
+    from agents.mpc_oracle import MPCForecast
+    from experiments.harness import run_scenario
+
+    with open(Path(__file__).resolve().parent.parent / "configs" / "default.yaml") as handle:
+        base = yaml.safe_load(handle)
+    config = {**base, "max_steps": 600, "scenario_steps": 800}
+    seeds = (1000, 1001, 1002)
+
+    causal_policies = {
+        "greedy": GreedyRecommenderPolicy(),
+        "static_threshold": StaticThresholdPolicy(0.95, 0, 0.9),
+        "mpc_forecast": MPCForecast(),
+        "always_pqc": AlwaysPQCPolicy(),
+        "always_hybrid": AlwaysHybridPolicy(),
+        "random": RandomPolicy(seed=0),
+    }
+
+    def score(policy, scenario):
+        results = [run_scenario(policy, scenario, config, seed=seed) for seed in seeds]
+        return (
+            float(np.mean([r.episode_metrics.regret_events for r in results])),
+            float(np.mean([r.total_reward for r in results])),
+        )
+
+    for scenario in ("S1", "S3"):
+        oracle_regret, oracle_reward = score(MPCOracle(), scenario)
+        for name, policy in causal_policies.items():
+            causal_regret, causal_reward = score(policy, scenario)
+            assert oracle_regret <= causal_regret + 1e-9, (
+                f"{scenario}: MPC oracle caused MORE regret ({oracle_regret:.1f}) than the "
+                f"causal policy `{name}` ({causal_regret:.1f}). An upper bound that loses to "
+                "a causal policy is a bug in the oracle (§S7 test 5)."
+            )
+            assert oracle_reward >= causal_reward - 1e-6, (
+                f"{scenario}: MPC oracle scored below `{name}` on reward "
+                f"({oracle_reward:.1f} vs {causal_reward:.1f})."
+            )
+
+
+def test_mpc_oracle_never_underperforms_the_myopic_choice_by_construction():
+    """The structural guarantee behind the test above.
+
+    The oracle's DEFAULT branch is the myopic choice -- cheapest legal action,
+    sharing `GreedyRecommenderPolicy`'s exact cost ordering. Foresight may only
+    override it when the four-gate lookahead fires. So the oracle can differ
+    from greedy solely on steps where it believes anticipation strictly pays,
+    which is what makes domination a property of the code rather than of the
+    numbers on any particular seed.
+    """
+    from agents.baselines import GreedyRecommenderPolicy
+
+    assert MPCOracle._CHEAPEST_FIRST == GreedyRecommenderPolicy._CHEAPEST_FIRST

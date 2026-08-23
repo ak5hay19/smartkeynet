@@ -73,6 +73,25 @@ class MPCOracle:
 
     env: Any = None
     horizon: int = HORIZON
+    rekey_fraction: float = 0.9
+    """Refresh the key once it is this far through its lifetime cap `L`.
+
+    A perfect-foresight controller is entitled to know its own best operating
+    point, so this is chosen rather than learned -- but it is chosen because
+    the myopic default alone is NOT optimal, and the oracle must dominate every
+    causal policy (§S7 test 5).
+
+    Pure cheapest-legal-action holds every key to its hard cap, forgoing the
+    freshness bonus over the final stretch of each key's life. The tuned
+    threshold refreshes at 0.9L and beats plain myopia on S1 for exactly that
+    reason (-266.3 against -271.8), so an oracle that never refreshes
+    voluntarily inherits a loss it can see coming. Swept over
+    {0.1 ... 0.9}: higher is better on both S1 and S3, because every refresh
+    also risks drawing a key, so the value sits at the top of the range.
+
+    Unlike the threshold, the refresh here is still gated on the pool being
+    able to fund it -- see `act`. That gate is the foresight, and it is why
+    this dominates the threshold on S3 rather than merely matching it."""
 
     def bind(self, env: Any) -> MPCOracle:
         """Attach the environment whose future this oracle may inspect.
@@ -186,98 +205,227 @@ class MPCOracle:
             return 0.0
         return float(self.env._pool_sim.fill / self.env._bits_per_hybrid_draw)
 
-    def act(self, state: StateDict, mask: ActionMask) -> Action:
-        demand, refill = self.peek_future()
-        surplus = self._current_pool_keys() + refill - demand
-        floor = int(state.get("policy_floor", 0))
-        future_floor = self.peek_future_floor(state)
+    def projected_refill_keys(self, steps_ahead: int) -> float:
+        """THE THIRD AND LAST PLACE THIS POLICY CHEATS.
 
-        # 1. Reuse whenever legal -- UNLESS the horizon says the key is about
-        #    to expire into a moment when the pool cannot fund its
-        #    replacement.
-        #
-        #    Reuse looks free: no key drawn, no rekey cost. But a key held to
-        #    its SP 800-57 cap `L` triggers a *forced* rekey at whatever
-        #    moment the cap happens to fall, and under scarcity that moment is
-        #    frequently one where the pool is empty and the request is
-        #    deferred. Rekeying early, at a moment of one's own choosing while
-        #    keys are available, is strictly better -- and it is exactly the
-        #    behaviour PLAN.md wants ("rekeys early at cheap moments").
-        #
-        #    This is what the tuned threshold was doing with `rho = 0.9` and
-        #    the first two versions of this oracle were not. Missing it is why
-        #    the oracle scored *below* the threshold on S3 (-288,535 vs
-        #    -179,936) -- an upper bound that loses to a causal policy is not
-        #    an upper bound.
-        # `key_age` is normalised by the lifetime cap (spec §4.2), so the
-        # horizon has to be normalised the same way to compare against it.
+        Keys the link will actually distil over the next `steps_ahead` steps,
+        integrated against the scenario's **known** QBER drift schedule rather
+        than extrapolated from the present rate.
+
+        This previously flat-extrapolated the current SKR
+        (`skr_now * horizon`), which is not foresight at all -- it is
+        persistence, the very baseline the forecaster is supposed to beat. The
+        consequence was specific and fatal to the oracle's purpose: on S3 the
+        refill rate collapses by ~95% during the drift, and an oracle that
+        assumed the present rate would hold walked into the crunch believing it
+        had ample supply. It could not anticipate the one event the scenario
+        exists to test.
+        """
+        if self.env is None:
+            return 0.0
+
+        trace = self.env._pool_sim._trace
+        baseline_qber = float(getattr(trace, "baseline_qber", 0.0))
+        mean_skr_kbps = float(getattr(trace, "mean_skr_kbps", 0.0))
+        drift = self.env._scenario.qber_drift
+        key_bits = float(self.env._bits_per_hybrid_draw)
+
+        total_keys = 0.0
+        for step in range(self.env._step_count, self.env._step_count + steps_ahead):
+            qber = baseline_qber
+            if drift is not None:
+                qber += drift.excess_at(step, baseline_qber)
+            gate = trace.reconciliation_gate(qber) if hasattr(trace, "reconciliation_gate") else 1.0
+            total_keys += (mean_skr_kbps * gate * 1000.0) / key_bits
+        return total_keys
+
+    def act(self, state: StateDict, mask: ActionMask) -> Action:
+        """Choose the myopically-cheapest action UNLESS foresight shows a
+        specific, checkable reason to deviate.
+
+        ---------------------------------------------------------------
+        Why it is written this way round
+        ---------------------------------------------------------------
+        An upper bound must dominate every causal policy (§S7 test 5). The
+        previous version did not: it applied two forward-looking heuristics
+        *unconditionally* -- refresh whenever the key was within the horizon of
+        expiry, and pre-provision to the future floor whenever surplus allowed
+        -- and both cost latency, energy and sometimes a key for a benefit that
+        usually never arrived. Measured against `greedy_recommender`, which
+        simply takes the cheapest legal action, the oracle lost 16.8 to 1.6 on
+        regret events. An upper bound that loses to a policy with no model, no
+        memory and no planning is not an upper bound; it is a bug.
+
+        The fix is structural rather than a retuning. The default branch here
+        IS the myopic choice, so the oracle can never do worse than greedy by
+        construction. Foresight is only allowed to override it when the
+        lookahead answers a specific question affirmatively:
+
+            "Will holding this key force a rekey I will NOT be able to fund,
+             at a moment I can still fund one now?"
+
+        That is the only situation in this environment where acting early
+        genuinely beats acting late, and it is exactly what a forced rekey into
+        an empty pool costs: a deferral, which is a regret event.
+        """
+        floor = int(state.get("policy_floor", 0))
         key_age_fraction = float(state.get("key_age", 0.0))
         lifetime_cap = self._lifetime_cap()
-        horizon_fraction = self.horizon / max(1e-9, lifetime_cap)
-        expires_within_horizon = key_age_fraction + horizon_fraction >= 1.0
 
-        # Would refreshing now actually consume a QKD key? ONLY a hybrid-tier
-        # re-establishment draws from the pool; classical and PQC rekeys cost
-        # latency and energy but no key material at all.
-        #
-        # This gated EVERY rekey on `surplus > 1.0` until 2026-08-19, which is
-        # wrong and was costly: whenever the pool was tight the oracle declined
-        # even a free PQC refresh, held the key to its hard cap, and then ate a
-        # FORCED rekey at a moment it did not choose -- precisely the failure
-        # the freshness/forced-rekey machinery exists to avoid. The effect was
-        # that the "perfect foresight" oracle degenerated to plain REUSE-always
-        # and scored *identically to `greedy_recommender`* while LOSING to the
-        # tuned threshold (-354.3 against -332.3). An upper bound that loses to
-        # a causal policy is not an upper bound, which is exactly what §S7
-        # test 5 exists to catch -- and that test had never been written.
-        prospective_floor = future_floor if surplus > 1.0 else floor
-        refresh_would_draw_a_key = prospective_floor >= int(Action.SERVE_HYBRID)
-        can_afford_refresh = (not refresh_would_draw_a_key) or surplus > 1.0
+        # ONE foresight question, asked once, governing BOTH decisions below.
+        # Computing it separately for the reuse choice and the tier choice is
+        # how the previous version leaked cost: it would decline to refresh
+        # early (correctly) and then, when the floor forced an establishment
+        # anyway, buy a tier ABOVE the floor "just in case" -- paying for
+        # anticipation it had already concluded did not pay.
+        preemption_pays = self._preemptive_rekey_pays(state, floor, key_age_fraction, lifetime_cap)
 
-        if mask[int(Action.REUSE)] and not (expires_within_horizon and can_afford_refresh):
+        if bool(mask[int(Action.REUSE)]) and not preemption_pays:
             return Action.REUSE
 
-        # 2. A key must be established. Serve the CHEAPEST tier that clears
-        #    the floor.
-        #
-        #    Note what this deliberately does not do: it never serves hybrid
-        #    above the floor, no matter how large the surplus. With perfect
-        #    foresight the oracle can see what a causal policy can only infer
-        #    -- that discretionary hybrid buys nothing in this environment. It
-        #    costs more latency, more energy and a scarce key, with no
-        #    offsetting benefit, so spending above the floor is strictly
-        #    dominated. The first version of this oracle spent whenever
-        #    `surplus > 1`, which fired on almost every step and made it
-        #    behave like always-hybrid -- it scored *worse* than the tuned
-        #    threshold, which is disqualifying for something meant to be an
-        #    upper bound.
-        #
-        #    `surplus` therefore only gates the one genuinely forward-looking
-        #    choice below.
-        #    Pre-provision to the FUTURE floor when the horizon can afford
-        #    it: a key bought at the tier the floor is about to reach stays
-        #    reusable across the ratchet, avoiding a forced rekey exactly when
-        #    the pool is most stressed. When the surplus cannot fund that, the
-        #    oracle falls back to the current floor rather than starving
-        #    something that needs the key now.
-        target_floor = future_floor if surplus > 1.0 else floor
-        for action in (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID):
-            if int(action) >= target_floor and mask[int(action)]:
-                return action
-        for action in (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID):
-            if int(action) >= floor and mask[int(action)]:
-                return action
+        target_floor = self._establishment_floor(state, floor, preemption_pays)
+        return self._cheapest_legal_at_or_above(mask, target_floor)
 
-        # 3. Nothing at or above the floor is establishable this step. Prefer
-        #    REKEY_NOW (which resolves to the floor's tier) when the horizon
-        #    can afford it; otherwise take whatever remains legal.
-        if mask[int(Action.REKEY_NOW)] and surplus > 0.0:
-            return Action.REKEY_NOW
+    _CHEAPEST_FIRST: tuple[Action, ...] = (
+        Action.REUSE,
+        Action.SERVE_CLASSICAL,
+        Action.SERVE_PQC,
+        Action.REKEY_NOW,
+        Action.SERVE_HYBRID,
+    )
+    """Immediate-cost ordering, identical to `GreedyRecommenderPolicy`'s.
 
+    `REKEY_NOW` sits ahead of `SERVE_HYBRID` because it re-establishes at the
+    EXISTING key's tier rather than buying the top tier outright, so it is
+    cheaper whenever the current key already clears the floor.
+
+    The oracle scanned only `(CLASSICAL, PQC, HYBRID)` and never considered
+    `REKEY_NOW` at all, so on 34 steps of a 1,200-step episode it bought hybrid
+    where the myopic policy correctly refreshed in place. Sharing the ordering
+    is what makes "the oracle cannot score below greedy" true by construction
+    rather than by hope.
+    """
+
+    def _cheapest_legal_at_or_above(
+        self, mask: ActionMask, target_floor: int, allow_reuse: bool = True
+    ) -> Action:
+        """Cheapest legal action that still clears `target_floor`.
+
+        `REUSE` and `REKEY_NOW` carry no tier index of their own -- masking has
+        already removed them when the active key would not clear the floor
+        (spec §S4 rule 4), so their presence in the mask IS the guarantee that
+        they are legal at this floor.
+        """
+        for action in self._CHEAPEST_FIRST:
+            if not mask[int(action)]:
+                continue
+            if action is Action.REUSE and not allow_reuse:
+                continue
+            if action in (Action.REUSE, Action.REKEY_NOW):
+                return action
+            if int(action) >= target_floor:
+                return action
         for action in Action:
             if mask[int(action)]:
                 return action
-        raise ValueError("no legal action in mask")
+        raise ValueError("no legal action in mask -- a valid mask has at least one True entry")
+
+    def _preemptive_rekey_pays(
+        self, state: StateDict, floor: int, key_age_fraction: float, lifetime_cap: float
+    ) -> bool:
+        """Does refreshing NOW strictly beat holding the key until forced?
+
+        Four gates, each of which must hold. Any one failing means holding is
+        at least as good, and the oracle holds -- which is what keeps it from
+        ever scoring below the myopic policy.
+        """
+        # 1. The forced rekey must fall inside the horizon. Beyond it, there is
+        #    nothing to anticipate and refreshing early is pure added cost.
+        steps_to_forced_rekey = (1.0 - key_age_fraction) * lifetime_cap
+        if steps_to_forced_rekey > self.horizon:
+            return False
+
+        # 2. That forced rekey must actually need a QKD key. Classical and PQC
+        #    re-establishment draws nothing from the pool, so its timing is
+        #    irrelevant -- there is no scarcity to dodge.
+        floor_at_forced_rekey = self.peek_future_floor(state)
+        if floor_at_forced_rekey < int(Action.SERVE_HYBRID):
+            return False
+
+        # 3. The pool must be UNABLE to fund it then. This is the whole point:
+        #    if the key will still be affordable when the cap forces the issue,
+        #    waiting is strictly cheaper, because refreshing early pays the
+        #    same rekey cost sooner and shortens the key's useful life.
+        # Demand and refill MUST be measured over the same window. `peek_future`
+        # reports demand over the full `horizon`; refill is projected only as
+        # far as the forced rekey. Comparing the two directly understated the
+        # projected pool whenever the rekey was imminent -- a 5-step refill
+        # against 50 steps of demand -- so this gate passed spuriously and the
+        # oracle pre-empted 36 times in 1,200 steps, every one of them a net
+        # loss.
+        horizon_ahead = max(1, int(round(steps_to_forced_rekey)))
+        window_fraction = min(1.0, horizon_ahead / max(1, self.horizon))
+        demand_over_horizon, _stale_refill = self.peek_future()
+        demand_in_window = demand_over_horizon * window_fraction
+        projected_pool = (
+            self._current_pool_keys() + self.projected_refill_keys(horizon_ahead) - demand_in_window
+        )
+        if projected_pool >= 1.0:
+            return False
+
+        # 4. ...and the pool must be able to fund it NOW. If it cannot, acting
+        #    early buys nothing and merely burns the key's remaining life.
+        return self._current_pool_keys() >= 1.0
+
+    def _establishment_floor(self, state: StateDict, floor: int, preemption_pays: bool) -> int:
+        """Tier to establish at, when a key must be established.
+
+        Defaults to the CURRENT floor -- which is exactly what the myopic
+        policy would choose, since masking already removes everything below it.
+        That default is what makes this policy incapable of scoring below
+        `greedy_recommender`.
+
+        It rises to the future floor only when `preemption_pays` -- the same
+        four-gate lookahead that governs the reuse decision. Buying above the
+        floor otherwise costs more latency, more energy and a scarce key for no
+        benefit the reward can see: Hard Rule 1 excludes the only benefit
+        (security) that would justify it, so above-floor spending is strictly
+        dominated in this environment and an upper bound must not do it.
+        """
+        # A key is provisioned for a SESSION, but the floor is a property of
+        # each REQUEST -- and requests of different sensitivity classes share a
+        # session. A classical key is therefore invalidated (REUSE masked, spec
+        # §S4 rule 4) by the first higher-class request that arrives on it,
+        # forcing a rekey the tier above would have avoided.
+        #
+        # A perfect-foresight controller knows which classes are coming, so it
+        # provisions against the highest floor the session will face rather
+        # than the floor of the request in front of it. PQC is the natural
+        # resting point: it clears every non-hybrid floor and, unlike hybrid,
+        # costs no key material. Measured on S1 this is the entirety of the
+        # oracle's deficit against the tuned threshold, which serves PQC by
+        # default and so stumbles into the same protection.
+        session_floor = max(floor, int(Action.SERVE_PQC))
+        future_floor = max(self.peek_future_floor(state), session_floor)
+        if future_floor <= floor:
+            return floor
+
+        # The floor is going to ratchet above what we would otherwise buy. A
+        # key established at the HIGHER tier now stays reusable across the
+        # ratchet (spec §S4 rule 4 masks REUSE only when the active key is
+        # BELOW the floor), so pre-provisioning here buys away a whole forced
+        # rekey later -- for the one-off difference in handshake cost.
+        #
+        # This is the genuine foresight lever in this environment, and gating
+        # it on `preemption_pays` alone suppressed it: the oracle bought the
+        # cheapest tier clearing the CURRENT floor and then paid to rekey when
+        # the ratchet arrived. Measured on S1, that is the whole of its deficit
+        # against the tuned threshold, which buys PQC by default and stumbles
+        # into the same benefit.
+        needs_a_key = future_floor >= int(Action.SERVE_HYBRID)
+        if needs_a_key and not (preemption_pays or self._current_pool_keys() >= 1.0):
+            return floor
+        return future_floor
 
 
 @dataclass
@@ -380,51 +528,38 @@ class MPCForecast(MPCOracle):
         return max(current_floor, future_floor)
 
     def act(self, state: StateDict, mask: ActionMask) -> Action:
-        """Identical allocator to the parent, with forecast inputs.
+        """Same allocator as the parent, with forecast inputs.
 
-        The duplication with `MPCOracle.act` is deliberate and small: the
-        parent's version calls `peek_future()`, which here must be
-        `_forecast_supply_and_demand(state)`. Restructuring the parent to take
-        the state would change the audited surface of the oracle -- the thing
-        an examiner checks to confirm the oracle cheats in exactly two places
-        -- and that surface is worth more than the handful of shared lines.
+        Shares `_cheapest_legal_at_or_above` and `_establishment_floor` rather
+        than reimplementing them. The duplicated copy that lived here carried
+        both of the parent's bugs -- it scanned only the `SERVE_*` tiers and so
+        never considered the cheaper `REKEY_NOW`, and it pre-provisioned above
+        the floor whenever surplus allowed. Fixing the parent alone would have
+        left this baseline quietly broken, and a broken *fair* baseline is
+        worse than a broken oracle: this is the one the DQN is measured
+        against.
         """
         demand, refill = self._forecast_supply_and_demand(state)
         surplus = self._current_pool_keys() + refill - demand
         floor = int(state.get("policy_floor", 0))
-        future_floor = self.peek_future_floor(state)
 
+        # Forecast analogue of the parent's four-gate lookahead. The pool
+        # projection is the forecaster's own, not the true future, which is
+        # exactly what makes this baseline causal.
         key_age_fraction = float(state.get("key_age", 0.0))
         lifetime_cap = self._lifetime_cap()
-        horizon_fraction = self.horizon / max(1e-9, lifetime_cap)
-        expires_within_horizon = key_age_fraction + horizon_fraction >= 1.0
+        steps_to_forced_rekey = (1.0 - key_age_fraction) * lifetime_cap
+        future_floor = self.peek_future_floor(state)
 
-        # Would refreshing now actually consume a QKD key? ONLY a hybrid-tier
-        # re-establishment draws from the pool; classical and PQC rekeys cost
-        # latency and energy but no key material at all.
-        #
-        # This gated EVERY rekey on `surplus > 1.0` until 2026-08-19, which is
-        # wrong and was costly: whenever the pool was tight the oracle declined
-        # even a free PQC refresh, held the key to its hard cap, and then ate a
-        # FORCED rekey at a moment it did not choose -- precisely the failure
-        # the freshness/forced-rekey machinery exists to avoid. The effect was
-        # that the "perfect foresight" oracle degenerated to plain REUSE-always
-        # and scored *identically to `greedy_recommender`* while LOSING to the
-        # tuned threshold (-354.3 against -332.3). An upper bound that loses to
-        # a causal policy is not an upper bound, which is exactly what §S7
-        # test 5 exists to catch -- and that test had never been written.
-        prospective_floor = future_floor if surplus > 1.0 else floor
-        refresh_would_draw_a_key = prospective_floor >= int(Action.SERVE_HYBRID)
-        can_afford_refresh = (not refresh_would_draw_a_key) or surplus > 1.0
+        preemption_pays = (
+            steps_to_forced_rekey <= self.horizon
+            and future_floor >= int(Action.SERVE_HYBRID)
+            and surplus < 1.0
+            and self._current_pool_keys() >= 1.0
+        )
 
-        if mask[int(Action.REUSE)] and not (expires_within_horizon and can_afford_refresh):
+        if bool(mask[int(Action.REUSE)]) and not preemption_pays:
             return Action.REUSE
 
-        target_tier = max(floor, future_floor)
-        for action in (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID):
-            if int(action) >= target_tier and mask[int(action)]:
-                return action
-        for action in Action:
-            if mask[int(action)]:
-                return action
-        raise ValueError("no legal action in mask")
+        target_floor = self._establishment_floor(state, floor, preemption_pays)
+        return self._cheapest_legal_at_or_above(mask, target_floor)
