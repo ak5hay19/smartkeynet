@@ -1,0 +1,111 @@
+# SmartKeyNet S2 (HNDL posture) scenario config -- PLAN.md §5.
+#
+# A standalone, directly-loadable config (same shape as
+# configs/default.yaml -- load via experiments/train.py's
+# load_full_config(path), same as any other config file). Differs from
+# default.yaml only in `scenario:` and the added `threat_schedule:`
+# block below; every other section is copied unchanged so this remains
+# a fair, apples-to-apples comparison against S1.
+#
+# What S2 actually changes (env/environment.py design decision 10,
+# 2026-08-19): from `threat_schedule.elevate_at_step` onward, the raw
+# threat signal fed into the forecaster is replaced with a scripted
+# elevated value -- never a change to env/masking.py's (sensitivity x
+# posture) -> floor table itself (Hard Rule 2: threat signals may only
+# RAISE floors, and only by changing what INPUT reaches the existing,
+# unmodified masking logic).
+
+scenario: S2  # one of S1..S6 (PLAN.md §5); S6 is held-out eval only (Hard Rule 8)
+
+seed: 0
+
+# --- env/forecast_provider.py, forecaster/model.py (Addition A) ---
+use_foresight: ewma  # off | ewma | lstm -- S2's threat_schedule below only has an effect under ewma/lstm;
+                       # under "off" the env hard-codes posture=CALM regardless (see environment.py's
+                       # _prepare_decision), same as every other scenario
+
+# --- env/pool_sim.py ---
+pool:
+  capacity_bits: 1_000_000
+  initial_fill_frac: 0.5
+  bits_per_hybrid_draw: 256  # ETSI GS QKD 014 key size (256-bit); PLAN.md §4 Datasets & Provenance:
+                              # "ETSI GS QKD 014 gives key sizes (256-bit)" -- Hard Rule 4, no invented number
+
+# --- env/masking.py (Hard Rule 2, 4, 5) ---
+key_lifetime:
+  max_key_age_steps: 500  # SP 800-57-derived cap L; forced rekey at/above this (Addition C)
+
+# --- env/environment.py reward (PLAN.md §4; Hard Rule 1 -- no security term, ever) ---
+reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_fr: 0.1
+  w_qkd: 1.0
+  r_starve: 10.0         # ~= 10 * w_lat (PLAN.md §4)
+  c_rekey_base: 1.0       # c0 in c_rekey(load) = c0 * (1 + beta * load)
+  c_rekey_load_beta: 1.0  # beta in the same formula
+
+# --- env/request_generator.py ---
+tenant_graph:
+  n_nodes: 10  # start small (PLAN.md §10 step 4); scale toward ~50 later
+
+# --- env/request_generator.py random_request_generator's optional load-spike diagnostic (unrelated
+# to S2 -- see configs/default.yaml's own comment; left disabled here so this file isolates S2's
+# actual effect, the threat_schedule below, from the unrelated arrival-rate diagnostic) ---
+load_spike:
+  enabled: false
+  period_steps: 500
+  spike_duration_steps: 20
+  spike_rate_multiplier: 3.0
+  low_rate_multiplier: 0.3
+
+# --- env/environment.py S2 dispatch (Hard Rule 2; design decision 10, 2026-08-19) ---
+# Required only when scenario: S2 (env/environment.py's SmartKeyNetEnv.__init__ reads this key
+# directly and raises KeyError if it's missing under S2, same fail-fast convention as pool/
+# key_lifetime/reward above).
+threat_schedule:
+  elevate_at_step: 50   # internal simulator tick (env._step_count) at which the scripted HNDL
+                          # threat signal begins -- roughly the first ~50 decisions of a 250-step
+                          # episode run calm, like S1, before the scripted elevation kicks in
+  elevated_signal: 6.0  # raw threat_features value fed to MovingAverageForecaster from that step
+                          # on (replacing the ordinary [qber, load] placeholder -- see
+                          # environment.py's _threat_features_placeholder docstring). sigmoid(6.0)
+                          # ~= 0.9975, saturating toward the posture classifier's HIGH anchor (1.0),
+                          # so the EWMA-smoothed threat_score climbs into HIGH-posture territory
+                          # within a handful of steps after elevate_at_step -- verified this session
+                          # via a standalone MovingAverageForecaster simulation (see SESSION_LOG.md
+                          # 2026-08-19): posture reaches HIGH by internal tick ~55, only 5 ticks after
+                          # elevate_at_step, and once HIGH is reached the ratchet (Hard Rule 2) keeps
+                          # every subsequent floor at least at the HIGH-posture level for the rest of
+                          # the episode.
+
+# --- agents/dqn.py (unchanged from default.yaml -- copied for a self-contained config file) ---
+dqn:
+  gamma: 0.99
+  lr: 0.001
+  batch_size: 64
+  target_update_every: 1000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 12_500
+
+# --- experiments/harness.py, agents/baselines.py ---
+baselines:
+  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+# --- attack/steering_trace.py (PLAN.md §5 S5) ---
+steering_attack:
+  doses: [0.0, 0.25, 0.5, 0.75, 1.0]
+  duration_steps: 1000
+
+# --- env/environment.py S6 migration wave (Hard Rule 3, 8 -- scripted, exogenous, held-out eval only) ---
+migration_schedule: []
+
+# --- experiments/train.py ---
+training:
+  total_steps: 25_000
+  seed: 0
+  eval_every: 2_500
+  eval_seed: 999
+  eval_max_steps: 250
+  checkpoint_path: checkpoints/dqn_s2.pt

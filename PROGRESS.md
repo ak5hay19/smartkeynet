@@ -11,7 +11,7 @@
 
 ## Next task
 
-**Two independent threads are open. Pick whichever this session serves.**
+**Three independent threads are open. Pick whichever this session serves.**
 
 **Thread 1 — DQN training-instability (PAUSED 2026-08-19, not resolved, not
 abandoned).** Five sessions deep with a genuine fork left unpicked, not more
@@ -43,6 +43,31 @@ System) could start against `dashboard/explain.py`'s real trace output
 plus `StateDict`/event-log fields, no new dependency; or start on
 `agents/soft_reward_baseline.py` (needed before the steering attack,
 PLAN2.md §7.5/§9 S5, can be built).
+
+**Thread 3 — Real scenario dispatch, S4/S6 blocked on a tenant-identity
+decision (opened 2026-08-19).** S1/S2/S3 scenario dispatch is now real (see
+`env/environment.py`'s per-file row). S4 (DDoS/noisy-neighbor: "one
+low-sensitivity tenant floods the API") and S6 (migration wave: "a tenant
+cohort's floor changes") both fundamentally need a notion of **which
+tenant a request belongs to that persists and can be targeted/grouped** —
+`env/request_generator.py`'s `random_request_generator()` currently
+assigns `tenant`/`service` strings per request with no graph, no
+per-tenant identity the environment can reason about, and no way to say
+"flood tenant X" or "raise cohort Y's floor." This is exactly
+`build_tenant_graph()`/`RequestGenerator` (PLAN.md §10 step 4, still
+`NotImplementedError` — see `env/request_generator.py`'s row) — a real
+decision, not a small addition: **either** build the real NetworkX tenant
+graph + graph-driven `RequestGenerator` first (the "do it properly" path,
+larger scope, unblocks S4 *and* S6 *and* real Stretch-B-style per-tenant
+allocation), **or** find a smaller, explicitly-flagged-as-a-shortcut way to
+give the *existing* random stream a stable per-tenant identity concept just
+big enough for S4/S6 (e.g. a small fixed pool of named tenants the random
+generator draws from, still no graph/edges/traffic-rate modeling) — cheaper
+but needs to be a deliberate, sign-off'd call given Hard Rule 3's
+"deleting the tenant graph must not change one line of agent code" test,
+since neither S4 nor S6 may leak tenant identity into agent-visible state
+(only into the request stream / masking-adjacent floor lookups, same as
+S2/S3's threat/pool inputs this session).
 
 ---
 
@@ -239,9 +264,12 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       on top of multi-seed training reporting. Evidence toward attempting the gate once S3
       exists, not the gate itself.)*
 - [ ] Soft-reward baseline agent reproducing Noetzold (`agents/soft_reward_baseline.py`)
-- [ ] Scenario dispatch S2-S4 wired into `environment.py` (`config["scenario"]`
-      is currently read but not acted on — the 2026-08-10 `load_spike` diagnostic is a
-      request-rate-only stand-in layered on top of S1, not scenario dispatch)
+- [ ] Scenario dispatch S2-S4 wired into `environment.py` — **partially done
+      2026-08-19: S2 (HNDL) + S3 (QKD degradation) are real, tested dispatch now;
+      S4 (DDoS/noisy-neighbor) is still blocked** on a tenant-identity concept
+      `env/request_generator.py` doesn't have yet (see "Next task"). The
+      2026-08-10 `load_spike` diagnostic remains a request-rate-only stand-in,
+      unrelated to this real dispatch.
 - [ ] Real LSTM dual-head forecaster (Addition A) — `forecaster/model.py`,
       `forecaster/dataset.py`, `forecaster/train.py`, `LSTMForecastProvider`
       in `env/forecast_provider.py`
@@ -267,12 +295,12 @@ behavioral tests, part of the green `pytest` run).
 | File | Status | Notes |
 |---|---|---|
 | `env/contracts.py` | implemented+tested | Frozen interface contract — `Action`, `StateDict`, `ForecastProvider` ABC, `Request`, event-log TypedDicts. 5 real tests (`test_contracts.py`). |
-| `env/pool_sim.py` | implemented+tested | `PoolSim` (refill/drain/exhaustion) + `SyntheticSKRQBERTrace`. 19 tests (`test_pool_sim.py`). |
+| `env/pool_sim.py` | implemented+tested | `PoolSim` (refill/drain/exhaustion) + `SyntheticSKRQBERTrace`. 19 tests (`test_pool_sim.py`). **2026-08-19: no code changed here** — `SyntheticSKRQBERTrace`'s existing `spike_start`/`spike_duration`/`spike_magnitude` params (already present, already documented as "the dial-in hook for the S3 'QKD degradation' scenario") are now actually exercised by real S3 dispatch in `environment.py`, not just by `test_pool_sim.py`'s own standalone degradation test. |
 | `env/deferral_queue.py` | implemented+tested | `DeferralQueue.enqueue/tick/pop_servable`, priority+FIFO, cumulative-headroom draw. 8 tests (`test_deferral_queue.py`). |
 | `env/masking.py` | implemented+tested | `PolicyTable` (placeholder floor table, sticky ratchet) + `compute_mask`. 14 tests (`test_masking.py`). Floor table not yet calibrated against Q-OPSEC data. |
 | `env/forecast_provider.py` | stub (partial) | `MovingAverageForecaster` (EWMA fallback) implemented+tested (9 tests, `test_forecast_provider.py`). `LSTMForecastProvider` does not exist yet (Addition A) — `use_foresight: lstm` currently raises `NotImplementedError` in `environment.py`. |
 | `env/request_generator.py` | stub (partial) | `random_request_generator()` implemented+tested (11 tests, `test_request_generator.py`), incl. 3 new 2026-08-10 tests for its optional `load_spike` kwarg — a periodic, config-driven arrival-rate diagnostic (**explicitly not real S4** — see that session's SESSION_LOG.md entry and `configs/default.yaml`'s `load_spike:` block). `build_tenant_graph()` and `RequestGenerator` (graph-driven stream) still `raise NotImplementedError` — real S4 needs these. |
-| `env/environment.py` | implemented+tested | `SmartKeyNetEnv.reset/step/action_mask` fully wired (pool + deferral + masking + forecast + reward + session-key state). 17 behavioral tests incl. the split.md Gate W2 tests (`test_environment.py`). Only S1 scenario dispatch exists; S2-S6 config is read but not acted on. 2026-08-10: wired `config["load_spike"]` through to `random_request_generator` (design decision 9) — orthogonal to scenario dispatch, not a substitute for it. |
+| `env/environment.py` | implemented+tested | `SmartKeyNetEnv.reset/step/action_mask` fully wired (pool + deferral + masking + forecast + reward + session-key state). 25 behavioral tests (up from 17) incl. the split.md Gate W2 tests (`test_environment.py`). 2026-08-10: wired `config["load_spike"]` through to `random_request_generator` (design decision 9) — orthogonal to scenario dispatch, not a substitute for it. **2026-08-19 (design decision 10): real S2 (HNDL) + S3 (QKD degradation) scenario dispatch.** `config["scenario"]` now genuinely gates behavior for S2/S3 (S1, and the still-undispatched S4/S5/S6, are unaffected — confirmed by an explicit regression test). S2: `config["threat_schedule"]` (required only under `scenario: S2`) makes `_threat_features_placeholder()` return a scripted elevated signal from a configured step onward, flowing through the *existing, unmodified* `MovingAverageForecaster` → `PolicyTable.ratchet_up`/`floor` → `compute_mask` chain — `env/masking.py`'s floor table itself was never touched (Hard Rule 2), verified directly by a test cross-checking the env's real per-decision floor against a fresh `PolicyTable().floor()` call across a spread of sensitivity classes. S3: `config["qkd_degradation"]` (required only under `scenario: S3`) threads straight into `SyntheticSKRQBERTrace`'s pre-existing spike params at `reset()` — no new pool-sim code. **Observability finding, documented in `configs/scenarios/s3_degradation.yaml`'s own comments**: under `pool:`'s realistic default-scale numbers (256-bit draws vs. ~200,000-bit/tick mean SKR refill), S3's degradation is real but invisible in practice — refill dwarfs any plausible draw pattern by 2-3 orders of magnitude; the regression test demonstrates the real, measurable effect (higher regret-event count, lower minimum pool fill vs. S1) using the same scarcity-forcing small-pool override `test_environment.py`'s existing Hard Rule 9 gate test already established, not a fabricated number. New standalone scenario configs: `configs/scenarios/s2_hndl.yaml`, `configs/scenarios/s3_degradation.yaml` (both directly loadable via `experiments/train.py`'s `load_full_config(path)`, verified). S4 (DDoS/noisy-neighbor) and S6 (migration wave) deliberately NOT dispatched — both need a tenant-identity concept `env/request_generator.py` doesn't have yet; see "Next task". |
 
 ### agents/
 
@@ -341,12 +369,15 @@ behavioral tests, part of the green `pytest` run).
 
 | File | Status | Notes |
 |---|---|---|
-| `configs/default.yaml` | partial | `pool`, `key_lifetime`, `reward`, `use_foresight`, `tenant_graph.n_nodes`, `load_spike`, `dqn`, `baselines`, `steering_attack`, `training` keys all present. `migration_schedule: []` empty (S6 not yet authored). `scenario: S1` — S2-S6 read but not dispatched by `environment.py`. `load_spike.enabled: false` by default (2026-08-10 diagnostic stub, NOT real S4 — see `env/request_generator.py`'s row and SESSION_LOG.md). |
+| `configs/default.yaml` | partial | `pool`, `key_lifetime`, `reward`, `use_foresight`, `tenant_graph.n_nodes`, `load_spike`, `dqn`, `baselines`, `steering_attack`, `training` keys all present. `migration_schedule: []` empty (S6 not yet authored). `scenario: S1` — deliberately does not carry `threat_schedule`/`qkd_degradation` (those are S2/S3-only, required only when `scenario` selects them — see `env/environment.py`'s row). `load_spike.enabled: false` by default (2026-08-10 diagnostic stub, NOT real S4 — see `env/request_generator.py`'s row and SESSION_LOG.md). |
+| `configs/scenarios/s2_hndl.yaml` | implemented+tested | **2026-08-19 (new file)**: standalone, directly-loadable S2 config (same shape as `default.yaml`, `scenario: S2` + a `threat_schedule` block). Verified to load and run end-to-end (`tests/test_environment.py::test_scenario_config_files_load_and_construct_a_working_env`). |
+| `configs/scenarios/s3_degradation.yaml` | implemented+tested | **2026-08-19 (new file)**: standalone, directly-loadable S3 config, `scenario: S3` + a `qkd_degradation` block. Same verification as above. Its own comments document the pool-scale observability finding (see `env/environment.py`'s row). |
 
 ---
 
 ## Last verified
 
 - **Date:** 2026-08-19
-- **Commit:** `5993937` ("docs: add PLAN2.md + dashboard v2 mockup") — the commit this session started from (after committing the reference docs); see SESSION_LOG.md for this session's own commit
-- **`pytest` pass count:** 426 passed, 0 failed (400 prior + 26 new in `tests/test_explain.py`)
+- **Commit:** `7f4d88a` ("log: [solo] dashboard/explain.py -- Explain Decision backend, DQN thread paused -- 2026-08-19") — the commit this session started from; see SESSION_LOG.md for this session's own commit
+- **`pytest` pass count:** 434 passed, 0 failed (426 prior + 8 new in `tests/test_environment.py`, S2/S3 scenario dispatch)
+- **Branch:** local checkout is `dev21` (2 commits ahead of `main` in a straight line, no divergence — checked explicitly this session, see SESSION_LOG.md's step-0 branch check). Continued working on `dev21`, did not force a switch.

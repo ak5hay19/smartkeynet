@@ -21,7 +21,8 @@ import numpy as np
 import pytest
 import yaml
 
-from env.contracts import Action
+from agents.baselines import AlwaysHybridPolicy
+from env.contracts import Action, SensitivityClass, ThreatPosture
 from env.environment import (
     _ACTION_TO_KEY_TYPE,
     _ENERGY_UNITS,
@@ -30,6 +31,8 @@ from env.environment import (
     IllegalActionError,
     SmartKeyNetEnv,
 )
+from env.masking import PolicyTable
+from experiments.train import load_full_config
 
 _TIER_ACTIONS = (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID)
 
@@ -429,3 +432,173 @@ def test_load_spike_absent_key_behaves_same_as_disabled():
     del config["load_spike"]
     env = SmartKeyNetEnv(config)
     assert env._load_spike_cfg is None
+
+
+# ---------------------------------------------------------------------------
+# S2/S3 real scenario dispatch (design decision 10, 2026-08-19)
+# ---------------------------------------------------------------------------
+
+_S2_THREAT_SCHEDULE = {"elevate_at_step": 50, "elevated_signal": 6.0}
+_S3_QKD_DEGRADATION = {"spike_start": 50, "spike_duration": 150, "spike_magnitude": 0.6}
+_SCARCITY_POOL = {"capacity_bits": 500_000.0, "initial_fill_frac": 0.0, "bits_per_hybrid_draw": 300_000.0}
+
+
+def test_s1_scenario_dispatch_is_a_pure_no_op():
+    """Regression check: S1 (the only scenario every other test in this
+    file exercises) must be completely unaffected by S2/S3 dispatch --
+    both new config attributes stay None, and a full random-valid-policy
+    episode reproduces byte-for-byte identically across two fresh envs
+    given the same seed, exactly as it did before this session."""
+    config = load_test_config()
+    env = SmartKeyNetEnv(config)
+    assert env._scenario == "S1"
+    assert env._threat_schedule_cfg is None
+    assert env._qkd_degradation_cfg is None
+
+    def run_fills(seed: int) -> list[float]:
+        env = SmartKeyNetEnv(load_test_config())
+        state, info = env.reset(seed=seed)
+        rng = np.random.default_rng(seed)
+        fills = []
+        for _ in range(100):
+            _action, (state, reward, terminated, truncated, info) = take_random_valid_step(env, rng, info)
+            fills.append(env._pool_sim.fill)
+        return fills
+
+    assert run_fills(42) == run_fills(42)
+
+
+def test_s2_requires_threat_schedule_config():
+    config = load_test_config(overrides={"scenario": "S2"})
+    assert "threat_schedule" not in config  # default.yaml never carries this key
+    with pytest.raises(KeyError):
+        SmartKeyNetEnv(config)
+
+
+def test_s3_requires_qkd_degradation_config():
+    config = load_test_config(overrides={"scenario": "S3"})
+    assert "qkd_degradation" not in config
+    with pytest.raises(KeyError):
+        SmartKeyNetEnv(config)
+
+
+def test_s2_posture_genuinely_elevates_not_flat_calm():
+    config = load_test_config(overrides={"scenario": "S2", "threat_schedule": _S2_THREAT_SCHEDULE})
+    env = SmartKeyNetEnv(config)
+    state, info = env.reset(seed=0)
+    mask = info["action_mask"]
+
+    postures: list[ThreatPosture] = []
+    truncated = False
+    while not truncated and len(postures) < 200:
+        action = next(a for a in Action if bool(mask[int(a)]))
+        tf = env._forecaster.get_threat_forecast()
+        postures.append(ThreatPosture(int(np.argmax(tf.posture_probs))))
+        state, reward, terminated, truncated, info = env.step(action)
+        mask = info["action_mask"]
+
+    assert any(p != ThreatPosture.CALM for p in postures)  # not flat CALM throughout, unlike S1's early steps
+    assert ThreatPosture.HIGH in postures  # the scripted elevation actually saturates to HIGH, not just ELEVATED
+
+
+def test_s2_elevated_floor_matches_real_policy_table_across_representative_classes():
+    """Cross-check step (not a hardcoded expected value): wherever S2's
+    scripted elevation raises posture, the resulting floor for every
+    sensitivity class actually seen in the request stream must equal
+    env/masking.py's real, unmodified `PolicyTable.floor()` lookup for
+    that exact (class, posture) pair."""
+    config = load_test_config(
+        overrides={"scenario": "S2", "threat_schedule": {"elevate_at_step": 10, "elevated_signal": 6.0}}
+    )
+    env = SmartKeyNetEnv(config)
+    state, info = env.reset(seed=0)
+    mask = info["action_mask"]
+
+    # run well past elevate_at_step so the ratchet has saturated to HIGH
+    # for every class -- `observed[sens]` keeps overwriting with the
+    # latest reading, so by the end each class's entry reflects a
+    # post-saturation decision, not an early pre-elevation one.
+    observed: dict[SensitivityClass, tuple[ThreatPosture, Action]] = {}
+    truncated = False
+    steps = 0
+    while not truncated and steps < 150:
+        posture = ThreatPosture(int(np.argmax(env._forecaster.get_threat_forecast().posture_probs)))
+        sens = SensitivityClass(state["sensitivity_class"])
+        observed[sens] = (posture, Action(state["policy_floor"]))
+
+        action = next(a for a in Action if bool(mask[int(a)]))
+        state, reward, terminated, truncated, info = env.step(action)
+        mask = info["action_mask"]
+        steps += 1
+
+    assert len(observed) >= 3  # a real spread of sensitivity classes, not just one
+
+    fresh_table = PolicyTable()  # unratcheted -- the scripted schedule only ever rises, so this equals the env's own ratcheted state
+    for sens, (posture, floor) in observed.items():
+        assert floor == fresh_table.floor(sens, posture), (
+            f"S2 floor drifted from env/masking.py's real table at class={sens.name}, posture={posture.name}"
+        )
+    assert any(posture is ThreatPosture.HIGH for posture, _ in observed.values())
+
+
+def test_s3_pool_trajectory_is_genuinely_worse_than_s1():
+    """Same seed, same (scarcity-forcing) pool config -- only `scenario`
+    differs. S3's degraded SKR/QBER trace must produce a genuinely
+    worse trajectory than S1's undegraded one, read off pool_sim's own
+    real state (regret-event count, minimum pool fill), never a
+    fabricated expectation."""
+
+    def run(scenario: str, extra: dict[str, Any] | None = None) -> tuple[int, float]:
+        overrides: dict[str, Any] = {"scenario": scenario, "pool": _SCARCITY_POOL, "max_steps": 250}
+        if extra:
+            overrides.update(extra)
+        env = SmartKeyNetEnv(load_test_config(overrides=overrides))
+        state, info = env.reset(seed=0)
+        policy = AlwaysHybridPolicy()
+        regret_events = 0
+        min_fill_frac = 1.0
+        truncated = False
+        while not truncated:
+            mask = info["action_mask"]
+            action = policy.act(state, mask)
+            state, reward, terminated, truncated, info = env.step(action)
+            regret_events += len(info["regret_events"])
+            min_fill_frac = min(min_fill_frac, env._pool_sim.fill / env._pool_sim.capacity)
+        return regret_events, min_fill_frac
+
+    regret_s1, min_fill_s1 = run("S1")
+    regret_s3, min_fill_s3 = run("S3", {"qkd_degradation": _S3_QKD_DEGRADATION})
+
+    assert regret_s3 > regret_s1
+    assert min_fill_s3 < min_fill_s1
+
+
+def test_s4_and_s6_scenarios_are_not_yet_dispatched():
+    """S4 (DDoS/noisy-neighbor) and S6 (migration wave) both need a
+    "which tenant is this" concept env/request_generator.py's current
+    random stream doesn't have (see PROGRESS.md/SESSION_LOG.md
+    2026-08-19) -- deliberately deferred, not an oversight. Selecting
+    either must currently be a pure no-op, identical to any other
+    unrecognized scenario string, and must not require any new config
+    block the way S2/S3 now do."""
+    for scenario in ("S4", "S5", "S6"):
+        config = load_test_config(overrides={"scenario": scenario})
+        env = SmartKeyNetEnv(config)
+        assert env._threat_schedule_cfg is None
+        assert env._qkd_degradation_cfg is None
+        env.reset(seed=0)  # must not raise -- no scenario-specific config required
+
+
+def test_scenario_config_files_load_and_construct_a_working_env():
+    """The two committed, standalone scenario files must actually be
+    loadable and runnable, not just referenced."""
+    for path, expected_scenario in (
+        ("configs/scenarios/s2_hndl.yaml", "S2"),
+        ("configs/scenarios/s3_degradation.yaml", "S3"),
+    ):
+        config = load_full_config(path)
+        config["max_steps"] = 20
+        env = SmartKeyNetEnv(config)
+        assert env._scenario == expected_scenario
+        state, info = env.reset(seed=0)
+        assert info["action_mask"].any()

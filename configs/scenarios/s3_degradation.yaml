@@ -1,0 +1,126 @@
+# SmartKeyNet S3 (QKD degradation) scenario config -- PLAN.md §5.
+#
+# A standalone, directly-loadable config (same shape as
+# configs/default.yaml -- load via experiments/train.py's
+# load_full_config(path)). Differs from default.yaml only in
+# `scenario:` and the added `qkd_degradation:` block below; every
+# other section, including `pool:`, is copied unchanged so S1 and S3
+# describe the same deployment under different QKD-link conditions,
+# not two different pieces of hardware.
+#
+# What S3 actually changes (env/environment.py design decision 10,
+# 2026-08-19): `qkd_degradation`'s spike parameters are threaded
+# straight into env/pool_sim.py's existing `SyntheticSKRQBERTrace`
+# spike mechanics (QBER up, SKR down over a window) -- see that
+# module's docstring, "the dial-in hook for the S3 'QKD degradation'
+# scenario". No new pool-simulation code was written; this only
+# supplies real parameters to a mechanism that already existed.
+#
+# Observability caveat (found while validating this file, 2026-08-19):
+# under `pool:`'s numbers below (unchanged from default.yaml), a
+# single SERVE_HYBRID draw is 256 bits while mean SKR refill is ~200
+# kbps == ~200,000 bits/tick -- refill outweighs a single draw by
+# ~800x, so under light-to-moderate request load the pool simply never
+# gets stressed regardless of scenario, and the degradation below,
+# while real and directionally correct (verified: it does measurably
+# raise regret-event counts and lower minimum pool fill), is only
+# clearly visible under sustained heavy draw pressure or a smaller
+# pool -- see tests/test_environment.py's S3 regression test, which
+# uses the same small-pool override convention as the existing Hard
+# Rule 9 gate test for exactly this reason. This is a pre-existing
+# `pool:` calibration-headroom property, not something introduced or
+# fixed this session -- flagged here rather than silently worked
+# around by shipping a different `pool:` block than S1/S2 use.
+
+scenario: S3  # one of S1..S6 (PLAN.md §5); S6 is held-out eval only (Hard Rule 8)
+
+seed: 0
+
+# --- env/forecast_provider.py, forecaster/model.py (Addition A) ---
+use_foresight: ewma  # off | ewma | lstm
+
+# --- env/pool_sim.py ---
+pool:
+  capacity_bits: 1_000_000
+  initial_fill_frac: 0.5
+  bits_per_hybrid_draw: 256  # ETSI GS QKD 014 key size (256-bit); PLAN.md §4 Datasets & Provenance:
+                              # "ETSI GS QKD 014 gives key sizes (256-bit)" -- Hard Rule 4, no invented number
+
+# --- env/masking.py (Hard Rule 2, 4, 5) ---
+key_lifetime:
+  max_key_age_steps: 500  # SP 800-57-derived cap L; forced rekey at/above this (Addition C)
+
+# --- env/environment.py reward (PLAN.md §4; Hard Rule 1 -- no security term, ever) ---
+reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_fr: 0.1
+  w_qkd: 1.0
+  r_starve: 10.0
+  c_rekey_base: 1.0
+  c_rekey_load_beta: 1.0
+
+# --- env/request_generator.py ---
+tenant_graph:
+  n_nodes: 10
+
+# --- env/request_generator.py random_request_generator's optional load-spike diagnostic (unrelated
+# to S3 -- left disabled so this file isolates S3's actual effect, the qkd_degradation block below) ---
+load_spike:
+  enabled: false
+  period_steps: 500
+  spike_duration_steps: 20
+  spike_rate_multiplier: 3.0
+  low_rate_multiplier: 0.3
+
+# --- env/pool_sim.py S3 dispatch, via env/environment.py (design decision 10, 2026-08-19) ---
+# Required only when scenario: S3 (SmartKeyNetEnv.__init__ reads this key directly and raises
+# KeyError if it's missing under S3, same fail-fast convention as pool/key_lifetime/reward above).
+# Threaded verbatim into SyntheticSKRQBERTrace's own spike_start/spike_duration/spike_magnitude
+# constructor params (env/pool_sim.py) -- field names match on purpose, no renaming/re-deriving.
+qkd_degradation:
+  spike_start: 50        # internal simulator tick (env._step_count) the degradation window begins --
+                           # roughly the first ~50 decisions of a 250-step episode run at baseline
+                           # QBER/SKR, like S1, before the window opens
+  spike_duration: 150    # ticks the window lasts
+  spike_magnitude: 0.6   # added to QBER during the window (baseline QBER mean 0.02 -> ~0.62 in-window);
+                           # matches tests/test_pool_sim.py's own S3-labeled degradation test's 0.4-0.9
+                           # range. SyntheticSKRQBERTrace additionally scales SKR down within the window
+                           # by (1 - min(qber, 0.5)) -- at this magnitude that's already the mechanism's
+                           # 50%-SKR-reduction ceiling (min() saturates for any magnitude past ~0.48), so
+                           # this value already produces the mechanism's maximum effective degradation;
+                           # verified this session (see SESSION_LOG.md 2026-08-19) that 0.9 and 0.99
+                           # produce byte-identical pool trajectories to 0.6 -- picked the smaller,
+                           # non-arbitrary value rather than an unnecessarily extreme one that reads no
+                           # differently.
+
+# --- agents/dqn.py (unchanged from default.yaml -- copied for a self-contained config file) ---
+dqn:
+  gamma: 0.99
+  lr: 0.001
+  batch_size: 64
+  target_update_every: 1000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 12_500
+
+# --- experiments/harness.py, agents/baselines.py ---
+baselines:
+  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+# --- attack/steering_trace.py (PLAN.md §5 S5) ---
+steering_attack:
+  doses: [0.0, 0.25, 0.5, 0.75, 1.0]
+  duration_steps: 1000
+
+# --- env/environment.py S6 migration wave (Hard Rule 3, 8 -- scripted, exogenous, held-out eval only) ---
+migration_schedule: []
+
+# --- experiments/train.py ---
+training:
+  total_steps: 25_000
+  seed: 0
+  eval_every: 2_500
+  eval_seed: 999
+  eval_max_steps: 250
+  checkpoint_path: checkpoints/dqn_s3.pt

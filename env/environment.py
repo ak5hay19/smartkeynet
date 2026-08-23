@@ -98,6 +98,35 @@ summarized here for anyone reading the code cold):
    this key not existing at all. Nothing else about `scenario`
    dispatch changes because of this: it is orthogonal to S1-S6 and
    layers on top of whichever scenario is active (today, only S1).
+10. **Real S2/S3 scenario dispatch (2026-08-19)**: `config["scenario"]`
+    now genuinely gates behavior for two of the six scenarios --
+    `"S2"` and `"S3"` -- everything else (including `"S1"` and the
+    still-undispatched `"S4"`/`"S5"`/`"S6"`) is unaffected and remains
+    exactly as before. Both are pure *input* changes into existing,
+    unmodified machinery -- neither touches `env/masking.py`'s floor
+    table nor adds a second code path:
+    - **S2 (HNDL posture)**: `config["threat_schedule"]` (required only
+      when `scenario == "S2"`; `{elevate_at_step, elevated_signal}`)
+      makes `_threat_features_placeholder()` return a scripted elevated
+      signal from that internal tick onward instead of the ordinary
+      `[qber, load]` placeholder -- see that method's docstring. The
+      elevation still flows through the same forecaster-update ->
+      policy-table -> `compute_mask` chain every scenario uses.
+    - **S3 (QKD degradation)**: `config["qkd_degradation"]` (required
+      only when `scenario == "S3"`; `{spike_start, spike_duration,
+      spike_magnitude}`) is threaded straight into
+      `SyntheticSKRQBERTrace`'s existing spike parameters at `reset()`
+      time -- see `_qkd_degradation_trace_kwargs()`. `env/pool_sim.py`
+      already implements this degradation window; nothing new was
+      built there.
+    - S4 (DDoS/noisy-neighbor) and S6 (migration wave) are deliberately
+      NOT dispatched this session -- both need a "which tenant is this"
+      concept `env/request_generator.py`'s current random stream
+      doesn't have (Hard Rule 3: the agent must never need to know
+      about a tenant graph, but *some* per-tenant identity has to exist
+      for "protect this tenant's pool share" or "this tenant cohort's
+      floor changed" to mean anything at all) -- bolting that on ad hoc
+      here would be a worse decision than making it deliberately later.
 ---------------------------------------------------------------------
 """
 
@@ -205,11 +234,11 @@ class SmartKeyNetEnv(gym.Env):
     `ForecastProvider` is constructed and how long the flattened state
     vector is.
 
-    Only S1 (benign baseline) scenario dispatch is implemented this
-    session -- `SyntheticSKRQBERTrace` is always constructed without
-    spike parameters, and `migration_schedule`/other scenario-specific
-    wiring is future work. `config["scenario"]` is read but not yet
-    acted on beyond that.
+    S1 (benign baseline), S2 (HNDL posture), and S3 (QKD degradation)
+    scenario dispatch are implemented (see module docstring design
+    decision 10). S4 (DDoS/noisy-neighbor), S5 (steering attack), and
+    S6 (migration wave) are not yet dispatched -- `config["scenario"]`
+    is read but has no effect for those values, same as before.
     """
 
     _TRACE_N_STEPS = 200_000
@@ -244,6 +273,18 @@ class SmartKeyNetEnv(gym.Env):
         self._seed = config.get("seed")
         self._max_steps = config.get("max_steps")
         self._load_spike_cfg = self._build_load_spike_cfg(config.get("load_spike"))
+
+        # Real scenario dispatch (design decision 10 -- S2/S3 only this
+        # session; see module docstring). `config["threat_schedule"]`/
+        # `config["qkd_degradation"]` are required *only* when the
+        # matching scenario is selected -- a plain KeyError here is the
+        # same fail-fast convention as `pool`/`key_lifetime`/`reward`
+        # above, not a new pattern. Any scenario string other than
+        # "S2"/"S3" (including "S1" and the not-yet-dispatched "S4"/
+        # "S5"/"S6") behaves exactly as before this session.
+        self._scenario = config.get("scenario", "S1")
+        self._threat_schedule_cfg = config["threat_schedule"] if self._scenario == "S2" else None
+        self._qkd_degradation_cfg = config["qkd_degradation"] if self._scenario == "S3" else None
 
         # Populated fresh by reset(); typed here for clarity.
         self._pool_sim: PoolSim | None = None
@@ -290,6 +331,7 @@ class SmartKeyNetEnv(gym.Env):
         trace = SyntheticSKRQBERTrace(
             n_steps=self._TRACE_N_STEPS,
             seed=episode_seed if episode_seed is not None else 0,
+            **self._qkd_degradation_trace_kwargs(),
         )
         self._pool_sim = PoolSim(
             capacity=self._pool_capacity,
@@ -400,6 +442,24 @@ class SmartKeyNetEnv(gym.Env):
             "spike_duration_steps": raw["spike_duration_steps"],
             "spike_rate_multiplier": raw["spike_rate_multiplier"],
             "low_rate_multiplier": raw["low_rate_multiplier"],
+        }
+
+    def _qkd_degradation_trace_kwargs(self) -> dict[str, Any]:
+        """S3 dispatch (design decision 10): when `scenario: S3` is
+        selected, feed `self._qkd_degradation_cfg`'s spike parameters
+        straight into `SyntheticSKRQBERTrace` -- its constructor already
+        implements exactly this "QBER up, SKR down" degradation window
+        (see env/pool_sim.py's own docstring, "the dial-in hook for the
+        S3 'QKD degradation' scenario"), so this is real reuse, not a
+        new mechanism. Empty for every other scenario -- `reset()`'s
+        trace construction is then byte-identical to before this
+        session."""
+        if self._qkd_degradation_cfg is None:
+            return {}
+        return {
+            "spike_start": int(self._qkd_degradation_cfg["spike_start"]),
+            "spike_duration": int(self._qkd_degradation_cfg["spike_duration"]),
+            "spike_magnitude": float(self._qkd_degradation_cfg["spike_magnitude"]),
         }
 
     def _build_forecaster(self) -> ForecastProvider | None:
@@ -514,7 +574,24 @@ class SmartKeyNetEnv(gym.Env):
     def _threat_features_placeholder(self) -> list[float]:
         """No real RT-IoT2022 threat-feature source is wired yet
         (Person A's future dataset-ingestion session) -- see module
-        docstring point 6. Not a real threat signal."""
+        docstring point 6. Not a real threat signal.
+
+        S2 dispatch (design decision 10): from
+        `self._threat_schedule_cfg["elevate_at_step"]` onward, this
+        returns a scripted elevated signal instead of the ordinary
+        `[qber, load]` placeholder -- the *only* change S2 makes. It
+        still flows through the exact same `_build_forecast_observation`
+        -> `self._forecaster.update(...)` path every other scenario
+        uses, so posture elevation (and the resulting floor increase)
+        happens entirely through the existing, unmodified
+        `MovingAverageForecaster` -> `PolicyTable.ratchet_up`/`floor`
+        -> `compute_mask` chain (Hard Rule 2) -- nothing about the
+        (sensitivity_class, posture) -> floor table itself changes.
+        `None` for every other scenario -- behavior is byte-identical
+        to before this session."""
+        if self._threat_schedule_cfg is not None and self._step_count >= self._threat_schedule_cfg["elevate_at_step"]:
+            signal = float(self._threat_schedule_cfg["elevated_signal"])
+            return [signal, signal]
         return [self._last_pool_state.qber, self._current_load()]
 
     def _current_load(self) -> float:
