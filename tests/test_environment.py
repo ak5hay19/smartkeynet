@@ -21,8 +21,8 @@ import numpy as np
 import pytest
 import yaml
 
-from agents.baselines import AlwaysHybridPolicy
-from env.contracts import Action, SensitivityClass, ThreatPosture
+from agents.baselines import AlwaysHybridPolicy, RandomPolicy
+from env.contracts import Action, KeyType, SensitivityClass, ThreatPosture
 from env.environment import (
     _ACTION_TO_KEY_TYPE,
     _ENERGY_UNITS,
@@ -30,6 +30,7 @@ from env.environment import (
     _LATENCY_UNITS,
     IllegalActionError,
     SmartKeyNetEnv,
+    _SessionKeyState,
 )
 from env.masking import PolicyTable
 from experiments.train import load_full_config
@@ -206,6 +207,106 @@ def test_step_before_reset_raises():
     env = SmartKeyNetEnv(load_test_config())
     with pytest.raises(RuntimeError):
         env.step(Action.REKEY_NOW)
+
+
+# ---------------------------------------------------------------------------
+# REUSE/REKEY_NOW floor-enforcement gap (2026-08-19 Hard Rule 2 fix)
+# ---------------------------------------------------------------------------
+
+
+def test_rekey_now_escalates_a_stale_existing_tier_up_to_the_current_floor():
+    """The crux of the fix: REKEY_NOW must never resolve below the
+    current floor, even when the session's existing tier predates a
+    since-ratcheted-up floor (`_resulting_key_type` unit-tested
+    directly, bypassing the need to drive the env through a real S2
+    episode to reach this exact state)."""
+    env = SmartKeyNetEnv(load_test_config())
+    session = _SessionKeyState(key_age=0.0, key_type=KeyType.PQC)  # stale: below a HYBRID floor
+
+    resolved = env._resulting_key_type(Action.REKEY_NOW, session, floor=Action.SERVE_HYBRID)
+
+    assert resolved == KeyType.HYBRID
+
+
+def test_rekey_now_never_downgrades_an_existing_higher_tier():
+    """Regression check: the fix must not trade Hard Rule 2 for design
+    decision 4's "never downgrade" behavior -- a session already ABOVE
+    the current floor keeps its existing (higher) tier unchanged."""
+    env = SmartKeyNetEnv(load_test_config())
+    session = _SessionKeyState(key_age=0.0, key_type=KeyType.HYBRID)  # already above floor
+
+    resolved = env._resulting_key_type(Action.REKEY_NOW, session, floor=Action.SERVE_CLASSICAL)
+
+    assert resolved == KeyType.HYBRID
+
+
+def test_rekey_now_at_exactly_the_current_floor_is_unchanged():
+    env = SmartKeyNetEnv(load_test_config())
+    session = _SessionKeyState(key_age=0.0, key_type=KeyType.PQC)
+
+    resolved = env._resulting_key_type(Action.REKEY_NOW, session, floor=Action.SERVE_PQC)
+
+    assert resolved == KeyType.PQC
+
+
+def test_rekey_now_cold_start_still_adopts_the_floor_tier():
+    """Regression check: cold-start behavior (design decision 4) is
+    unchanged by this fix."""
+    env = SmartKeyNetEnv(load_test_config())
+    session = _SessionKeyState(key_age=0.0, key_type=None)
+
+    resolved = env._resulting_key_type(Action.REKEY_NOW, session, floor=Action.SERVE_HYBRID)
+
+    assert resolved == KeyType.HYBRID
+
+
+def test_s2_reuse_and_rekey_now_never_deliver_below_current_floor():
+    """The empirical reproduction, kept as a permanent regression test
+    (per instruction). Before this session's fix, a real S2 episode
+    (posture/floor genuinely ratchets mid-episode -- see
+    env/environment.py design decision 10) under `RandomPolicy` (which
+    exercises REUSE/REKEY_NOW whenever legal, unlike the tier-favoring
+    baselines) measured 64 of 279 REUSE/REKEY_NOW decisions (22.9%)
+    delivering key material below the request's current floor -- 32
+    via each action (see SESSION_LOG.md's 2026-08-19 entry for the
+    full before/after comparison). This must now be exactly zero,
+    verified by directly comparing the session's actual post-decision
+    key tier against `env._current_floor` at the moment of that exact
+    decision -- never by trusting the (also fixed, separately tested)
+    floor_violations counter alone."""
+    config = load_test_config(
+        overrides={
+            "scenario": "S2",
+            "threat_schedule": {"elevate_at_step": 50, "elevated_signal": 6.0},
+            "max_steps": 500,
+        }
+    )
+    env = SmartKeyNetEnv(config)
+    policy = RandomPolicy(seed=0)
+    state, info = env.reset(seed=0)
+
+    total_reuse_or_rekey = 0
+    violations = 0
+    truncated = False
+    while not truncated:
+        mask = info["action_mask"]
+        action = policy.act(state, mask)
+        floor = env._current_floor
+        tenant_service = (env._current_request["tenant"], env._current_request["service"])
+        session = env._sessions[tenant_service]
+
+        state, reward, terminated, truncated, info = env.step(action)
+
+        if action in (Action.REUSE, Action.REKEY_NOW):
+            total_reuse_or_rekey += 1
+            delivered = session.key_type  # post-step: what the session actually holds now
+            if delivered is not None:
+                delivered_action = _KEY_TYPE_TO_SERVE_ACTION[delivered]
+                if int(delivered_action) < int(floor):
+                    violations += 1
+
+    assert total_reuse_or_rekey > 50  # the scenario actually exercised REUSE/REKEY_NOW meaningfully
+    assert violations == 0
 
 
 # ---------------------------------------------------------------------------

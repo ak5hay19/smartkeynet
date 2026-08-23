@@ -22,6 +22,7 @@ from env.contracts import (
     N_ACTIONS,
     Action,
     ActionMask,
+    KeyType,
     Request,
     SensitivityClass,
     ThreatPosture,
@@ -149,6 +150,7 @@ def compute_mask(
     key_age: float,
     max_key_age: float,
     pool_can_draw: bool,
+    current_key_type: KeyType | None = None,
 ) -> ActionMask:
     """Build the boolean action mask for one request (Hard Rules 2, 5, 9).
 
@@ -160,17 +162,63 @@ def compute_mask(
       - `REUSE` is illegal if `key_age >= max_key_age` (the SP
         800-57-derived cap `L`); this triggers a forced rekey instead,
         logged via `contracts.ForcedRekey` (Addition C).
+      - `REUSE` is illegal if `current_key_type` is given and the tier
+        it actually delivers is below `floor` (added 2026-08-19 --
+        closes a real Hard Rule 2 gap, see below).
       - Key-type changes only happen at rekey boundaries (Hard Rule
         5); this function only encodes *this step's* legality, not
         mid-session switching.
+
+    2026-08-19 fix -- what the gap was and why it was invisible until
+    now: the original three rules gated REUSE on *age* only, never on
+    whether the session's *already-established* key material still
+    meets the floor now in effect. Because `PolicyTable`'s ratchet is
+    deliberately one-way (Hard Rule 2: "threat signals may only raise
+    floors"), a session that established e.g. a PQC key under CALM
+    posture could keep legally REUSE-ing that same PQC key forever
+    after the floor later ratcheted up to SERVE_HYBRID mid-episode --
+    Hard Rule 2's floor was being enforced at key *establishment* time
+    only, not for the life of the session. This was invisible under S1
+    (posture barely moves past what the first few decisions already
+    see) and only became empirically observable once S2's scripted,
+    mid-episode ratchet existed (2026-08-19) -- a real S2 episode under
+    `RandomPolicy` measured **64 of 279 REUSE/REKEY_NOW decisions
+    (22.9%) delivering key material below the request's current
+    floor** before this fix (32 via each action) -- see
+    `tests/test_environment.py`'s and `tests/test_masking.py`'s
+    reproductions.
+
+    `current_key_type=None` (the default) preserves every pre-existing
+    call shape exactly -- this rule is a no-op unless a caller supplies
+    the session's actual key type. `KeyType` and `Action`'s tier
+    members share the same ordinal values by construction
+    (CLASSICAL/SERVE_CLASSICAL=0, PQC/SERVE_PQC=1,
+    HYBRID/SERVE_HYBRID=2 -- see env/contracts.py), so
+    `Action(int(current_key_type))` is exactly the tier that key
+    material actually delivers; no separate mapping table is
+    introduced here.
+
+    REKEY_NOW is deliberately NOT masked by this or any rule here: a
+    stale existing tier doesn't make REKEY_NOW illegal, it changes what
+    REKEY_NOW *resolves to* -- see
+    `env/environment.py::SmartKeyNetEnv._resulting_key_type`'s matching
+    2026-08-19 fix, which guarantees REKEY_NOW's resolved tier is
+    always `>= floor` (while never downgrading a session that's already
+    above floor). Masking REKEY_NOW here instead would remove the
+    guaranteed escape hatch `tests/test_masking.py::
+    test_at_least_one_action_always_legal` relies on; fixing what it
+    resolves to, rather than masking it, is what lets Hard Rule 2 and
+    the "REKEY_NOW never downgrades an existing higher tier" design
+    decision both hold at the same time.
 
     Returns an `ActionMask` of shape (N_ACTIONS,), aligned to `Action`.
 
     `request` is accepted for signature completeness (masking is
     always computed per-request) but isn't consulted by any of the
-    three rules below -- only `floor`, `key_age`/`max_key_age`, and
-    `pool_can_draw` are. (`floor` is expected to already be the output
-    of `PolicyTable.floor(request['sensitivity_class'], ...)`.)
+    rules below -- only `floor`, `key_age`/`max_key_age`,
+    `pool_can_draw`, and (optionally) `current_key_type` are. (`floor`
+    is expected to already be the output of
+    `PolicyTable.floor(request['sensitivity_class'], ...)`.)
     """
     mask = np.zeros(N_ACTIONS, dtype=bool)
     for action in Action:
@@ -178,6 +226,8 @@ def compute_mask(
         if action is Action.SERVE_HYBRID and not pool_can_draw:
             legal = False
         if action is Action.REUSE and key_age >= max_key_age:
+            legal = False
+        if action is Action.REUSE and current_key_type is not None and int(Action(int(current_key_type))) < int(floor):
             legal = False
         mask[action] = legal
     return mask

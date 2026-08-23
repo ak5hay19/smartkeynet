@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import itertools
 
-from env.contracts import Action, N_ACTIONS, Request, SensitivityClass, ThreatPosture
+from env.contracts import Action, KeyType, N_ACTIONS, Request, SensitivityClass, ThreatPosture
 from env.masking import PolicyTable, compute_mask, load_key_lifetime_config
 
 MAX_KEY_AGE = load_key_lifetime_config()["max_key_age_steps"]
@@ -93,6 +93,107 @@ def test_serve_hybrid_masked_by_pool_even_when_it_is_the_floor():
     assert mask[Action.SERVE_HYBRID] == False  # noqa: E712
     assert mask[Action.SERVE_CLASSICAL] == False  # noqa: E712
     assert mask[Action.SERVE_PQC] == False  # noqa: E712
+
+
+# ---------------------------------------------------------------------------
+# compute_mask: REUSE below-floor-tier rule (2026-08-19 Hard Rule 2 fix)
+# ---------------------------------------------------------------------------
+
+
+def test_reuse_masked_when_existing_key_tier_below_current_floor():
+    """The real gap this session closes: an established key whose tier
+    no longer meets the CURRENT floor must make REUSE illegal, even
+    though key age is well within its cap -- previously only age was
+    checked."""
+    request = make_request()
+    mask = compute_mask(
+        request,
+        floor=Action.SERVE_HYBRID,
+        key_age=0.0,  # well within cap
+        max_key_age=MAX_KEY_AGE,
+        pool_can_draw=True,
+        current_key_type=KeyType.PQC,  # established under a lower floor, now stale
+    )
+    assert mask[Action.REUSE] == False  # noqa: E712
+
+
+def test_reuse_remains_legal_when_existing_key_tier_at_or_above_current_floor():
+    """Regression check: an established key that still meets (or
+    exceeds) the current floor must remain a legal REUSE, exactly as
+    before this session -- the new rule must not over-trigger."""
+    request = make_request()
+
+    at_floor = compute_mask(
+        request,
+        floor=Action.SERVE_PQC,
+        key_age=0.0,
+        max_key_age=MAX_KEY_AGE,
+        pool_can_draw=True,
+        current_key_type=KeyType.PQC,
+    )
+    assert at_floor[Action.REUSE] == True  # noqa: E712
+
+    above_floor = compute_mask(
+        request,
+        floor=Action.SERVE_CLASSICAL,
+        key_age=0.0,
+        max_key_age=MAX_KEY_AGE,
+        pool_can_draw=True,
+        current_key_type=KeyType.HYBRID,
+    )
+    assert above_floor[Action.REUSE] == True  # noqa: E712
+
+
+def test_reuse_below_floor_rule_is_a_noop_when_current_key_type_omitted():
+    """`current_key_type` defaults to `None` -- every pre-2026-08-19 call
+    shape (positional or keyword, without this argument) must behave
+    byte-identically to before this session."""
+    request = make_request()
+    mask = compute_mask(request, floor=Action.SERVE_HYBRID, key_age=0.0, max_key_age=MAX_KEY_AGE, pool_can_draw=True)
+    assert mask[Action.REUSE] == True  # noqa: E712  -- age rule alone doesn't fire, and the new rule is opt-in
+
+
+def test_reuse_below_floor_and_age_rules_can_both_apply_without_conflict():
+    """A stale-tier key that's also past its age cap must still be
+    illegal -- either rule alone already forbids it; this just confirms
+    stacking the two conditions doesn't produce a paradox."""
+    request = make_request()
+    mask = compute_mask(
+        request,
+        floor=Action.SERVE_HYBRID,
+        key_age=MAX_KEY_AGE,
+        max_key_age=MAX_KEY_AGE,
+        pool_can_draw=True,
+        current_key_type=KeyType.CLASSICAL,
+    )
+    assert mask[Action.REUSE] == False  # noqa: E712
+
+
+def test_at_least_one_action_always_legal_including_stale_current_key_type():
+    """Re-run the existing no-deadlock invariant with `current_key_type`
+    supplied across every tier (incl. a stale one) -- REKEY_NOW must
+    still be the guaranteed escape hatch; the new rule only touches
+    REUSE."""
+    request = make_request()
+    floors = [Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID]
+    key_ages = [0.0, MAX_KEY_AGE / 2, MAX_KEY_AGE, MAX_KEY_AGE + 100]
+    pool_states = [True, False]
+    key_types = [None, KeyType.CLASSICAL, KeyType.PQC, KeyType.HYBRID]
+
+    for floor, key_age, pool_can_draw, key_type in itertools.product(floors, key_ages, pool_states, key_types):
+        mask = compute_mask(
+            request,
+            floor=floor,
+            key_age=key_age,
+            max_key_age=MAX_KEY_AGE,
+            pool_can_draw=pool_can_draw,
+            current_key_type=key_type,
+        )
+        assert mask.any(), (
+            f"deadlock at floor={floor}, key_age={key_age}, pool_can_draw={pool_can_draw}, "
+            f"current_key_type={key_type}"
+        )
+        assert mask[Action.REKEY_NOW] == True  # noqa: E712 -- REKEY_NOW is never masked by this or any rule here
 
 
 # ---------------------------------------------------------------------------

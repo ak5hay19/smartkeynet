@@ -127,6 +127,50 @@ summarized here for anyone reading the code cold):
       for "protect this tenant's pool share" or "this tenant cohort's
       floor changed" to mean anything at all) -- bolting that on ad hoc
       here would be a worse decision than making it deliberately later.
+11. **REUSE/REKEY_NOW floor-enforcement gap closed (2026-08-19, Hard
+    Rule 2)**: found by independent review of this repo's own masking
+    logic against Hard Rule 2's actual text, not by consulting any
+    other branch -- and only empirically *observable* now that S2
+    (design decision 10, same day) makes floors genuinely ratchet
+    mid-episode. `compute_mask`'s original three rules gated REUSE on
+    key *age* only, never on whether the session's already-established
+    key material still meets the floor now in effect; `REKEY_NOW`
+    (this file) always refreshed at the session's *existing* tier
+    verbatim, same gap. A real S2 episode under `RandomPolicy` measured
+    **64 of 279 REUSE/REKEY_NOW decisions (22.9%) delivering key
+    material below the request's current floor** before this fix (32
+    via each action) -- see `tests/test_environment.py`'s
+    reproduction. Fixed on both sides at once, deliberately not by
+    trading one Hard Rule requirement for another:
+    - `env/masking.py::compute_mask` gained an opt-in
+      `current_key_type` parameter and a fourth rule: REUSE is illegal
+      if the tier that key material delivers is below `floor`.
+    - `_resulting_key_type` (below) now resolves REKEY_NOW to
+      `max(existing tier, floor)`, never lower -- guaranteeing it can
+      never deliver below floor while still never downgrading a
+      session that's already above floor (design decision 4's "never
+      downgrade" behavior survives intact, verified by test).
+    - Masking gap #1's `prospective_tier` computation (in
+      `_prepare_decision`) now delegates to `_resulting_key_type`
+      itself instead of a separate, previously-inconsistent copy of
+      the same resolution -- required, not just tidier: post-fix,
+      REKEY_NOW can newly resolve to a *higher* tier than before,
+      which can newly need a pool draw the old duplicated check didn't
+      account for.
+    - `experiments/harness.py`'s `floor_violations` counter only ever
+      checked the three tier-serving actions (`action in
+      _TIER_ACTIONS`) -- REUSE and REKEY_NOW were silently excluded, a
+      second bug: the metric claimed a guarantee ("must be 0... by
+      construction") it wasn't actually checking for two of five
+      actions. Fixed alongside the above to check every action's
+      actually-*delivered* tier, not just the three whose action value
+      already equals their delivered tier.
+    - `dashboard/explain.py`'s step-4 mask-reason logic and step-5 cost
+      resolution both had to be updated to stay consistent with the
+      above (see that file's own comments) -- otherwise the Explain
+      Decision panel would either crash on the new illegality reason or
+      display a cost for the wrong (stale) delivered tier, a real Hard
+      Rule 10 drift risk this fix would otherwise have introduced.
 ---------------------------------------------------------------------
 """
 
@@ -640,24 +684,37 @@ class SmartKeyNetEnv(gym.Env):
             key_age=session.key_age,
             max_key_age=self._max_key_age,
             pool_can_draw=pool_can_draw_hybrid,
+            current_key_type=session.key_type,
         )
 
         # Masking gap #1 (discovered via testing, not anticipated by
-        # compute_mask's three rules): compute_mask only knows to gate
+        # compute_mask's rules): compute_mask only knows to gate
         # SERVE_HYBRID on pool_can_draw, because it has no visibility
         # into session key state. But REKEY_NOW (design decision 4)
         # can *also* resolve to a HYBRID draw -- refreshing an
-        # existing HYBRID session, or adopting a HYBRID floor on a
-        # cold-start session -- and compute_mask's frozen rules never
-        # gate REKEY_NOW on pool_can_draw at all. Left unpatched here,
-        # the agent could legally pick REKEY_NOW and
+        # existing HYBRID session, adopting a HYBRID floor on a
+        # cold-start session, or (since the 2026-08-19 fix, design
+        # decision 11) escalating a now-stale below-floor session up to
+        # a HYBRID floor -- and compute_mask's rules never gate
+        # REKEY_NOW on pool_can_draw at all. Left unpatched here, the
+        # agent could legally pick REKEY_NOW and
         # `_apply_action`/`pool_sim.draw()` would raise
         # `PoolExhaustedError`, or worse, we'd have to silently
         # under-draw or downgrade -- both forbidden. This is an
         # environment-level augmentation on top of compute_mask's
-        # output, not a change to masking.py's three rules.
+        # output, not a change to masking.py's rules.
+        #
+        # `prospective_tier` delegates to `_resulting_key_type` -- the
+        # exact function `_apply_action` will use -- rather than
+        # duplicating its resolution logic. Before the 2026-08-19 fix
+        # these were two separate copies of "what does REKEY_NOW
+        # resolve to", and the duplication mattered: with the fix in
+        # place, REKEY_NOW can now resolve to a *higher* tier than the
+        # session's existing one (escalating a stale tier up to floor),
+        # which can newly require a pool draw a pre-fix, un-refactored
+        # copy of this check would have missed.
         if bool(mask[Action.REKEY_NOW]):
-            prospective_tier = session.key_type if session.key_type is not None else _ACTION_TO_KEY_TYPE[floor]
+            prospective_tier = self._resulting_key_type(Action.REKEY_NOW, session, floor)
             if prospective_tier is KeyType.HYBRID and not pool_can_draw_hybrid:
                 mask[Action.REKEY_NOW] = False
 
@@ -725,9 +782,23 @@ class SmartKeyNetEnv(gym.Env):
         if action in _ACTION_TO_KEY_TYPE:
             return _ACTION_TO_KEY_TYPE[action]
         if action is Action.REKEY_NOW:
-            if session.key_type is not None:
-                return session.key_type
-            return _ACTION_TO_KEY_TYPE[floor]  # cold start: adopt the floor's tier (design decision 4)
+            if session.key_type is None:
+                return _ACTION_TO_KEY_TYPE[floor]  # cold start: adopt the floor's tier (design decision 4)
+            # 2026-08-19 fix (Hard Rule 2, design decision 11): refresh at
+            # the HIGHER of the existing tier and the current floor, never
+            # lower -- this is what lets "REKEY_NOW never downgrades an
+            # existing higher tier" (design decision 4) and Hard Rule 2
+            # ("floors ... may only be raised") both hold at the same
+            # time. Previously this always kept the existing tier
+            # verbatim, so a session whose floor had since ratcheted up
+            # (PolicyTable's sticky, one-way ratchet) could REKEY_NOW
+            # straight back into its own now-stale, below-floor tier --
+            # see env/masking.py's matching `compute_mask` fix (REUSE's
+            # side of the same gap) for the full rationale and the real,
+            # measured violation count this closes.
+            existing_tier = _KEY_TYPE_TO_SERVE_ACTION[session.key_type]
+            resolved_tier = Action(max(int(existing_tier), int(floor)))
+            return _ACTION_TO_KEY_TYPE[resolved_tier]
         return session.key_type  # REUSE
 
     def _apply_action(self, action: Action) -> tuple[float, dict[str, Any]]:

@@ -23,8 +23,18 @@ from agents.baselines import (
     RandomPolicy,
     StaticThresholdPolicy,
 )
-from experiments.harness import ScenarioResult, run_grid, run_scenario
+from env.contracts import Action, KeyType
+from experiments.harness import ScenarioResult, _delivered_tier, run_grid, run_scenario
 from metrics.regret import EpisodeMetrics
+
+_TIER_ACTIONS = (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID)
+
+
+def _onehot(key_type: KeyType | None) -> list[float]:
+    onehot = [0.0, 0.0, 0.0]
+    if key_type is not None:
+        onehot[int(key_type)] = 1.0
+    return onehot
 
 
 def load_test_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -127,6 +137,67 @@ def test_run_scenario_static_threshold_grid_search_produces_a_valid_run():
     tuned = StaticThresholdPolicy.grid_search(grid, eval_fn)
 
     result = run_scenario(tuned, "S1", config, seed=5)
+    assert result.floor_violations == 0
+
+
+# ---------------------------------------------------------------------------
+# floor_violations completeness (2026-08-19 Hard Rule 2 fix)
+# ---------------------------------------------------------------------------
+
+
+def test_floor_violations_old_check_would_have_missed_a_stale_reuse_delivery():
+    """Directly demonstrates the second bug this session fixed -- a
+    metric that claimed a guarantee ("must be 0 -- by construction") it
+    wasn't actually checking for two of five actions. Constructs the
+    exact case the old `action in _TIER_ACTIONS` check couldn't see
+    (REUSE delivering an existing PQC-tier key below a SERVE_HYBRID
+    floor) and shows the new `_delivered_tier`-based check catches it
+    while the literal old expression would not have."""
+    action = Action.REUSE
+    floor = Action.SERVE_HYBRID
+    key_type_onehot = _onehot(KeyType.PQC)  # stale: below the HYBRID floor
+
+    old_check_would_flag = action in _TIER_ACTIONS and int(action) < int(floor)
+    assert old_check_would_flag is False  # the bug: REUSE is never in _TIER_ACTIONS
+
+    delivered = _delivered_tier(action, key_type_onehot, floor)
+    new_check_flags = int(delivered) < int(floor)
+    assert new_check_flags is True
+
+
+def test_delivered_tier_reuse_reports_the_existing_session_tier():
+    assert _delivered_tier(Action.REUSE, _onehot(KeyType.PQC), floor=Action.SERVE_CLASSICAL) == Action.SERVE_PQC
+    assert _delivered_tier(Action.REUSE, _onehot(KeyType.HYBRID), floor=Action.SERVE_PQC) == Action.SERVE_HYBRID
+
+
+def test_delivered_tier_rekey_now_reports_max_of_existing_and_floor():
+    assert _delivered_tier(Action.REKEY_NOW, _onehot(KeyType.PQC), floor=Action.SERVE_HYBRID) == Action.SERVE_HYBRID
+    assert _delivered_tier(Action.REKEY_NOW, _onehot(KeyType.HYBRID), floor=Action.SERVE_CLASSICAL) == Action.SERVE_HYBRID
+    assert _delivered_tier(Action.REKEY_NOW, _onehot(None), floor=Action.SERVE_PQC) == Action.SERVE_PQC  # cold start
+
+
+def test_delivered_tier_tier_actions_report_themselves():
+    for action in _TIER_ACTIONS:
+        assert _delivered_tier(action, _onehot(None), floor=Action.SERVE_CLASSICAL) == action
+
+
+def test_run_scenario_s2_floor_violations_are_genuinely_zero_under_random_policy():
+    """End-to-end, via the public `run_scenario` API this time (not
+    env internals directly, see tests/test_environment.py's
+    equivalent): S2 genuinely ratchets floors mid-episode, and
+    `RandomPolicy` exercises REUSE/REKEY_NOW whenever legal -- exactly
+    the combination that measured 64/279 (22.9%) below-floor
+    deliveries before this session's fix (see SESSION_LOG.md). The
+    harness's own `floor_violations` counter must now correctly report
+    zero, not just the direct env-level check."""
+    config = load_test_config(
+        overrides={
+            "scenario": "S2",
+            "threat_schedule": {"elevate_at_step": 50, "elevated_signal": 6.0},
+            "max_steps": 500,
+        }
+    )
+    result = run_scenario(RandomPolicy(seed=0), "S2", config, seed=0)
     assert result.floor_violations == 0
 
 

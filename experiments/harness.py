@@ -55,6 +55,16 @@ class ScenarioResult:
     timing -- this is a less coarse per-policy comparison number."""
 
 
+def _existing_tier(key_type_onehot: Any) -> Action | None:
+    """The tier the session's currently-established key delivers, read
+    from the public `key_type_onehot` field, or `None` on a cold start
+    (no key established yet)."""
+    for key_type in KeyType:
+        if key_type_onehot[int(key_type)] == 1.0:
+            return _KEY_TYPE_TO_SERVE_ACTION[key_type]
+    return None
+
+
 def _resolved_cost_action(action: Action, key_type_onehot: Any, floor: Action) -> Action:
     """Mirror `SmartKeyNetEnv._apply_action`'s `cost_action` resolution
     (env/environment.py design decision 4), computed here purely from
@@ -66,15 +76,44 @@ def _resolved_cost_action(action: Action, key_type_onehot: Any, floor: Action) -
 
     `SERVE_CLASSICAL`/`SERVE_PQC`/`SERVE_HYBRID`/`REUSE` all cost
     against their own action directly; only `REKEY_NOW` needs
-    resolving, to whichever tier it actually refreshes (the existing
-    session's tier, or the floor's tier on a cold start).
+    resolving, to whichever tier it actually refreshes -- `max(existing
+    session tier, floor)` (2026-08-19 fix, mirrors
+    `SmartKeyNetEnv._resulting_key_type`; never lower than floor, never
+    a downgrade from an existing higher tier), or the floor's tier on a
+    cold start.
     """
     if action is not Action.REKEY_NOW:
         return action
-    for key_type in KeyType:
-        if key_type_onehot[int(key_type)] == 1.0:
-            return _KEY_TYPE_TO_SERVE_ACTION[key_type]
-    return floor  # cold-start REKEY_NOW adopts the floor's tier (design decision 4)
+    existing = _existing_tier(key_type_onehot)
+    if existing is None:
+        return floor  # cold-start REKEY_NOW adopts the floor's tier (design decision 4)
+    return Action(max(int(existing), int(floor)))
+
+
+def _delivered_tier(action: Action, key_type_onehot: Any, floor: Action) -> Action:
+    """The tier `action` actually delivers to the requester -- used only
+    for the `floor_violations` check below, never for cost (see
+    `_resolved_cost_action`, which keeps REUSE costing against
+    `Action.REUSE` itself, not a tier).
+
+    `SERVE_CLASSICAL`/`SERVE_PQC`/`SERVE_HYBRID` deliver themselves.
+    `REUSE` delivers the existing session tier unchanged -- as of the
+    2026-08-19 `env/masking.py` fix, `compute_mask` masks REUSE illegal
+    whenever that would be below floor, so a real run should never
+    reach this branch below floor; this function still reports the
+    real delivered tier regardless, so `floor_violations` verifies that
+    guarantee rather than assuming it. `REKEY_NOW` delivers
+    `max(existing tier, floor)`, matching `_resolved_cost_action`
+    above and `SmartKeyNetEnv._resulting_key_type`.
+    """
+    if action in _TIER_ACTIONS:
+        return action
+    existing = _existing_tier(key_type_onehot)
+    if existing is None:
+        return floor  # cold start: REKEY_NOW adopts floor; REUSE is illegal cold-start (unreachable here)
+    if action is Action.REKEY_NOW:
+        return Action(max(int(existing), int(floor)))
+    return existing  # REUSE
 
 
 def run_scenario(
@@ -129,7 +168,15 @@ def run_scenario(
 
         action = policy.act(state, mask)
 
-        if action in _TIER_ACTIONS and int(action) < int(floor):
+        # 2026-08-19 fix: this used to only check `action in
+        # _TIER_ACTIONS`, so a REUSE or REKEY_NOW that delivered a tier
+        # below floor was never counted -- the metric claimed a
+        # guarantee ("must be 0 -- by construction") it wasn't actually
+        # checking for two of five actions. Now checks every action's
+        # real *delivered* tier (`_delivered_tier`), which for the
+        # three tier-serving actions is just the action itself, so this
+        # is a strict superset of the old check, not a different one.
+        if int(_delivered_tier(action, key_type_onehot, floor)) < int(floor):
             floor_violations += 1  # should never fire -- the mask already forbids this
 
         cost_action = _resolved_cost_action(action, key_type_onehot, floor)

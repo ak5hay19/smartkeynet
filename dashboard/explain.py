@@ -108,24 +108,44 @@ class DecisionTrace:
     final_text: str
 
 
+def _key_type_from_onehot(key_type_onehot: Sequence[float]) -> KeyType | None:
+    for key_type in KeyType:
+        if key_type_onehot[int(key_type)] == 1.0:
+            return key_type
+    return None
+
+
 def _mask_entries(
     request: Request,
     floor: Action,
     key_age: float,
     max_key_age: float,
     pool_can_draw: bool,
-    has_existing_key: bool,
+    current_key_type: KeyType | None,
 ) -> list[MaskEntry]:
     """Build all five actions' legal/reason pairs.
 
     `mask` itself is `compute_mask()`'s real output -- never
     recomputed by hand. The per-action reason below replays that same
-    function's three checks, in the same order, on the same inputs, so
-    a reason can only be wrong if `compute_mask()`'s own behavior
-    changes underneath it (in which case the reason changes too, since
-    it re-derives from the same inputs every call).
+    function's checks, in the same order, on the same inputs (now
+    including `current_key_type`, 2026-08-19 -- see `compute_mask`'s
+    own docstring for the Hard Rule 2 gap this closed), so a reason
+    can only be wrong if `compute_mask()`'s own behavior changes
+    underneath it (in which case the reason changes too, since it
+    re-derives from the same inputs every call).
     """
-    mask = compute_mask(request=request, floor=floor, key_age=key_age, max_key_age=max_key_age, pool_can_draw=pool_can_draw)
+    mask = compute_mask(
+        request=request,
+        floor=floor,
+        key_age=key_age,
+        max_key_age=max_key_age,
+        pool_can_draw=pool_can_draw,
+        current_key_type=current_key_type,
+    )
+    has_existing_key = current_key_type is not None
+    existing_tier_below_floor = (
+        current_key_type is not None and int(Action(int(current_key_type))) < int(floor)
+    )
 
     entries: list[MaskEntry] = []
     for action in Action:
@@ -140,7 +160,10 @@ def _mask_entries(
                     reason = "no existing key yet (cold start)"
                 else:
                     reason = f"key age ({key_age:g}) exceeded its cap ({max_key_age:g})"
-            else:  # pragma: no cover -- unreachable: compute_mask's only 3 rules are covered above
+            elif action is Action.REUSE and existing_tier_below_floor:
+                existing_name = Action(int(current_key_type)).name
+                reason = f"existing key delivers {existing_name}, below floor (requires >= {floor.name})"
+            else:  # pragma: no cover -- unreachable: compute_mask's rules are all covered above
                 raise AssertionError(f"compute_mask marked {action.name} illegal for an unrecognized reason")
         else:
             if action is Action.REUSE:
@@ -155,17 +178,20 @@ def _resolved_cost_action(action: Action, key_type_onehot: Sequence[float], floo
     """Mirror `experiments/harness.py`'s `_resolved_cost_action`, which
     itself mirrors `SmartKeyNetEnv._apply_action`'s `cost_action`
     resolution (env/environment.py design decision 4) -- REKEY_NOW
-    costs against whichever tier it actually refreshes (the existing
-    session's tier, read off the public `key_type_onehot` field, or
-    the floor's tier on a cold start), every other action costs
-    against itself directly.
+    costs against whichever tier it actually refreshes: `max(existing
+    session tier, floor)` (2026-08-19 fix -- never lower than floor,
+    never a downgrade from an existing higher tier; see
+    `_resulting_key_type`'s own fix in env/environment.py), or the
+    floor's tier on a cold start. Every other action costs against
+    itself directly.
     """
     if action is not Action.REKEY_NOW:
         return action
-    for key_type in KeyType:
-        if key_type_onehot[int(key_type)] == 1.0:
-            return _KEY_TYPE_TO_SERVE_ACTION[key_type]
-    return floor  # cold-start REKEY_NOW adopts the floor's tier
+    current_key_type = _key_type_from_onehot(key_type_onehot)
+    if current_key_type is None:
+        return floor  # cold-start REKEY_NOW adopts the floor's tier
+    existing_tier = _KEY_TYPE_TO_SERVE_ACTION[current_key_type]
+    return Action(max(int(existing_tier), int(floor)))
 
 
 def _cost_entries(
@@ -263,7 +289,7 @@ def explain_decision(
       same philosophy as `SmartKeyNetEnv.step`'s `IllegalActionError`).
     """
     sensitivity_class = SensitivityClass(request["sensitivity_class"])
-    has_existing_key = any(v == 1.0 for v in key_type_onehot)
+    current_key_type = _key_type_from_onehot(key_type_onehot)
 
     if posture_probs is None:
         resolved_posture = ThreatPosture.CALM
@@ -279,7 +305,7 @@ def explain_decision(
         key_age=key_age,
         max_key_age=max_key_age,
         pool_can_draw=pool_can_draw,
-        has_existing_key=has_existing_key,
+        current_key_type=current_key_type,
     )
     legal_actions = {e.action for e in mask_entries if e.legal}
     if chosen_action not in legal_actions:

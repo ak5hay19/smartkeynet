@@ -205,6 +205,79 @@ def test_cold_start_reuse_reason_says_cold_start_not_generic_age_cap():
     assert "cold start" in reuse_entry.reason
 
 
+def test_stale_tier_reuse_reason_matches_compute_mask_and_names_the_existing_tier():
+    """2026-08-19 Hard Rule 2 fix: an established key below the current
+    floor (age well within cap) must show as illegal, with a reason
+    naming the actual stale tier -- cross-checked against a real
+    `compute_mask()` call, not a hardcoded expectation."""
+    request = make_request(sensitivity_class=3)
+    floor = Action.SERVE_HYBRID
+    key_type_onehot = _onehot(KeyType.PQC)  # stale: below the HYBRID floor
+    key_age = 0.0  # well within cap -- isolates the new rule from the age rule
+
+    real_mask = compute_mask(
+        request=request, floor=floor, key_age=key_age, max_key_age=MAX_KEY_AGE,
+        pool_can_draw=True, current_key_type=KeyType.PQC,
+    )
+    assert real_mask[Action.REUSE] == False  # noqa: E712 -- sanity: the real function agrees this is illegal
+
+    chosen = next(a for a in Action if bool(real_mask[int(a)]))
+    trace = explain_decision(
+        **_default_kwargs(
+            request=request,
+            floor=floor,
+            key_age=key_age,
+            pool_can_draw=True,
+            key_type_onehot=key_type_onehot,
+            chosen_action=chosen,
+        )
+    )
+
+    reuse_entry = next(e for e in trace.mask if e.action is Action.REUSE)
+    assert reuse_entry.legal is False
+    assert "SERVE_PQC" in reuse_entry.reason
+    assert "below floor" in reuse_entry.reason
+
+
+def test_stale_tier_reuse_reason_does_not_fire_when_tier_still_meets_floor():
+    """Regression check: an established key at/above the current floor
+    must not spuriously get the new reason."""
+    request = make_request(sensitivity_class=0)
+    trace = explain_decision(
+        **_default_kwargs(
+            request=request,
+            floor=Action.SERVE_PQC,
+            key_age=0.0,
+            pool_can_draw=True,
+            key_type_onehot=_onehot(KeyType.PQC),  # exactly at floor
+            chosen_action=Action.REUSE,
+        )
+    )
+    reuse_entry = next(e for e in trace.mask if e.action is Action.REUSE)
+    assert reuse_entry.legal is True
+    assert "below floor" not in reuse_entry.reason
+
+
+def test_rekey_now_cost_reflects_escalated_tier_not_stale_existing_tier():
+    """Step 5's cost display must match what REKEY_NOW actually
+    delivers post-fix -- max(existing tier, floor), not the stale
+    existing tier -- otherwise the panel would show a cost for a tier
+    that was never really served (a real Hard Rule 10 drift risk)."""
+    trace = explain_decision(
+        **_default_kwargs(
+            request=make_request(sensitivity_class=3),
+            floor=Action.SERVE_HYBRID,
+            key_age=0.0,
+            pool_can_draw=True,
+            key_type_onehot=_onehot(KeyType.PQC),  # stale existing tier
+            chosen_action=Action.REKEY_NOW,
+        )
+    )
+    rekey_entry = next(c for c in trace.costs if c.action is Action.REKEY_NOW)
+    assert rekey_entry.latency == _LATENCY_UNITS[Action.SERVE_HYBRID]
+    assert rekey_entry.energy == _ENERGY_UNITS[Action.SERVE_HYBRID]
+
+
 def test_chosen_action_must_be_legal():
     with pytest.raises(ValueError):
         explain_decision(
@@ -382,14 +455,20 @@ def test_explain_decision_from_env_produces_a_self_consistent_trace_on_real_env_
         assert trace.chosen_action is chosen
         assert any(e.action is chosen and e.legal for e in trace.mask)
         # cross-check step 4 directly against a fresh compute_mask() call
-        # built from the same inputs the wrapper read off the env
+        # built from the same inputs the wrapper read off the env,
+        # including current_key_type (2026-08-19 fix) -- without it this
+        # cross-check compares against the wrong (pre-fix) rule set.
         real_floor = Action(state["policy_floor"])
+        current_key_type = next(
+            (kt for kt in KeyType if state["key_type_onehot"][int(kt)] == 1.0), None
+        )
         real_mask = compute_mask(
             request=env._current_request,
             floor=real_floor,
             key_age=state["key_age"],
             max_key_age=env._max_key_age,
             pool_can_draw=env._pool_sim.can_draw(env._bits_per_hybrid_draw),
+            current_key_type=current_key_type,
         )
         for entry in trace.mask:
             assert entry.legal == bool(real_mask[int(entry.action)])
