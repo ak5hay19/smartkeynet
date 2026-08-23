@@ -16,6 +16,9 @@
 recalibrate `configs/default.yaml`'s `pool:` scale (or give S3 its own
 scenario-specific block) so S3 can actually produce degraded pool dynamics
 distinguishable from S1 — see Thread 1 below for exactly what that needs.
+**Thread 3's blocker is now resolved (2026-08-23)** — the real tenant graph
+exists — see Thread 3 below for the two distinct follow-up sessions it now
+unlocks (real S4 dispatch, and separately, S6's scripted-schedule mechanism).
 
 **Thread 1 — DQN training-instability → Gate W3 (2026-08-19: instability
 substantially resolved, real gate genuinely attempted, S1 half MET, S3 half
@@ -117,30 +120,33 @@ plus `StateDict`/event-log fields, no new dependency; or start on
 `agents/soft_reward_baseline.py` (needed before the steering attack,
 PLAN2.md §7.5/§9 S5, can be built).
 
-**Thread 3 — Real scenario dispatch, S4/S6 blocked on a tenant-identity
-decision (opened 2026-08-19).** S1/S2/S3 scenario dispatch is now real (see
-`env/environment.py`'s per-file row). S4 (DDoS/noisy-neighbor: "one
-low-sensitivity tenant floods the API") and S6 (migration wave: "a tenant
-cohort's floor changes") both fundamentally need a notion of **which
-tenant a request belongs to that persists and can be targeted/grouped** —
-`env/request_generator.py`'s `random_request_generator()` currently
-assigns `tenant`/`service` strings per request with no graph, no
-per-tenant identity the environment can reason about, and no way to say
-"flood tenant X" or "raise cohort Y's floor." This is exactly
-`build_tenant_graph()`/`RequestGenerator` (PLAN.md §10 step 4, still
-`NotImplementedError` — see `env/request_generator.py`'s row) — a real
-decision, not a small addition: **either** build the real NetworkX tenant
-graph + graph-driven `RequestGenerator` first (the "do it properly" path,
-larger scope, unblocks S4 *and* S6 *and* real Stretch-B-style per-tenant
-allocation), **or** find a smaller, explicitly-flagged-as-a-shortcut way to
-give the *existing* random stream a stable per-tenant identity concept just
-big enough for S4/S6 (e.g. a small fixed pool of named tenants the random
-generator draws from, still no graph/edges/traffic-rate modeling) — cheaper
-but needs to be a deliberate, sign-off'd call given Hard Rule 3's
-"deleting the tenant graph must not change one line of agent code" test,
-since neither S4 nor S6 may leak tenant identity into agent-visible state
-(only into the request stream / masking-adjacent floor lookups, same as
-S2/S3's threat/pool inputs this session).
+**Thread 3 — Real scenario dispatch, S4/S6's tenant-identity blocker now
+resolved (opened 2026-08-19, resolved 2026-08-23).** S1/S2/S3 scenario
+dispatch is real (see `env/environment.py`'s per-file row). S4 (DDoS/
+noisy-neighbor) and S6 (migration wave) both needed a notion of which
+tenant a request belongs to that persists and can be targeted/grouped —
+that's exactly what **2026-08-23's session built**: `env/
+request_generator.py`'s `build_tenant_graph(n_nodes, seed) -> nx.Graph`
+(real NetworkX hub-and-spoke graph, tenant nodes carry persistent
+`sensitivity_class`/`traffic_rate`/`pqc_capable`/`services`) and
+`RequestGenerator(graph, seed)` (`.reset()`/`.step(step)->list[Request]`,
+plus `__iter__` for drop-in use), both implemented + tested, Hard Rule 3
+swap-tested (see that file's row and SESSION_LOG.md's newest entry for
+full detail). **This unlocks two distinct future sessions, not one
+combined task:**
+- **Real S4 dispatch**: wire `config["scenario"] == "S4"` into
+  `env/environment.py` the same way S2/S3 were wired (design decision 10)
+  — pick a designated tenant node (by id, e.g. `tenant_0`) and multiply
+  its `traffic_rate` weight way up for a scripted window, using the real
+  `RequestGenerator` this session built (not the tenant-blind `load_spike`
+  diagnostic). Not started.
+- **S6's scripted-schedule mechanism**: needs both this session's tenant
+  identity (to target "cohort Y") *and* a separate, still-nonexistent
+  scripted-schedule config mechanism (`configs/default.yaml`'s
+  `migration_schedule: []` is still empty — no author for its `{step,
+  tenant_cohort, new_floor}` entries or the dispatch logic that reads
+  them). Not started, and deliberately a separate session from S4's —
+  they share a prerequisite, not an implementation.
 
 ---
 
@@ -305,7 +311,7 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       logging
 - [x] Gate W2 — env `step()` runs end-to-end with a random valid agent across
       a full S1 episode; regret events logged
-- [ ] Real NetworkX tenant graph + graph-driven `RequestGenerator`
+- [x] Real NetworkX tenant graph + graph-driven `RequestGenerator`
       (`build_tenant_graph`, `RequestGenerator.reset/step`) — PLAN.md §10 step 4
 - [x] Masked DQN agent (`agents/dqn.py`)
 - [x] Four tuned baselines — always-PQC, always-hybrid, static-threshold
@@ -348,10 +354,13 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
 - [ ] Soft-reward baseline agent reproducing Noetzold (`agents/soft_reward_baseline.py`)
 - [ ] Scenario dispatch S2-S4 wired into `environment.py` — **partially done
       2026-08-19: S2 (HNDL) + S3 (QKD degradation) are real, tested dispatch now;
-      S4 (DDoS/noisy-neighbor) is still blocked** on a tenant-identity concept
-      `env/request_generator.py` doesn't have yet (see "Next task"). The
-      2026-08-10 `load_spike` diagnostic remains a request-rate-only stand-in,
-      unrelated to this real dispatch.
+      S4 (DDoS/noisy-neighbor) is not yet dispatched** — its tenant-identity
+      blocker is resolved as of 2026-08-23 (real `build_tenant_graph`/
+      `RequestGenerator` now exist — see "Next task"), but wiring
+      `config["scenario"] == "S4"` into `environment.py` itself is still a
+      separate, not-yet-done future session. The 2026-08-10 `load_spike`
+      diagnostic remains a request-rate-only stand-in, unrelated to this real
+      dispatch.
 - [ ] Real LSTM dual-head forecaster (Addition A) — `forecaster/model.py`,
       `forecaster/dataset.py`, `forecaster/train.py`, `LSTMForecastProvider`
       in `env/forecast_provider.py`
@@ -381,8 +390,8 @@ behavioral tests, part of the green `pytest` run).
 | `env/deferral_queue.py` | implemented+tested | `DeferralQueue.enqueue/tick/pop_servable`, priority+FIFO, cumulative-headroom draw. 8 tests (`test_deferral_queue.py`). |
 | `env/masking.py` | implemented+tested | `PolicyTable` (placeholder floor table, sticky ratchet) + `compute_mask`. 19 tests (`test_masking.py`, up from 14). Floor table not yet calibrated against Q-OPSEC data. **2026-08-19: closed a real Hard Rule 2 gap** — `compute_mask` gained an opt-in `current_key_type` param and a fourth rule: REUSE is illegal if the session's existing key tier is now below the current floor (previously only key *age* gated REUSE, never whether the established tier still met a since-ratcheted-up floor). Found and fixed via independent review of this repo's own code against Hard Rule 2's text; measured real on a live S2 episode before the fix: 64/279 (22.9%) REUSE/REKEY_NOW decisions delivered below-floor key material; 0/270 after. The prior "REUSE illegal only past key-age cap" description of this file is now out of date — see `env/environment.py`'s row for the REKEY_NOW half of the same fix. |
 | `env/forecast_provider.py` | stub (partial) | `MovingAverageForecaster` (EWMA fallback) implemented+tested (9 tests, `test_forecast_provider.py`). `LSTMForecastProvider` does not exist yet (Addition A) — `use_foresight: lstm` currently raises `NotImplementedError` in `environment.py`. |
-| `env/request_generator.py` | stub (partial) | `random_request_generator()` implemented+tested (11 tests, `test_request_generator.py`), incl. 3 new 2026-08-10 tests for its optional `load_spike` kwarg — a periodic, config-driven arrival-rate diagnostic (**explicitly not real S4** — see that session's SESSION_LOG.md entry and `configs/default.yaml`'s `load_spike:` block). `build_tenant_graph()` and `RequestGenerator` (graph-driven stream) still `raise NotImplementedError` — real S4 needs these. |
-| `env/environment.py` | implemented+tested | `SmartKeyNetEnv.reset/step/action_mask` fully wired (pool + deferral + masking + forecast + reward + session-key state). 30 behavioral tests (up from 25) incl. the split.md Gate W2 tests (`test_environment.py`). **2026-08-19 (design decision 11): `_resulting_key_type()` fixed** — REKEY_NOW now resolves to `max(existing session tier, current floor)`, never lower (previously always kept the existing tier verbatim, a real Hard Rule 2 gap — see `env/masking.py`'s row for the REUSE half of the same fix, found and fixed together). Masking gap #1's pool-draw gate now delegates to `_resulting_key_type` itself instead of a separate, previously-inconsistent copy. 2026-08-10: wired `config["load_spike"]` through to `random_request_generator` (design decision 9) — orthogonal to scenario dispatch, not a substitute for it. **2026-08-19 (design decision 10): real S2 (HNDL) + S3 (QKD degradation) scenario dispatch.** `config["scenario"]` now genuinely gates behavior for S2/S3 (S1, and the still-undispatched S4/S5/S6, are unaffected — confirmed by an explicit regression test). S2: `config["threat_schedule"]` (required only under `scenario: S2`) makes `_threat_features_placeholder()` return a scripted elevated signal from a configured step onward, flowing through the *existing, unmodified* `MovingAverageForecaster` → `PolicyTable.ratchet_up`/`floor` → `compute_mask` chain — `env/masking.py`'s floor table itself was never touched (Hard Rule 2), verified directly by a test cross-checking the env's real per-decision floor against a fresh `PolicyTable().floor()` call across a spread of sensitivity classes. S3: `config["qkd_degradation"]` (required only under `scenario: S3`) threads straight into `SyntheticSKRQBERTrace`'s pre-existing spike params at `reset()` — no new pool-sim code. **Observability finding, documented in `configs/scenarios/s3_degradation.yaml`'s own comments**: under `pool:`'s realistic default-scale numbers (256-bit draws vs. ~200,000-bit/tick mean SKR refill), S3's degradation is real but invisible in practice — refill dwarfs any plausible draw pattern by 2-3 orders of magnitude; the regression test demonstrates the real, measurable effect (higher regret-event count, lower minimum pool fill vs. S1) using the same scarcity-forcing small-pool override `test_environment.py`'s existing Hard Rule 9 gate test already established, not a fabricated number. New standalone scenario configs: `configs/scenarios/s2_hndl.yaml`, `configs/scenarios/s3_degradation.yaml` (both directly loadable via `experiments/train.py`'s `load_full_config(path)`, verified). S4 (DDoS/noisy-neighbor) and S6 (migration wave) deliberately NOT dispatched — both need a tenant-identity concept `env/request_generator.py` doesn't have yet; see "Next task". **2026-08-19 (Gate W3 attempt session): this observability finding is now confirmed to reach further than pool fill alone** — under real default config, S3's floor *and posture* sequences are also byte-identical to S1's (not just pool fill), because posture is already saturated regardless of the QBER spike. This blocked Gate W3's S3 half from being attempted at all this session — see SESSION_LOG.md and Thread 1 above. |
+| `env/request_generator.py` | implemented+tested | `random_request_generator()` implemented+tested (as before, incl. the 2026-08-10 `load_spike` diagnostic — **explicitly not real S4**, see `configs/default.yaml`'s `load_spike:` block). **2026-08-23 (new): `build_tenant_graph(n_nodes, seed) -> nx.Graph` and `RequestGenerator(graph, seed)` are now real, tested implementations**, closing the "real NetworkX tenant graph" milestone item. `build_tenant_graph`: hub-and-spoke topology (one `kms_hub` node, one edge to each of `n_nodes` tenant nodes) — a direct rendering of PLAN.md §4's architecture diagram and a natural future dashboard graph view; each tenant node carries persistent `sensitivity_class` (real `SensitivityClass` value, Hard Rule 4), `traffic_rate` (positive float, `0.2`-`5.0`), `pqc_capable` (bool, same `_PQC_CAPABLE_PROB=0.9` convention as the random generator, Hard Rule 6), and `services` (1-2 names drawn from the existing `_SERVICES` vocabulary, never re-rolled). New `load_tenant_graph_config()` standalone typed loader for `tenant_graph:` (mirrors `load_pool_config`/`load_key_lifetime_config`/`load_dqn_config`'s convention, not auto-invoked inside `build_tenant_graph` itself, same relationship those three have to their own modules). `RequestGenerator`: samples which tenant arrives weighted by that tenant's persistent `traffic_rate` (verified statistically); a sampled request's `sensitivity_class`/`pqc_capable` are read directly from the tenant's node attributes, never re-rolled (verified with zero drift across 500 sampled requests) — this is the property that gives tenants real identity, the point of the session. `hybrid_mandatory` stays an independent per-request draw (contracts.py/PLAN.md never describe it as tenant-persistent). Also directly iterable (`__iter__`) as an `Iterator[Request]` adapter over `.step()`, so it can be swapped in wherever `random_request_generator`'s output is consumed. **Two deviations from the session brief, both because the brief didn't match the real, frozen `env/contracts.py`** (verified by reading that file, not assumed): `Request`'s real field is `service`, not `service_id`; `Request` has no `data_lifetime_days` field at all (nothing added to the frozen contract to manufacture one — flagged, not invented). 22 tests total in `test_request_generator.py` (up from 11: 13 new, minus the 2 removed `NotImplementedError` placeholder tests): node count/topology/attribute validity, byte-identical graphs under a repeated seed, a different seed producing a different graph, `RequestGenerator` field validity, same-seed/`reset()` reproducibility, the zero-drift tenant-attribute check, and the traffic-rate-weighted arrival-share statistical check. **Hard Rule 3 swap test**: `tests/test_environment.py::test_hard_rule_3_graph_driven_generator_is_a_drop_in_replacement` duplicates the existing Gate W2 test (`test_gate_full_s1_episode_random_valid_policy_zero_floor_violations`) verbatim except for one line constructing `SmartKeyNetEnv` with a `request_stream_factory` built from the real graph/generator — a full 250-step S1 episode under a random *valid* policy, zero floor violations, through completely unmodified agent-facing code. See `env/environment.py`'s row for the one narrow, additive `environment.py` change this needed. |
+| `env/environment.py` | implemented+tested | `SmartKeyNetEnv.reset/step/action_mask` fully wired (pool + deferral + masking + forecast + reward + session-key state). 30 behavioral tests (up from 25) incl. the split.md Gate W2 tests (`test_environment.py`). **2026-08-19 (design decision 11): `_resulting_key_type()` fixed** — REKEY_NOW now resolves to `max(existing session tier, current floor)`, never lower (previously always kept the existing tier verbatim, a real Hard Rule 2 gap — see `env/masking.py`'s row for the REUSE half of the same fix, found and fixed together). Masking gap #1's pool-draw gate now delegates to `_resulting_key_type` itself instead of a separate, previously-inconsistent copy. 2026-08-10: wired `config["load_spike"]` through to `random_request_generator` (design decision 9) — orthogonal to scenario dispatch, not a substitute for it. **2026-08-19 (design decision 10): real S2 (HNDL) + S3 (QKD degradation) scenario dispatch.** `config["scenario"]` now genuinely gates behavior for S2/S3 (S1, and the still-undispatched S4/S5/S6, are unaffected — confirmed by an explicit regression test). S2: `config["threat_schedule"]` (required only under `scenario: S2`) makes `_threat_features_placeholder()` return a scripted elevated signal from a configured step onward, flowing through the *existing, unmodified* `MovingAverageForecaster` → `PolicyTable.ratchet_up`/`floor` → `compute_mask` chain — `env/masking.py`'s floor table itself was never touched (Hard Rule 2), verified directly by a test cross-checking the env's real per-decision floor against a fresh `PolicyTable().floor()` call across a spread of sensitivity classes. S3: `config["qkd_degradation"]` (required only under `scenario: S3`) threads straight into `SyntheticSKRQBERTrace`'s pre-existing spike params at `reset()` — no new pool-sim code. **Observability finding, documented in `configs/scenarios/s3_degradation.yaml`'s own comments**: under `pool:`'s realistic default-scale numbers (256-bit draws vs. ~200,000-bit/tick mean SKR refill), S3's degradation is real but invisible in practice — refill dwarfs any plausible draw pattern by 2-3 orders of magnitude; the regression test demonstrates the real, measurable effect (higher regret-event count, lower minimum pool fill vs. S1) using the same scarcity-forcing small-pool override `test_environment.py`'s existing Hard Rule 9 gate test already established, not a fabricated number. New standalone scenario configs: `configs/scenarios/s2_hndl.yaml`, `configs/scenarios/s3_degradation.yaml` (both directly loadable via `experiments/train.py`'s `load_full_config(path)`, verified). S4 (DDoS/noisy-neighbor) and S6 (migration wave) deliberately NOT dispatched — both need a tenant-identity concept `env/request_generator.py` doesn't have yet; see "Next task". **2026-08-19 (Gate W3 attempt session): this observability finding is now confirmed to reach further than pool fill alone** — under real default config, S3's floor *and posture* sequences are also byte-identical to S1's (not just pool fill), because posture is already saturated regardless of the QBER spike. This blocked Gate W3's S3 half from being attempted at all this session — see SESSION_LOG.md and Thread 1 above. **2026-08-23 (design decision 12): `__init__` gained an optional `request_stream_factory` parameter** (`episode_seed -> Iterator[Request]`, default `None`) — the one narrow, additive exception needed for `env/request_generator.py`'s new real `RequestGenerator` to be a genuine drop-in replacement for `random_request_generator` (Hard Rule 3's swap test). Confirmed before making this change that `random_request_generator` was hardcoded inline in `reset()` (not already injectable) — reading, not assuming. `None` (the default) reproduces prior behavior byte-for-byte; every existing single-argument `SmartKeyNetEnv(config)` call site is unaffected, verified by the full existing test suite passing unmodified. No other line in this file changed. |
 
 ### agents/
 
@@ -459,7 +468,7 @@ behavioral tests, part of the green `pytest` run).
 
 ## Last verified
 
-- **Date:** 2026-08-19
-- **Commit:** `b60c27b` ("log: [solo] post-fix re-run of forced_rekey_ratio multi-seed probe -- 2026-08-19") — the commit this session started from; see SESSION_LOG.md for this session's own commit
-- **`pytest` pass count:** 457 passed, 1 xfailed (451 prior + 6 new in `tests/test_harness.py` for `evaluate_multi_seed`)
-- **Branch:** Confirmed `main`/`dev21` in sync at session start (`git rev-parse main dev21` both `b60c27bbb73a32be6369d309d727e0e82857c987`). This session's commit (real code: `experiments/harness.py::evaluate_multi_seed` + tests, plus doc updates) was ff-merged into `dev21` at the end — see SESSION_LOG.md for the final shared hash. Not pushed to origin this session, per instruction.
+- **Date:** 2026-08-23
+- **Commit:** `4453086` ("log: [solo] Gate W3 attempt -- DQN vs tuned threshold on real S1 and S3 -- 2026-08-19") — the commit this session started from; see SESSION_LOG.md for this session's own commit
+- **`pytest` pass count:** 469 passed, 1 xfailed (457 prior + 13 new in `tests/test_request_generator.py` minus 2 removed `NotImplementedError` placeholder tests, + 1 new Hard Rule 3 swap test in `tests/test_environment.py`)
+- **Branch:** Confirmed `main`/`dev21` in sync at session start (`git rev-parse main dev21` both `4453086f2ae4b9716c108b9a67a5de7bf17e60e2`). This session's commit (real code: `env/request_generator.py::build_tenant_graph`/`RequestGenerator`, `env/environment.py`'s `request_stream_factory` injection point, plus tests and doc updates) was ff-merged into `dev21` at the end — see SESSION_LOG.md for the final shared hash. Not pushed to origin this session, per instruction.

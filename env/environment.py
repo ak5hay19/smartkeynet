@@ -171,6 +171,16 @@ summarized here for anyone reading the code cold):
       Decision panel would either crash on the new illegality reason or
       display a cost for the wrong (stale) delivered tier, a real Hard
       Rule 10 drift risk this fix would otherwise have introduced.
+12. **Request generator made swappable (2026-08-23)**: `__init__`
+    gained an optional `request_stream_factory` parameter (`episode_seed
+    -> Iterator[Request]`, default `None`). `random_request_generator`
+    was hardcoded inline in `reset()` before this session (confirmed by
+    reading this file, not assumed) -- this is the narrow, additive
+    exception needed for `env/request_generator.py::RequestGenerator`
+    (the real NetworkX-graph-driven generator, this session's own new
+    code) to be a genuine drop-in replacement, per Hard Rule 3's swap
+    test. `None` (the default) reproduces prior behavior exactly; no
+    other line in this file branches on which generator is in use.
 ---------------------------------------------------------------------
 """
 
@@ -178,7 +188,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import gymnasium as gym
 import numpy as np
@@ -306,8 +316,25 @@ class SmartKeyNetEnv(gym.Env):
     hit in practice since `random_request_generator`'s arrival rate is
     fixed and nonzero."""
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        request_stream_factory: Callable[[int | None], Iterator[Request]] | None = None,
+    ) -> None:
+        """`request_stream_factory` (design decision 12) is the one
+        injection point Hard Rule 3's swap test needs: an optional
+        `episode_seed -> Iterator[Request]` callable, called fresh on
+        every `reset()`. Defaults to `None`, which preserves the exact
+        prior behavior (`random_request_generator(seed=..., load_spike=
+        self._load_spike_cfg)`) byte-for-byte -- every existing caller
+        that constructs `SmartKeyNetEnv(config)` with one positional
+        argument is completely unaffected. A caller wanting the real
+        graph-driven stream instead passes e.g. `lambda seed:
+        iter(RequestGenerator(build_tenant_graph(seed=0), seed=seed))`
+        -- no other line in this file branches on which generator is
+        in use."""
         self._config = config
+        self._request_stream_factory = request_stream_factory
         self._pool_capacity = float(config["pool"]["capacity_bits"])
         self._pool_initial_fill_frac = float(config["pool"]["initial_fill_frac"])
         self._bits_per_hybrid_draw = float(config["pool"]["bits_per_hybrid_draw"])
@@ -386,7 +413,10 @@ class SmartKeyNetEnv(gym.Env):
         self._deferral_queue = DeferralQueue()
         self._policy_table = PolicyTable()  # fresh every episode -- sticky ratchet must not carry over
         self._forecaster = self._build_forecaster()
-        self._request_stream = random_request_generator(seed=episode_seed, load_spike=self._load_spike_cfg)
+        if self._request_stream_factory is not None:
+            self._request_stream = self._request_stream_factory(episode_seed)
+        else:
+            self._request_stream = random_request_generator(seed=episode_seed, load_spike=self._load_spike_cfg)
         self._peeked_arrival = None
 
         self._sessions = {}

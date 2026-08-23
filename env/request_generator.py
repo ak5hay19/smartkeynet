@@ -8,17 +8,113 @@ Person A (split.md §1).
 Hard Rule 3 test: deleting this graph and replacing it with a plain
 arrival process must not change one line of agent code -- the graph
 only shapes *which requests arrive*, never anything the agent sees
-directly.
+directly. See `tests/test_environment.py::
+test_hard_rule_3_graph_driven_generator_is_a_drop_in_replacement` for
+the concrete swap test: an identical episode run against
+`random_request_generator` and against `RequestGenerator` (built from
+`build_tenant_graph`), through the exact same environment/agent-facing
+code.
+
+---------------------------------------------------------------------
+Design decisions (2026-08-23 session, `build_tenant_graph`/
+`RequestGenerator`):
+
+1. **Tenant identity lives on the node, not the edge.** PLAN.md's
+   "Datasets & Provenance" table describes the tenant graph's
+   `sensitivity_class`/`traffic_rate`/`pqc_capable` as "edge attrs" --
+   written before this session's design decision that tenants must be
+   real, *persistent* entities (so S4 can target "flood tenant X" and
+   S6 can target "raise tenant cohort Y's floor" -- neither means
+   anything if those properties are redrawn per edge/request instead
+   of belonging to a stable tenant). This session puts them on each
+   tenant node instead, sampled once at graph-build time and read
+   (never re-rolled) by every request `RequestGenerator` emits for
+   that tenant. This intentionally supersedes the "edge attrs" phrasing.
+2. **Topology: a single hub node (`_HUB_NODE_ID`) with one edge to
+   each tenant node** (star / hub-and-spoke). Justified two ways: (a)
+   it's a direct rendering of the architecture diagram (PLAN.md §4) --
+   every tenant's traffic conceptually flows through one shared KMS/
+   pool, which a hub node makes explicit and gives a future dashboard
+   graph view something simple and meaningful to draw; (b) it keeps
+   `build_tenant_graph` honest about what this session actually models
+   -- tenants as independent, un-clustered traffic sources -- rather
+   than inventing an inter-tenant topology (e.g. tenant-to-tenant
+   edges) with no grounding in PLAN.md and no present use.
+3. **Services are a small, persistent set per tenant** (1-2, drawn
+   without replacement from the existing `_SERVICES` vocabulary
+   `random_request_generator` already uses -- reusing it, not inventing
+   a second naming scheme, keeps episodes comparable across
+   generators). `contracts.py`'s `Request` field is named `service`,
+   not `service_id` -- the session brief's `service_id` phrasing does
+   not match the frozen contract; `service` is what's actually
+   implemented here.
+4. **`data_lifetime_days` does not exist.** The session brief assumed
+   `env/contracts.py`'s `Request` has a `data_lifetime_days` field it
+   could vary per request; the frozen `Request` TypedDict (verified by
+   reading the file this session) has no such field --
+   `request_id`/`step`/`tenant`/`service`/`sensitivity_class`/
+   `pqc_capable`/`hybrid_mandatory` only. Nothing was added to
+   `contracts.py` to manufacture one (that file is frozen -- would need
+   a flagged, sign-off'd change, not a unilateral addition); this
+   design point from the brief is simply inapplicable to the real
+   contract and is noted here rather than silently ignored.
+5. **`hybrid_mandatory` stays a per-request, tenant-independent draw**
+   (same `_HYBRID_MANDATORY_PROB` `random_request_generator` uses) --
+   `contracts.py` and PLAN.md never describe it as a tenant property,
+   and making it persistent per tenant would silently change Hard
+   Rule 9 dynamics (every request from a tenant either always or never
+   deferrable) with no request from PLAN.md/split.md to do so.
+---------------------------------------------------------------------
 """
 
 from __future__ import annotations
 
-from typing import Iterator
+from pathlib import Path
+from typing import Any, Iterator
 
 import networkx as nx
 import numpy as np
+import yaml
 
 from env.contracts import Request, SensitivityClass
+
+
+_HUB_NODE_ID = "kms_hub"
+"""The single hub node every tenant node connects to (design decision
+2 above) -- represents the shared KMS/QKD pool every tenant's requests
+conceptually route through."""
+
+_MIN_TENANT_TRAFFIC_RATE = 0.2
+_MAX_TENANT_TRAFFIC_RATE = 5.0
+"""Bounds for each tenant's persistent `traffic_rate` (relative
+weight, not requests/step directly -- `RequestGenerator` normalizes
+these into sampling probabilities). A >20x spread between the
+quietest and loudest possible tenant gives S4 (one tenant flooding)
+real headroom to be dramatic later without this session needing to
+build S4 itself."""
+
+_MIN_SERVICES_PER_TENANT = 1
+_MAX_SERVICES_PER_TENANT = 2
+"""Each tenant gets a small, persistent subset of `_SERVICES` (design
+decision 3 above) -- enough for >1 concurrent (tenant, service)
+session per tenant (env/environment.py keys session state by that
+pair) without every tenant touching every service."""
+
+
+def load_tenant_graph_config(path: str | Path | None = None) -> dict[str, Any]:
+    """Read the `tenant_graph:` block out of `configs/default.yaml`.
+
+    Mirrors `env.pool_sim.load_pool_config` / `env.masking.
+    load_key_lifetime_config` / `agents.dqn.load_dqn_config`'s existing
+    convention -- a standalone, typed-by-caller-usage loader, not
+    auto-invoked inside `build_tenant_graph` itself (same relationship
+    those three loaders have to their own modules).
+    """
+    if path is None:
+        path = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
+    with open(path, "r", encoding="utf-8") as f:
+        config: dict[str, Any] = yaml.safe_load(f)
+    return config["tenant_graph"]
 
 
 def build_tenant_graph(n_nodes: int = 10, seed: int | None = None) -> nx.Graph:
@@ -26,36 +122,138 @@ def build_tenant_graph(n_nodes: int = 10, seed: int | None = None) -> nx.Graph:
     Provenance" -> "Tenant graph" row: NetworkX synthetic, documented
     generator).
 
-    Edge attrs: `sensitivity_class`, `traffic_rate`, `pqc_capable`
-    (legacy endpoints where classical is the only interoperable option
-    -> masking makes classical mandatory there; S6 flips `pqc_capable`
-    -> true as subsystems upgrade).
+    Topology: one hub node (`_HUB_NODE_ID`) with an edge to each of
+    `n_nodes` tenant nodes (design decision 2 above). Node attrs on
+    each tenant node (`kind="tenant"`) -- persistent, sampled once
+    here, never re-rolled per request:
+      - `sensitivity_class` (int, a real `SensitivityClass` value --
+        Hard Rule 4, no invented tier scheme)
+      - `traffic_rate` (positive float, relative weight -- see
+        `_MIN_TENANT_TRAFFIC_RATE`/`_MAX_TENANT_TRAFFIC_RATE`)
+      - `pqc_capable` (bool; `False` reads as "legacy endpoint where
+        classical is the only interoperable option," Hard Rule 6 --
+        same interpretation `random_request_generator` already uses,
+        same probability `_PQC_CAPABLE_PROB`)
+      - `services` (tuple[str, ...], 1-2 names drawn from `_SERVICES`,
+        design decision 3 above)
+    The hub node (`kind="hub"`) carries no tenant attributes.
 
-    Start with `n_nodes=10` (PLAN.md §10 step 4); scale toward ~50
-    once the spine is solid (PLAN.md §4 architecture diagram).
+    `n_nodes` defaults to `10`, matching `configs/default.yaml`'s
+    `tenant_graph.n_nodes` (PLAN.md §10 step 4: "10 nodes to start");
+    pass `load_tenant_graph_config()["n_nodes"]` explicitly to read the
+    config-driven value instead of this default. Deterministic under a
+    fixed `seed`: identical node/edge set and attributes on repeated
+    calls; a different seed changes the sampled attributes (and, since
+    `_SERVICES` sampling can differ, sometimes the edge set's
+    incidental service assignments) but never the node/edge topology
+    itself, which depends only on `n_nodes`.
     """
-    raise NotImplementedError
+    rng = np.random.default_rng(seed)
+    n_sensitivity_classes = len(SensitivityClass)
+
+    graph = nx.Graph()
+    graph.add_node(_HUB_NODE_ID, kind="hub")
+
+    for i in range(n_nodes):
+        tenant_id = f"tenant_{i}"
+        n_services = int(rng.integers(_MIN_SERVICES_PER_TENANT, _MAX_SERVICES_PER_TENANT + 1))
+        services = tuple(str(s) for s in rng.choice(_SERVICES, size=n_services, replace=False))
+        graph.add_node(
+            tenant_id,
+            kind="tenant",
+            sensitivity_class=int(rng.integers(0, n_sensitivity_classes)),
+            traffic_rate=float(rng.uniform(_MIN_TENANT_TRAFFIC_RATE, _MAX_TENANT_TRAFFIC_RATE)),
+            pqc_capable=bool(rng.random() < _PQC_CAPABLE_PROB),
+            services=services,
+        )
+        graph.add_edge(_HUB_NODE_ID, tenant_id)
+
+    return graph
 
 
 class RequestGenerator:
     """Samples a request stream from a tenant graph (PLAN.md §4
     architecture diagram: "request stream <- sampled from graph").
 
-    Ships a random/dummy generator first (split.md §1, Person A "ships
-    a stub first") so `env/environment.py` and `agents/` aren't
-    blocked on the real graph sampler.
+    Each step, which tenant(s) generate a request is sampled weighted
+    by that tenant's persistent `traffic_rate` node attribute (higher-
+    traffic tenants produce proportionally more requests); a sampled
+    request's `sensitivity_class`/`pqc_capable` are read directly from
+    that tenant's node attributes -- never redrawn -- which is what
+    gives tenants real, stable identity (the whole point of this
+    session, see the module docstring's design decisions). `service`
+    is drawn per request from that tenant's small persistent
+    `services` set; `hybrid_mandatory` is an independent per-request
+    draw (design decision 5).
+
+    Also directly iterable (`iter(generator_instance)`): yields the
+    exact same `Request` objects `.step()` would, one at a time in
+    step order, as an infinite generator -- the same `Iterator[Request]`
+    protocol `random_request_generator` provides. This is the adapter
+    that makes this class a genuine drop-in replacement at
+    `env/environment.py`'s single injection point (its
+    `request_stream_factory` constructor parameter) without that
+    module needing to special-case which generator is in use (Hard
+    Rule 3).
     """
 
     def __init__(self, graph: nx.Graph, seed: int | None = None) -> None:
-        raise NotImplementedError
+        self._graph = graph
+        self._seed = seed
+
+        self._tenants: list[tuple[str, dict[str, Any]]] = [
+            (node, attrs) for node, attrs in graph.nodes(data=True) if attrs.get("kind") == "tenant"
+        ]
+        if not self._tenants:
+            raise ValueError(
+                "graph has no tenant nodes (kind='tenant') -- build it with build_tenant_graph(), "
+                "not an empty or hand-built nx.Graph()"
+            )
+        traffic_rates = np.array([attrs["traffic_rate"] for _, attrs in self._tenants], dtype=float)
+        self._tenant_weights = traffic_rates / traffic_rates.sum()
+
+        self._rng: np.random.Generator = np.random.default_rng(seed)
+        self._request_index = 0
 
     def reset(self) -> None:
-        """Rewind the request stream for a new episode."""
-        raise NotImplementedError
+        """Rewind the request stream for a new episode -- re-seeds from
+        the original `seed`, so a fresh `reset()` reproduces the exact
+        same stream `__init__` would have produced."""
+        self._rng = np.random.default_rng(self._seed)
+        self._request_index = 0
 
     def step(self, step: int) -> list[Request]:
-        """Return the requests that arrive at this step (possibly empty)."""
-        raise NotImplementedError
+        """Return the requests that arrive at this step (possibly
+        empty). Arrival count is Poisson(`_ARRIVAL_RATE_PER_STEP`) --
+        same rate `random_request_generator` uses, so the two
+        generators are comparable in overall traffic volume, not just
+        interface shape."""
+        n_arrivals = int(self._rng.poisson(_ARRIVAL_RATE_PER_STEP))
+        requests: list[Request] = []
+        for _ in range(n_arrivals):
+            tenant_idx = int(self._rng.choice(len(self._tenants), p=self._tenant_weights))
+            tenant_id, attrs = self._tenants[tenant_idx]
+            service = str(self._rng.choice(attrs["services"]))
+            self._request_index += 1
+            requests.append(
+                Request(
+                    request_id=f"graph-{self._request_index}",
+                    step=step,
+                    tenant=tenant_id,
+                    service=service,
+                    sensitivity_class=int(attrs["sensitivity_class"]),
+                    pqc_capable=bool(attrs["pqc_capable"]),
+                    hybrid_mandatory=bool(self._rng.random() < _HYBRID_MANDATORY_PROB),
+                )
+            )
+        return requests
+
+    def __iter__(self) -> Iterator[Request]:
+        self.reset()
+        step = 0
+        while True:
+            yield from self.step(step)
+            step += 1
 
 
 _ARRIVAL_RATE_PER_STEP: float = 1.0

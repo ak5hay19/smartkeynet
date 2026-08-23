@@ -33,6 +33,7 @@ from env.environment import (
     _SessionKeyState,
 )
 from env.masking import PolicyTable
+from env.request_generator import RequestGenerator, build_tenant_graph
 from experiments.train import load_full_config
 
 _TIER_ACTIONS = (Action.SERVE_CLASSICAL, Action.SERVE_PQC, Action.SERVE_HYBRID)
@@ -416,6 +417,44 @@ def test_lstm_foresight_raises_not_implemented():
 def test_gate_full_s1_episode_random_valid_policy_zero_floor_violations():
     config = load_test_config()
     env = SmartKeyNetEnv(config)
+    state, info = env.reset(seed=123)
+    rng = np.random.default_rng(123)
+
+    floor_violations = 0
+    for _ in range(250):
+        floor = env._current_floor
+        action, (state, reward, terminated, truncated, info) = take_random_valid_step(env, rng, info)
+
+        if action in _TIER_ACTIONS and int(action) < int(floor):
+            floor_violations += 1
+
+        assert env._pool_sim.fill >= 0.0
+        assert not terminated
+
+    assert floor_violations == 0
+
+
+# ---------------------------------------------------------------------------
+# Hard Rule 3 swap test (2026-08-23) -- "deleting the NetworkX graph and
+# replacing it with a plain arrival process must not change one line of
+# agent code." This duplicates
+# test_gate_full_s1_episode_random_valid_policy_zero_floor_violations
+# verbatim except for the one line constructing SmartKeyNetEnv, which
+# passes a request_stream_factory built from the real
+# build_tenant_graph()/RequestGenerator instead of relying on the
+# default (random_request_generator). Everything else -- the random
+# *valid* policy, the floor-violation check, the assertions -- is
+# identical, unmodified environment/agent-facing code.
+# ---------------------------------------------------------------------------
+
+
+def test_hard_rule_3_graph_driven_generator_is_a_drop_in_replacement():
+    config = load_test_config()
+    graph = build_tenant_graph(n_nodes=10, seed=123)
+    env = SmartKeyNetEnv(
+        config,
+        request_stream_factory=lambda seed: iter(RequestGenerator(graph, seed=seed)),
+    )
     state, info = env.reset(seed=123)
     rng = np.random.default_rng(123)
 
