@@ -199,6 +199,19 @@ _QUEUE_REFERENCE = 20.0
 queue depths actually observed under S3 scarcity."""
 
 
+_TIER_ACTIONS_FOR_VIOLATIONS: tuple[Action, ...] = (
+    Action.SERVE_CLASSICAL,
+    Action.SERVE_PQC,
+    Action.SERVE_HYBRID,
+)
+"""Actions that deliver a tier and can therefore under-protect a request.
+
+`REUSE` and `REKEY_NOW` are excluded because their tier is resolved to a
+concrete `SERVE_*` before this check runs -- counting both would double-count
+the same serve, which is precisely how this metric reported a clean zero for
+weeks while REUSE was bypassing floors."""
+
+
 class IllegalActionError(Exception):
     """Raised by `step()` if the given action is illegal under the mask
     returned by the previous decision.
@@ -335,6 +348,13 @@ class SmartKeyNetEnv(gym.Env[StateDict, int]):
         self._bits_per_hybrid_draw = float(config["pool"]["bits_per_hybrid_draw"])
         # Whole keys per hybrid establishment -- the unit the pool and the
         # §4.4 event log both speak in (spec `hybrid_draw_keys`).
+        # §S10: `masking.enabled: false` makes floors advisory so the
+        # soft-reward victim can actually violate one. Default TRUE -- this is
+        # the project's central guarantee, and it must take a deliberate config
+        # change to switch off, never a default or an accident.
+        self._masking_enabled = bool(config.get("masking", {}).get("enabled", True))
+        self._floor_violations = 0
+
         queue_cfg = config.get("queue", {})
         self._head_reservation = str(queue_cfg.get("head_reservation", "none"))
         if self._head_reservation not in ("none", "strict"):
@@ -632,6 +652,22 @@ class SmartKeyNetEnv(gym.Env[StateDict, int]):
     def write_event_log(self, path: str | Path) -> Path:
         """Persist the episode's events to gzipped JSONL."""
         return self._event_log.write(path)
+
+    @property
+    def floor_violations(self) -> int:
+        """Serves that went out below the request's policy floor.
+
+        Structurally ZERO whenever masking is enabled -- the action never
+        reaches the environment, because it was never in the agent's action
+        set. Non-zero only under §S10's advisory-floor mode, which exists so
+        the soft-reward victim can demonstrate the failure our architecture
+        makes unreachable.
+        """
+        return self._floor_violations
+
+    @property
+    def masking_enabled(self) -> bool:
+        return self._masking_enabled
 
     @property
     def pool_overflow_keys(self) -> int:
@@ -1157,6 +1193,7 @@ class SmartKeyNetEnv(gym.Env[StateDict, int]):
             queue_non_empty=len(self._deferral_queue) > 0,
             head_reservation=self._head_reservation,
             request_is_hybrid_mandatory=bool(request["hybrid_mandatory"]),
+            enforce_floor=self._masking_enabled,
         )
 
         # Masking gap #1 (discovered via testing, not anticipated by
@@ -1385,6 +1422,32 @@ class SmartKeyNetEnv(gym.Env[StateDict, int]):
         self._latency_count += 1
         self._latency_samples.append(latency_ms)
         self._served_tier_counts[int(cost_action)] += 1
+
+        # §S10 advisory-floor mode: count what masking would have prevented.
+        # With masking ON this branch is unreachable -- `step()` has already
+        # rejected any action outside the mask, and the mask excluded every
+        # sub-floor tier before the agent ever saw it. That unreachability is
+        # the guarantee; this counter is how the victim demonstrates its
+        # absence.
+        if not self._masking_enabled and cost_action in _TIER_ACTIONS_FOR_VIOLATIONS:
+            if int(cost_action) < int(floor):
+                self._floor_violations += 1
+                self._event_log.emit(
+                    "serve",
+                    self._step_count,
+                    request_id=request["request_id"],
+                    tenant=request["tenant"],
+                    sensitivity_class=int(request["sensitivity_class"]),
+                    floor=int(floor),
+                    action=int(action),
+                    tier_served=int(cost_action),
+                    latency_ms=float(latency_ms),
+                    energy_mj=float(energy_mj),
+                    keys_drawn=0,
+                    was_deferred=False,
+                    wait_steps=0,
+                    floor_violation=True,
+                )
 
         load = self._current_load()
 

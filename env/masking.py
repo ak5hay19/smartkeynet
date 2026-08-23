@@ -272,11 +272,26 @@ def compute_mask(
     queue_non_empty: bool = False,
     head_reservation: str = "none",
     request_is_hybrid_mandatory: bool = False,
+    enforce_floor: bool = True,
 ) -> ActionMask:
     """Build the boolean action mask for one request (Hard Rules 2, 5, 9).
 
     Legality rules (PLAN.md Hard Rules):
-      - Actions below `floor` are illegal.
+      - Actions below `floor` are illegal -- UNLESS `enforce_floor` is False.
+
+        `enforce_floor=False` implements SMARTKEYNET_BUILD_SPEC.md §S10's
+        `masking.enabled: false`: floors become **advisory**, so violations are
+        "logged and counted, not prevented". It exists for exactly one purpose,
+        and using it anywhere else would be a Hard Rule 2 violation: the
+        soft-reward victim must be ABLE to serve below a floor, or the
+        comparison this project is built on is vacuous. If the victim cannot
+        violate, `floor_violations = 0` for both agents and the column proves
+        nothing about the reward design.
+
+        Physical constraints are NOT relaxed by this flag. A legacy endpoint
+        still cannot negotiate PQC, an empty pool still cannot fund a hybrid
+        draw, and a session with no key still cannot REUSE. Those are facts
+        about the world; only the *policy* floor becomes advisory.
       - `SERVE_HYBRID` is illegal if `not pool_can_draw` -- pool
         exhaustion routes the request to `env/deferral_queue.py`
         instead of masking in a downgrade (Hard Rule 9).
@@ -358,7 +373,7 @@ def compute_mask(
 
     mask = np.zeros(N_ACTIONS, dtype=bool)
     for action in Action:
-        legal = int(action) >= int(effective_floor)
+        legal = (not enforce_floor) or int(action) >= int(effective_floor)
         if action is Action.SERVE_HYBRID and not pool_can_draw:
             legal = False
 
@@ -384,7 +399,8 @@ def compute_mask(
         if action is Action.REUSE and key_age >= max_key_age:
             legal = False
         if action is Action.REUSE and (
-            active_key_tier is None or int(active_key_tier) < int(effective_floor)
+            active_key_tier is None
+            or (enforce_floor and int(active_key_tier) < int(effective_floor))
         ):
             # spec §S4 rule 4: cannot reuse a key that no longer clears
             # the floor, and cannot reuse a key that does not exist
