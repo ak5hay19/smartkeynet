@@ -202,6 +202,43 @@ summarized here for anyone reading the code cold):
     other, and the mask/reward/state-construction code downstream of
     `_prepare_decision` never learns which generator produced the
     `Request` it's holding.
+14. **Real S6 (migration wave) scenario dispatch (2026-08-24)**:
+    `config["migration_graph_seed"]` (required only under `scenario:
+    S6`, same fail-fast convention as `ddos`) builds a real tenant
+    graph once at construction time, same pattern as S4 -- a seed
+    dedicated to graph structure, decoupled from `episode_seed`, so
+    which tenant a schedule entry's `tenant_index` names is a fixed
+    structural fact of the config. `config["migration_schedule"]`
+    (already a top-level key in every config, default `[]` -- S2/S3/S4
+    ignore it exactly as before since `self._migration_schedule` only
+    ever populates from it under `scenario: S6`) is a small, explicit
+    list of `{step, tenant_index, new_sensitivity_class}` entries --
+    scripted and exogenous (Hard Rule 3: not generative, not seed-
+    dependent, not something the environment invents). `reset()` under
+    S6 constructs a `RequestGenerator` (no `flood_override`) and keeps
+    a reference to the *instance* (`self._request_generator`, not just
+    the `iter()`-wrapped stream S4 discards) so `_advance_to_next_decision`
+    can call its new `set_tenant_sensitivity_class` at the scripted
+    step. The dispatch site is a single, unconditional loop at the top
+    of the internal tick loop (`for event in self._migration_schedule:
+    if event["step"] == self._step_count: ...`) -- unconditional
+    because `self._migration_schedule` is `[]` for every scenario but
+    S6, so the loop body never executes elsewhere; no `if self._scenario
+    == "S6"` guard is needed at the dispatch site itself. Entirely
+    upstream, same standard as S4 (Hard Rule 3): a request emitted
+    after a ratchet is a completely ordinary `Request` carrying the new
+    `sensitivity_class`, and `env/masking.py`'s floor computation
+    already reads that field fresh off every incoming request (verified
+    by reading `_prepare_decision` below and `env/masking.py` before
+    building this -- no masking.py change was needed or made). **Hard
+    Rule 8 (train/eval split)**: enforced in `experiments/train.py`,
+    not here -- `config["train_eligible"]` (defaults `True`, set
+    `False` only in `configs/scenarios/s6_migration.yaml`) is checked
+    by `train()` before any training proceeds; this file has no notion
+    of "training" vs. "eval" and doesn't need one, since
+    `experiments/harness.py`'s `run_scenario`/`run_grid` are
+    legitimately meant to run any policy against any scenario,
+    including S6, for held-out evaluation.
 ---------------------------------------------------------------------
 """
 
@@ -310,11 +347,12 @@ class SmartKeyNetEnv(gym.Env):
     `ForecastProvider` is constructed and how long the flattened state
     vector is.
 
-    S1 (benign baseline), S2 (HNDL posture), S3 (QKD degradation), and
-    S4 (DDoS/noisy-neighbor) scenario dispatch are implemented (see
-    module docstring design decisions 10 and 13). S5 (steering attack)
-    and S6 (migration wave) are not yet dispatched -- `config["scenario"]`
-    is read but has no effect for those values, same as before.
+    S1 (benign baseline), S2 (HNDL posture), S3 (QKD degradation), S4
+    (DDoS/noisy-neighbor), and S6 (migration wave, held-out eval only --
+    Hard Rule 8) scenario dispatch are implemented (see module
+    docstring design decisions 10, 13, and 15). S5 (steering attack) is
+    not yet dispatched -- `config["scenario"]` is read but has no
+    effect for that value, same as before.
     """
 
     _TRACE_N_STEPS = 200_000
@@ -380,6 +418,19 @@ class SmartKeyNetEnv(gym.Env):
         self._threat_schedule_cfg = config["threat_schedule"] if self._scenario == "S2" else None
         self._qkd_degradation_cfg = config["qkd_degradation"] if self._scenario == "S3" else None
         self._ddos_cfg = config["ddos"] if self._scenario == "S4" else None
+        # S6 (migration wave, design decision 15): `migration_graph_seed`
+        # is required only under scenario S6 (absent from every config
+        # but s6_migration.yaml, same fail-fast convention as `ddos`).
+        # `migration_schedule` is already a top-level key present (with
+        # an empty-list default) in every config -- see configs/default.yaml
+        # -- so it's read unconditionally, but only ever non-empty for
+        # S6's own config; `self._migration_schedule` collapses to `[]`
+        # for every other scenario so the dispatch loop in
+        # `_advance_to_next_decision` is a guaranteed no-op there.
+        self._migration_graph_seed = config["migration_graph_seed"] if self._scenario == "S6" else None
+        self._migration_schedule: list[dict[str, Any]] = (
+            list(config.get("migration_schedule", [])) if self._scenario == "S6" else []
+        )
         # The tenant graph itself is built once, here, from a seed
         # dedicated to graph structure (`ddos.graph_seed`) --
         # deliberately decoupled from `episode_seed` (design decision
@@ -393,11 +444,15 @@ class SmartKeyNetEnv(gym.Env):
         # seed. Reused, unmodified, across every reset() this instance
         # runs -- analogous to how `pool`'s capacity is fixed
         # structural config, not a per-episode draw.
-        self._tenant_graph: nx.Graph | None = (
-            build_tenant_graph(n_nodes=config["tenant_graph"]["n_nodes"], seed=self._ddos_cfg["graph_seed"])
-            if self._scenario == "S4"
-            else None
-        )
+        self._tenant_graph: nx.Graph | None = None
+        if self._scenario == "S4":
+            self._tenant_graph = build_tenant_graph(
+                n_nodes=config["tenant_graph"]["n_nodes"], seed=self._ddos_cfg["graph_seed"]
+            )
+        elif self._scenario == "S6":
+            self._tenant_graph = build_tenant_graph(
+                n_nodes=config["tenant_graph"]["n_nodes"], seed=self._migration_graph_seed
+            )
 
         # Populated fresh by reset(); typed here for clarity.
         self._pool_sim: PoolSim | None = None
@@ -405,6 +460,13 @@ class SmartKeyNetEnv(gym.Env):
         self._policy_table: PolicyTable | None = None
         self._forecaster: ForecastProvider | None = None
         self._request_stream: Iterator[Request] | None = None
+        self._request_generator: RequestGenerator | None = None
+        """The live `RequestGenerator` instance backing `_request_stream`
+        under S6 only (design decision 15) -- kept as an instance
+        reference, not discarded via a bare `iter(...)` the way S4's
+        branch does, because S6 needs to call
+        `set_tenant_sensitivity_class` on it mid-episode.  `None` for
+        every other scenario/dispatch path."""
         self._peeked_arrival: Request | None = None
 
         self._sessions: dict[tuple[str, str], _SessionKeyState] = {}
@@ -455,6 +517,7 @@ class SmartKeyNetEnv(gym.Env):
         self._deferral_queue = DeferralQueue()
         self._policy_table = PolicyTable()  # fresh every episode -- sticky ratchet must not carry over
         self._forecaster = self._build_forecaster()
+        self._request_generator = None
         if self._request_stream_factory is not None:
             self._request_stream = self._request_stream_factory(episode_seed)
         elif self._scenario == "S4":
@@ -465,6 +528,12 @@ class SmartKeyNetEnv(gym.Env):
             self._request_stream = iter(
                 RequestGenerator(self._tenant_graph, seed=episode_seed, flood_override=flood_override)
             )
+        elif self._scenario == "S6":
+            # design decision 15: no flood_override -- S6 needs the
+            # instance kept around (not discarded into a bare iter())
+            # so _advance_to_next_decision can mutate it mid-episode.
+            self._request_generator = RequestGenerator(self._tenant_graph, seed=episode_seed)
+            self._request_stream = iter(self._request_generator)
         else:
             self._request_stream = random_request_generator(seed=episode_seed, load_spike=self._load_spike_cfg)
         self._peeked_arrival = None
@@ -623,6 +692,19 @@ class SmartKeyNetEnv(gym.Env):
             # 1. advance the pool by one tick
             self._last_pool_state = self._pool_sim.step()
             self._step_count += 1
+
+            # S6 (migration wave) dispatch (design decision 15): a
+            # guaranteed no-op unless scenario == "S6" (the only case
+            # self._migration_schedule is ever non-empty) -- see module
+            # docstring point 15. Applying it here, before this tick's
+            # arrivals are pulled (step 5 below), means any request
+            # pulled this same tick already reflects a ratchet that
+            # just fired.
+            for event in self._migration_schedule:
+                if event["step"] == self._step_count:
+                    self._request_generator.set_tenant_sensitivity_class(
+                        f"tenant_{event['tenant_index']}", event["new_sensitivity_class"]
+                    )
 
             # age every tracked session by one tick, not just the one
             # being decided (design decision 2)

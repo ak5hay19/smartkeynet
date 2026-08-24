@@ -416,3 +416,76 @@ def test_request_generator_regression_unaffected_by_flood_override_addition():
     a = list(itertools.islice(iter(RequestGenerator(graph, seed=42)), N_SAMPLE))
     b = list(itertools.islice(iter(RequestGenerator(graph, seed=42)), N_SAMPLE))
     assert a == b
+
+
+# ---------------------------------------------------------------------------
+# RequestGenerator.set_tenant_sensitivity_class -- S6 (migration wave)
+# mechanism (2026-08-24 session). See env/environment.py's module
+# docstring design decision 15 for how this gets driven from a scripted
+# schedule; these tests exercise the generator-level mechanism directly.
+# ---------------------------------------------------------------------------
+
+_MIGRATION_TENANT = "tenant_5"  # real S0 tenant under graph_seed 0, n_nodes 10
+
+
+def test_set_tenant_sensitivity_class_rejects_an_unknown_tenant_id():
+    graph = build_tenant_graph(n_nodes=10, seed=0)
+    gen = RequestGenerator(graph, seed=0)
+    with pytest.raises(ValueError):
+        gen.set_tenant_sensitivity_class("no_such_tenant", 3)
+
+
+def test_set_tenant_sensitivity_class_rejects_an_invalid_class_value():
+    """Hard Rule 4: no invented tiers -- only real SensitivityClass
+    values (0-3) are accepted."""
+    graph = build_tenant_graph(n_nodes=10, seed=0)
+    gen = RequestGenerator(graph, seed=0)
+    with pytest.raises(ValueError):
+        gen.set_tenant_sensitivity_class(_MIGRATION_TENANT, 99)
+
+
+def test_set_tenant_sensitivity_class_changes_subsequent_requests_immediately():
+    """No time-window or "next episode" delay -- every request emitted
+    after the call reflects the new class, starting with the very next
+    one."""
+    graph = build_tenant_graph(n_nodes=10, seed=0)
+    gen = RequestGenerator(graph, seed=7)
+
+    requests_before = [r for step in range(50) for r in gen.step(step) if r["tenant"] == _MIGRATION_TENANT]
+    assert requests_before  # real evidence, not vacuous
+    assert all(r["sensitivity_class"] == 0 for r in requests_before)
+
+    gen.set_tenant_sensitivity_class(_MIGRATION_TENANT, 3)
+
+    requests_after = [r for step in range(50, 100) for r in gen.step(step) if r["tenant"] == _MIGRATION_TENANT]
+    assert requests_after
+    assert all(r["sensitivity_class"] == 3 for r in requests_after)
+
+
+def test_set_tenant_sensitivity_class_leaves_every_other_tenant_untouched():
+    """Isolation guarantee at the generator level, same standard as
+    flood_override's own isolation test: mutating one tenant's node
+    attribute must not touch any other tenant's `sensitivity_class`."""
+    graph = build_tenant_graph(n_nodes=10, seed=0)
+    real_classes = {
+        n: attrs["sensitivity_class"] for n, attrs in graph.nodes(data=True) if attrs.get("kind") == "tenant"
+    }
+    gen = RequestGenerator(graph, seed=7)
+    gen.set_tenant_sensitivity_class(_MIGRATION_TENANT, 3)
+
+    for step in range(200):
+        for request in gen.step(step):
+            if request["tenant"] == _MIGRATION_TENANT:
+                continue
+            assert request["sensitivity_class"] == real_classes[request["tenant"]]
+
+
+def test_set_tenant_sensitivity_class_also_updates_the_underlying_graph_node():
+    """The mutation is a single write, not two out-of-sync copies:
+    `_tenant_attrs_by_id` holds the exact same dict object NetworkX
+    stores on the graph node (a live reference, not a copy), so the
+    graph itself reflects the change too."""
+    graph = build_tenant_graph(n_nodes=10, seed=0)
+    gen = RequestGenerator(graph, seed=0)
+    gen.set_tenant_sensitivity_class(_MIGRATION_TENANT, 3)
+    assert graph.nodes[_MIGRATION_TENANT]["sensitivity_class"] == 3

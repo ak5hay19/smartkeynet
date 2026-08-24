@@ -316,6 +316,38 @@ class RequestGenerator:
             yield from self.step(step)
             step += 1
 
+    def set_tenant_sensitivity_class(self, tenant_id: str, new_sensitivity_class: int) -> None:
+        """Mutate one tenant's persistent `sensitivity_class` node
+        attribute after construction -- S6 (migration wave)'s real
+        mechanism (2026-08-24 session), read this before touching S6
+        config.
+
+        Writes directly into `_tenant_attrs_by_id[tenant_id]` -- the
+        exact attribute dict object `nx.Graph.nodes(data=True)` handed
+        back at `__init__` time (a live reference, not a copy), so the
+        graph node itself is updated too, by construction, with no
+        second write needed. Every subsequent request this generator
+        emits for `tenant_id` (via the ordinary, completely unmodified
+        `step()`/`_build_request` path, base or flood) reads the new
+        class -- entirely upstream, in the request-arrival process
+        (Hard Rule 3): `_build_request` reads `attrs["sensitivity_class"]`
+        fresh on every call, and `env/masking.py`'s floor computation
+        reads `sensitivity_class` fresh off each incoming `Request`
+        every decision (confirmed by reading both before this method
+        was written, not assumed) -- so this one mutation is
+        sufficient on its own; no masking.py or environment.py
+        floor-computation change was needed or made.
+
+        Validates `new_sensitivity_class` is a real `SensitivityClass`
+        value (Hard Rule 4: no invented tiers) -- raises `ValueError`
+        via the enum constructor otherwise, same as any other real
+        tier value in this codebase."""
+        if tenant_id not in self._tenant_attrs_by_id:
+            raise ValueError(f"tenant_id {tenant_id!r} is not a tenant node in this graph")
+        self._tenant_attrs_by_id[tenant_id]["sensitivity_class"] = int(
+            SensitivityClass(int(new_sensitivity_class))
+        )
+
 
 _ARRIVAL_RATE_PER_STEP: float = 1.0
 """Mean arrivals per step (Poisson rate lambda) -- a documented

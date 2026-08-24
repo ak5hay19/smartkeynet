@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 import yaml
 
-from agents.baselines import AlwaysHybridPolicy, RandomPolicy
+from agents.baselines import AlwaysHybridPolicy, RandomPolicy, StaticThresholdPolicy
 from env.contracts import Action, KeyType, SensitivityClass, ThreatPosture
 from env.environment import (
     _ACTION_TO_KEY_TYPE,
@@ -912,21 +912,21 @@ def test_hard_rule_3_no_scenario_aware_branching_downstream_of_request_generatio
     assert "ddos" not in apply_action_body.lower()
 
 
-def test_s5_and_s6_scenarios_are_not_yet_dispatched():
-    """S5 (steering attack) and S6 (migration wave) still need
-    mechanisms this repo doesn't have yet (see PROGRESS.md/
-    SESSION_LOG.md) -- deliberately deferred, not an oversight.
-    Selecting either must currently be a pure no-op, identical to any
-    other unrecognized scenario string, and must not require any new
-    config block the way S2/S3/S4 now do."""
-    for scenario in ("S5", "S6"):
-        config = load_test_config(overrides={"scenario": scenario})
-        env = SmartKeyNetEnv(config)
-        assert env._threat_schedule_cfg is None
-        assert env._qkd_degradation_cfg is None
-        assert env._ddos_cfg is None
-        assert env._tenant_graph is None
-        env.reset(seed=0)  # must not raise -- no scenario-specific config required
+def test_s5_scenario_is_not_yet_dispatched():
+    """S5 (steering attack) still needs a mechanism this repo doesn't
+    have yet (see PROGRESS.md/SESSION_LOG.md) -- deliberately deferred,
+    not an oversight. Selecting it must currently be a pure no-op,
+    identical to any other unrecognized scenario string, and must not
+    require any new config block the way S2/S3/S4/S6 now do."""
+    config = load_test_config(overrides={"scenario": "S5"})
+    env = SmartKeyNetEnv(config)
+    assert env._threat_schedule_cfg is None
+    assert env._qkd_degradation_cfg is None
+    assert env._ddos_cfg is None
+    assert env._migration_graph_seed is None
+    assert env._migration_schedule == []
+    assert env._tenant_graph is None
+    env.reset(seed=0)  # must not raise -- no scenario-specific config required
 
 
 def test_scenario_config_files_load_and_construct_a_working_env():
@@ -936,6 +936,7 @@ def test_scenario_config_files_load_and_construct_a_working_env():
         ("configs/scenarios/s2_hndl.yaml", "S2"),
         ("configs/scenarios/s3_degradation.yaml", "S3"),
         ("configs/scenarios/s4_ddos.yaml", "S4"),
+        ("configs/scenarios/s6_migration.yaml", "S6"),
     ):
         config = load_full_config(path)
         config["max_steps"] = 20
@@ -943,3 +944,165 @@ def test_scenario_config_files_load_and_construct_a_working_env():
         assert env._scenario == expected_scenario
         state, info = env.reset(seed=0)
         assert info["action_mask"].any()
+
+
+# ---------------------------------------------------------------------------
+# S6 (migration wave) scenario dispatch (2026-08-24, design decision 15)
+#
+# The mechanism tests below deliberately use a test-local
+# migration_schedule (via load_test_config's shallow-merge), NOT the
+# real committed configs/scenarios/s6_migration.yaml -- same convention
+# S4's own mechanism tests already established (see
+# _run_s4_and_count_by_tenant above): the committed file's real
+# schedule is separately verified end-to-end by
+# test_scenario_config_files_load_and_construct_a_working_env, but its
+# tenants (tenant_0, weight ~1%; tenant_3, ~4%) are too low-traffic to
+# reliably produce many real before/after decisions within a fast test
+# budget -- tenant_5 (S0, real traffic_rate ~12.7% under graph_seed 0 --
+# verified by build_tenant_graph(seed=0), not guessed) gives a robust,
+# fast, deterministic sample on both sides of its scripted ratchet.
+# ---------------------------------------------------------------------------
+
+_S6_GRAPH_SEED = 0
+_S6_RATCHET_STEP = 100
+_S6_TEST_SCHEDULE = [{"step": _S6_RATCHET_STEP, "tenant_index": 5, "new_sensitivity_class": 3}]
+_S6_RATCHET_TENANT = "tenant_5"  # real S0 tenant under graph_seed 0, n_nodes 10 (verified this session)
+
+
+def _run_s6_and_collect_decisions(
+    schedule: list[dict[str, Any]], seed: int, n_steps: int, use_foresight: str = "ewma"
+) -> list[dict[str, Any]]:
+    """Drives a real S6 episode under `RandomPolicy` (sampled from the
+    real mask each step, same "valid random agent" convention the W2
+    gate test and S4's own tests use) and returns, per decision, the
+    real `Request` actually decided plus the `policy_floor` the env
+    computed for it -- a direct, request-by-request record, not an
+    aggregate statistic."""
+    config = load_test_config(
+        overrides={
+            "scenario": "S6",
+            "migration_graph_seed": _S6_GRAPH_SEED,
+            "migration_schedule": schedule,
+            "use_foresight": use_foresight,
+        }
+    )
+    env = SmartKeyNetEnv(config)
+    state, info = env.reset(seed=seed)
+    rng = np.random.default_rng(seed)
+
+    decisions: list[dict[str, Any]] = []
+    for _ in range(n_steps):
+        request = env._current_request
+        decisions.append(
+            {
+                "tenant": request["tenant"],
+                "sensitivity_class": request["sensitivity_class"],
+                "policy_floor": state["policy_floor"],
+                "request_step": request["step"],
+            }
+        )
+        action, (state, reward, terminated, truncated, info) = take_random_valid_step(env, rng, info)
+
+    return decisions
+
+
+def test_s6_requires_migration_graph_seed_config():
+    config = load_test_config(overrides={"scenario": "S6"})
+    assert "migration_graph_seed" not in config  # default.yaml never carries this key -- only s6_migration.yaml does
+    with pytest.raises(KeyError):
+        SmartKeyNetEnv(config)
+
+
+def test_s6_tenant_sensitivity_class_changes_at_scripted_step_request_by_request():
+    """Direct, request-by-request check (not an aggregate statistic):
+    every real decision drawn from the ratcheted tenant carries the OLD
+    sensitivity_class while its arrival step is before the scripted
+    ratchet step, and the NEW one from the ratchet step onward."""
+    decisions = _run_s6_and_collect_decisions(_S6_TEST_SCHEDULE, seed=7, n_steps=400)
+    tenant_decisions = [d for d in decisions if d["tenant"] == _S6_RATCHET_TENANT]
+
+    before = [d for d in tenant_decisions if d["request_step"] < _S6_RATCHET_STEP]
+    after = [d for d in tenant_decisions if d["request_step"] >= _S6_RATCHET_STEP]
+    assert before  # real evidence on both sides, not vacuously true
+    assert after
+
+    assert all(d["sensitivity_class"] == 0 for d in before)  # S0, the tenant's real pre-migration class
+    assert all(d["sensitivity_class"] == 3 for d in after)  # S3, the scripted post-migration class
+
+
+def test_s6_floor_changes_correspondingly_cross_checked_against_real_masking_table():
+    """Confirm the resulting floor also changes, cross-checked against
+    a real `PolicyTable().floor()` call (not a hardcoded expected
+    value). `use_foresight: off` pins posture at CALM for the whole
+    episode (env/environment.py's `_prepare_decision`: no forecaster ->
+    `current_posture = ThreatPosture.CALM` always) so the floor is
+    driven purely by sensitivity_class, isolating exactly the effect
+    this scenario is supposed to produce."""
+    decisions = _run_s6_and_collect_decisions(_S6_TEST_SCHEDULE, seed=7, n_steps=400, use_foresight="off")
+    tenant_decisions = [d for d in decisions if d["tenant"] == _S6_RATCHET_TENANT]
+    before = [d for d in tenant_decisions if d["request_step"] < _S6_RATCHET_STEP]
+    after = [d for d in tenant_decisions if d["request_step"] >= _S6_RATCHET_STEP]
+    assert before
+    assert after
+
+    fresh_table = PolicyTable()
+    expected_floor_before = int(fresh_table.floor(SensitivityClass.S0, ThreatPosture.CALM))
+    expected_floor_after = int(fresh_table.floor(SensitivityClass.S3, ThreatPosture.CALM))
+    assert expected_floor_before != expected_floor_after  # the table must actually distinguish these
+
+    assert all(d["policy_floor"] == expected_floor_before for d in before)
+    assert all(d["policy_floor"] == expected_floor_after for d in after)
+
+
+def test_s6_other_tenants_are_completely_unaffected_by_one_tenants_scheduled_ratchet():
+    """Isolation check, same spirit as S4's own per-tenant isolation
+    test: every OTHER tenant's sensitivity_class (and therefore floor)
+    stays exactly at its real, graph-sampled value for the entire
+    episode -- a scheduled change to one tenant must not leak into any
+    other."""
+    graph = build_tenant_graph(n_nodes=10, seed=_S6_GRAPH_SEED)
+    real_classes = {n: attrs["sensitivity_class"] for n, attrs in graph.nodes(data=True) if attrs.get("kind") == "tenant"}
+
+    decisions = _run_s6_and_collect_decisions(_S6_TEST_SCHEDULE, seed=7, n_steps=400)
+    other_decisions = [d for d in decisions if d["tenant"] != _S6_RATCHET_TENANT]
+    assert other_decisions  # real evidence some other tenant was actually decided during the run
+
+    for d in other_decisions:
+        assert d["sensitivity_class"] == real_classes[d["tenant"]]
+
+
+def test_hard_rule_3_no_s6_scenario_aware_branching_downstream_of_request_generation():
+    """Code-level check, same standard as S4's own equivalent test:
+    masking.py, contracts.py, and the reward-calculation body must
+    contain zero mentions of "migration"/"s6" -- env/environment.py's
+    own sanctioned dispatch site (design decision 15) is the only place
+    this scenario is allowed to be scenario-aware."""
+    masking_source = Path("env/masking.py").read_text(encoding="utf-8")
+    assert "migration" not in masking_source.lower()
+    assert "s6" not in masking_source.lower()
+
+    contracts_source = Path("env/contracts.py").read_text(encoding="utf-8")
+    assert "migration" not in contracts_source.lower()
+
+    reward_calc_source = Path("env/environment.py").read_text(encoding="utf-8")
+    apply_action_start = reward_calc_source.index("def _apply_action")
+    apply_action_body = reward_calc_source[apply_action_start : apply_action_start + 3000]
+    assert "migration" not in apply_action_body.lower()
+    assert "s6" not in apply_action_body.lower()
+
+
+def test_s6_held_out_eval_sanity_run_via_harness():
+    """The scenario's whole purpose: it must be genuinely usable for
+    held-out evaluation via experiments/harness.py's existing
+    run_scenario against a real baseline policy -- not a rigorous
+    benchmark, just confirmation the episode runs to completion and
+    Hard Rule 9's floor-violation guarantee still holds across the
+    ratchet point, using the real, committed s6_migration.yaml (not a
+    test-local override)."""
+    s6_config = load_full_config("configs/scenarios/s6_migration.yaml")
+    policy = StaticThresholdPolicy(pool_fill_threshold=0.5)
+
+    result = run_scenario(policy, "S6", s6_config, seed=7)
+
+    assert result.floor_violations == 0  # Hard Rule 2, holds across the ratchet too
+    assert result.episode_metrics.regret_events >= 0  # ran to completion, real metrics produced

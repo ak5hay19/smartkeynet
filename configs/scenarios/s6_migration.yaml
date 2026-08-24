@@ -1,0 +1,176 @@
+# SmartKeyNet S6 (migration wave) scenario config -- PLAN.md §5:
+# "Scripted CNSA-2.0-style timeline ratchets tenant cohorts' floors in
+# phases -- tests policy robustness under non-stationarity."
+# **HELD-OUT EVAL ONLY (Hard Rule 8)**: see `train_eligible: false`
+# below -- `experiments/train.py::train()` refuses to proceed past this
+# flag. Never remove or flip that flag to make a training run "work."
+#
+# A standalone, directly-loadable config (same shape as
+# configs/default.yaml -- load via experiments/train.py's
+# load_full_config(path)). Differs from default.yaml only in
+# `scenario:`, `train_eligible:`, `migration_graph_seed:`, and
+# `migration_schedule:` below; every other section, including `pool:`,
+# is copied unchanged -- same "same deployment, not different
+# hardware" convention s3_degradation.yaml/s4_ddos.yaml already
+# established.
+#
+# What S6 actually changes (env/environment.py design decision 15,
+# 2026-08-24): `migration_graph_seed` builds a real NetworkX tenant
+# graph once (env/request_generator.py::build_tenant_graph), same
+# mechanism S4 already uses, decoupled from the episode seed so
+# `migration_schedule`'s `tenant_index` values name a fixed tenant
+# regardless of eval seed. At each scripted event's `step`, the
+# environment calls RequestGenerator's new `set_tenant_sensitivity_class`
+# method (env/request_generator.py, 2026-08-24) on the one live
+# RequestGenerator instance backing the episode's request stream --
+# entirely upstream, in the request-arrival process (Hard Rule 3):
+# nothing in env/masking.py, the reward calculation, or state
+# construction is aware S6 is active or branches on scenario/tenant
+# identity at all. A request emitted after a ratchet is a completely
+# ordinary `Request` carrying the new `sensitivity_class`;
+# env/masking.py's floor computation already reads that field fresh
+# off every incoming request every decision (confirmed by reading
+# `SmartKeyNetEnv._prepare_decision` and `env/masking.py::compute_mask`
+# before building this -- no masking.py change was needed or made,
+# since nothing in that pipeline ever cached a tenant's sensitivity
+# class for the life of an episode).
+#
+# Schedule chosen (verified against this file's own `migration_graph_seed`
+# -- real, sampled tenant attributes, not guessed, same standard as
+# s4_ddos.yaml's tenant_index verification): under `graph_seed: 0`,
+# `n_nodes: 10`, `build_tenant_graph` samples these real starting
+# sensitivity_class values (SensitivityClass, Hard Rule 4):
+#   tenant_0=S1  tenant_1=S3  tenant_2=S1  tenant_3=S2  tenant_4=S0
+#   tenant_5=S0  tenant_6=S3  tenant_7=S2  tenant_8=S2  tenant_9=S3
+# Three ratchet events, phased across a 250-step episode (matching
+# experiments/harness.py's _DEFAULT_MAX_STEPS and s3_degradation.yaml's
+# spike_start=50/spike_duration=150 convention for "well inside a
+# typical episode, not at the very edges"), each on a tenant NOT
+# already at S3 so every event is a genuine, observable escalation --
+# a small, defensible number (three, not one) chosen specifically to
+# be phased and to start from three different pre-migration classes
+# (S1, S2, S0), which is what actually exercises "policy robustness
+# under non-stationarity" (PLAN.md §5) rather than one single step
+# change:
+#   step  60: tenant_0  S1 -> S3  (a routine-business tenant absorbing
+#             a patient-record-grade workload -- straight to the
+#             highest floor, PLAN.md §6's own demo beat: "the
+#             patient-records tenant cohort's floors ratchet to
+#             hybrid-mandatory")
+#   step 130: tenant_3  S2 -> S3  (a regulated/financial tenant's data
+#             classification escalates to the highest tier)
+#   step 190: tenant_4  S0 -> S2  (a previously public/non-sensitive
+#             tenant onboarded into a regulated data flow -- the
+#             mildest of the three, included so the schedule isn't
+#             uniformly "escalate straight to S3")
+# No event targets a tenant already at S3 (tenant_1/6/9) -- ratcheting
+# an already-maximal tenant would be a silent no-op, not a real test.
+
+scenario: S6  # one of S1..S6 (PLAN.md §5); S6 is held-out eval only (Hard Rule 8)
+
+# --- Hard Rule 8 guard (experiments/train.py::train(), 2026-08-24) ---
+# `train()` reads this key directly (`.get("train_eligible", True)`) and
+# raises ValueError before any training work happens if it's False.
+# This is the ONE config in the repo that sets it -- every other
+# config's absence of this key defaults to True (unaffected). Do not
+# remove this line or set it True to "unblock" a training run against
+# this file -- that is exactly the mistake Hard Rule 8 exists to
+# prevent (training on the schedule = memorizing the timeline =
+# experiment proves nothing).
+train_eligible: false
+
+seed: 0
+
+# --- env/forecast_provider.py, forecaster/model.py (Addition A) ---
+use_foresight: ewma  # off | ewma | lstm
+
+# --- env/pool_sim.py ---
+pool:
+  capacity_bits: 1_000_000
+  initial_fill_frac: 0.5
+  bits_per_hybrid_draw: 256  # ETSI GS QKD 014 key size (256-bit); PLAN.md §4 Datasets & Provenance:
+                              # "ETSI GS QKD 014 gives key sizes (256-bit)" -- Hard Rule 4, no invented number
+
+# --- env/masking.py (Hard Rule 2, 4, 5) ---
+key_lifetime:
+  max_key_age_steps: 500  # SP 800-57-derived cap L; forced rekey at/above this (Addition C)
+
+# --- env/environment.py reward (PLAN.md §4; Hard Rule 1 -- no security term, ever) ---
+reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_fr: 0.1
+  w_qkd: 1.0
+  r_starve: 10.0
+  c_rekey_base: 1.0
+  c_rekey_load_beta: 1.0
+
+# --- env/request_generator.py::build_tenant_graph (structural node count for S6's real graph) ---
+tenant_graph:
+  n_nodes: 10  # matches every other config's tenant_graph.n_nodes
+
+# --- env/request_generator.py random_request_generator's optional load-spike diagnostic (unrelated to S6
+# -- and inert under S6 anyway, since S6 doesn't use random_request_generator at all -- left present only
+# so this file has the same complete key set as every other scenario config) ---
+load_spike:
+  enabled: false
+  period_steps: 500
+  spike_duration_steps: 20
+  spike_rate_multiplier: 3.0
+  low_rate_multiplier: 0.3
+
+# --- env/environment.py S6 dispatch (Hard Rule 3, 4; design decision 15, 2026-08-24) ---
+# Required only when scenario: S6 (SmartKeyNetEnv.__init__ reads this key directly and raises KeyError
+# if it's missing under S6, same fail-fast convention as ddos.graph_seed under S4).
+migration_graph_seed: 0  # dedicated seed for build_tenant_graph -- deliberately decoupled from the episode
+                           # seed above, so which tenant migration_schedule's tenant_index entries refer to
+                           # (and each tenant's pre-migration sensitivity_class) is a fixed structural fact
+                           # of this config, not something that reshuffles across eval seeds -- same
+                           # reasoning as ddos.graph_seed under S4.
+
+# migration_schedule is already a top-level key in every config (configs/default.yaml: `[]`) -- S1-S4
+# ignore it unconditionally (env/environment.py only ever populates self._migration_schedule from it under
+# scenario: S6). This file is the one that actually populates it: a small, explicit list of
+# {step, tenant_index, new_sensitivity_class} entries -- scripted and exogenous (Hard Rule 3), never
+# generative or seed-varying. See this file's header comment for the full reasoning behind exactly these
+# three events.
+migration_schedule:
+  - step: 60
+    tenant_index: 0
+    new_sensitivity_class: 3  # S1 -> S3
+  - step: 130
+    tenant_index: 3
+    new_sensitivity_class: 3  # S2 -> S3
+  - step: 190
+    tenant_index: 4
+    new_sensitivity_class: 2  # S0 -> S2
+
+# --- agents/dqn.py (unchanged from default.yaml -- copied for a self-contained config file; irrelevant
+# to this scenario since train_eligible: false above means this file is never used for training) ---
+dqn:
+  gamma: 0.99
+  lr: 0.001
+  batch_size: 64
+  target_update_every: 1000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 12_500
+
+# --- experiments/harness.py, agents/baselines.py ---
+baselines:
+  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+# --- attack/steering_trace.py (PLAN.md §5 S5) ---
+steering_attack:
+  doses: [0.0, 0.25, 0.5, 0.75, 1.0]
+  duration_steps: 1000
+
+# --- experiments/train.py -- present only for key-set completeness; train_eligible: false above means
+# train() raises before this block is ever read for a real campaign against this file. ---
+training:
+  total_steps: 25_000
+  seed: 0
+  eval_every: 2_500
+  eval_seed: 999
+  eval_max_steps: 250
+  checkpoint_path: checkpoints/dqn_s6.pt

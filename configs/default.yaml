@@ -92,7 +92,17 @@ steering_attack:
   duration_steps: 1000
 
 # --- env/environment.py S6 migration wave (Hard Rule 3, 8 -- scripted, exogenous, held-out eval only) ---
-migration_schedule: []  # list of {step: int, tenant_cohort: str, new_floor: str} entries
+# Real dispatch since 2026-08-24 (env/environment.py design decision 15) -- only ever populated/consumed
+# under scenario: S6 (see configs/scenarios/s6_migration.yaml, the one config that sets it and also sets
+# train_eligible: false, the Hard Rule 8 guard experiments/train.py::train() checks). `[]` here (and in
+# every other scenario config) is not a placeholder anymore -- it's the correct, load-bearing value for
+# every scenario but S6. Entries are {step: int, tenant_index: int, new_sensitivity_class: int} -- this
+# superseded an earlier, never-implemented {tenant_cohort: str, new_floor: str} phrasing (this key existed
+# before the mechanism that reads it did); the real, shipped schema names the request-generator-side field
+# that actually changes (a tenant's sensitivity_class), not the floor itself -- the floor is never touched
+# directly (env/masking.py is unmodified), it only responds to the changed sensitivity_class the way it
+# already responds to any other request.
+migration_schedule: []
 
 # --- experiments/train.py ---
 # S1-only overfit-on-purpose training campaign (PLAN.md §10 step 5).

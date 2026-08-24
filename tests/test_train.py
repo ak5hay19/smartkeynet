@@ -140,6 +140,53 @@ def test_greedy_policy_is_deterministic_unlike_stochastic_training_act():
     assert len(stochastic_actions) > 1  # genuinely stochastic under epsilon=1, unlike the greedy wrapper
 
 
+# ---------------------------------------------------------------------------
+# Hard Rule 8 guard (2026-08-24): "train on stationary scenarios; the
+# migration-wave scenario is held-out evaluation only." -- see
+# experiments/train.py::train()'s own comment for the full reasoning.
+# ---------------------------------------------------------------------------
+
+
+def test_hard_rule_8_train_refuses_the_real_committed_s6_config():
+    """The single most important test this session produces (per
+    instruction): attempting to train on the real, committed
+    `configs/scenarios/s6_migration.yaml` must fail loudly and
+    explicitly, not silently proceed. Must raise before any real
+    training work happens -- this test would otherwise be slow if it
+    didn't."""
+    s6_config = load_full_config("configs/scenarios/s6_migration.yaml")
+    assert s6_config["train_eligible"] is False  # the guard's own precondition, not assumed
+
+    with pytest.raises(ValueError, match="train_eligible"):
+        train(s6_config, training_overrides={"total_steps": 100, "eval_every": 50, "eval_max_steps": 10})
+
+
+def test_hard_rule_8_guard_is_keyed_on_the_flag_not_a_hardcoded_scenario_string():
+    """The guard must fire off the `train_eligible` flag itself, not a
+    string match on `scenario == "S6"` -- so it stays correct even if a
+    config sets `train_eligible: false` for some other reason/scenario
+    in the future. A synthetic config makes this explicit."""
+    full_config = load_full_config()
+    full_config = {**full_config, "scenario": "S1", "train_eligible": False}
+
+    with pytest.raises(ValueError, match="train_eligible"):
+        train(full_config, training_overrides={"total_steps": 100, "eval_every": 50, "eval_max_steps": 10})
+
+
+def test_hard_rule_8_guard_is_a_no_op_for_every_pre_existing_config():
+    """Every config that doesn't set `train_eligible` (every one before
+    this session) must be completely unaffected -- `.get(..., True)`
+    defaults to eligible, not a new opt-in requirement."""
+    for path in (
+        "configs/default.yaml",
+        "configs/scenarios/s2_hndl.yaml",
+        "configs/scenarios/s3_degradation.yaml",
+        "configs/scenarios/s4_ddos.yaml",
+    ):
+        config = load_full_config(path)
+        assert config.get("train_eligible", True) is True
+
+
 def test_greedy_policy_never_mutates_agent_act_call_counter():
     """`GreedyDQNPolicy` must not burn through the agent's training
     epsilon-decay budget -- it never calls `agent.act()`, so

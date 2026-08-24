@@ -120,6 +120,29 @@ def train(
     defaults.
     """
     full_config = full_config if full_config is not None else load_full_config()
+
+    # Hard Rule 8 guard (2026-08-24): "train on stationary scenarios;
+    # the migration-wave scenario is held-out evaluation only." A
+    # config-level `train_eligible` flag (default True -- every
+    # existing config is silently unaffected) is checked before any
+    # training work happens, not merely documented -- `configs/
+    # scenarios/s6_migration.yaml` is the one config that sets this
+    # `False`. Deliberately keyed on the flag itself, not on a hardcoded
+    # `scenario == "S6"` string check: this stays correct even if a
+    # future session generalizes this file's current hardcoded
+    # `scenario: "S1"` override below (separately flagged technical
+    # debt, not fixed this session) to thread `full_config["scenario"]`
+    # through -- that fix could otherwise silently defeat a
+    # string-keyed guard without anyone noticing.
+    if not full_config.get("train_eligible", True):
+        raise ValueError(
+            f"refusing to train: scenario {full_config.get('scenario')!r} has "
+            "train_eligible: false (Hard Rule 8 -- the migration-wave scenario is "
+            "held-out evaluation only; training on its schedule would mean "
+            "memorizing the timeline, proving nothing). Use experiments/harness.py's "
+            "run_scenario/run_grid to evaluate a policy against it instead."
+        )
+
     training_cfg = {**full_config["training"], **(training_overrides or {})}
 
     # The one place has_forecast is derived from -- config-time, never
