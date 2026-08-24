@@ -1,15 +1,20 @@
 """
 experiments/train.py
 
-Real training campaign for `agents.dqn.DQNAgent` on S1 -- overfit S1 on
-purpose to prove the training loop works, per PLAN.md §10 step 5. Owned
-by Person C (split.md §1).
+Real training campaign for `agents.dqn.DQNAgent`, per PLAN.md §10 step
+5. Owned by Person C (split.md §1).
 
-This is a genuine checkpoint toward split.md's Gate W3 ("DQN beats the
-tuned threshold baseline on S1 and S3"), not the gate itself: S3
-scenario dispatch isn't wired into `env/environment.py` yet (still
-S1-only -- see PROGRESS.md), so everything here is S1-only. Attempting
-the real gate is separate future work once S2-S4 dispatch exists.
+`train()`'s `scenario` parameter (2026-08-24, defaulting to `"S1"`)
+follows `experiments/harness.py`'s `run_scenario`/`run_grid`
+convention -- see `train()`'s own docstring. Before this, `train()`
+hardcoded `scenario: "S1"` regardless of what config it was handed,
+which is what made the real Gate W3 S3 attempt (SESSION_LOG.md
+2026-08-24) have to reimplement this module's training loop in a
+throwaway scratchpad script rather than calling `train()` directly;
+that workaround is no longer necessary for any future multi-scenario
+training campaign. `evaluate_against_baseline` below is unchanged and
+still evaluates against S1 only -- out of this session's scope (see
+PROGRESS.md/SESSION_LOG.md for the fix's exact boundaries).
 
 Hard Rule 1 (no security term in the reward, ever): this module trains
 against exactly the reward `env/environment.py` computes via the
@@ -105,13 +110,30 @@ class TrainingRecord:
 def train(
     full_config: dict[str, Any] | None = None,
     training_overrides: dict[str, Any] | None = None,
+    scenario: str = "S1",
 ) -> tuple[DQNAgent, TrainingRecord]:
-    """Run one continuous S1 training episode (the env has no natural
-    terminal state -- see env/environment.py -- so training never
-    needs to reset mid-run) for `training.total_steps` steps,
-    `observe()`+`learn()` every step, with a periodic greedy-mode
-    evaluation snapshot every `training.eval_every` steps. Saves a
-    final checkpoint via `DQNAgent.save`.
+    """Run one continuous training episode against `scenario` (the env
+    has no natural terminal state -- see env/environment.py -- so
+    training never needs to reset mid-run) for `training.total_steps`
+    steps, `observe()`+`learn()` every step, with a periodic
+    greedy-mode evaluation snapshot (also run against `scenario`) every
+    `training.eval_every` steps. Saves a final checkpoint via
+    `DQNAgent.save`.
+
+    `scenario` is a real, explicit parameter -- not read from
+    `full_config["scenario"]` -- matching `experiments/harness.py`'s
+    `run_scenario`/`run_grid` convention exactly (`scenario` is threaded
+    into the env config, overriding whatever `full_config` itself says,
+    so the same `full_config` can in principle be pointed at different
+    scenarios by varying this argument alone). Defaults to `"S1"` so
+    every pre-existing call site that doesn't pass it behaves
+    byte-for-byte identically to before this parameter existed.
+
+    The Hard Rule 8 `train_eligible` guard below is keyed on
+    `full_config["train_eligible"]`, not on this `scenario` argument --
+    see the guard's own comment for why (it must survive regardless of
+    what scenario is requested, e.g. a config that sets `train_eligible:
+    false` for a scenario other than S6 in the future).
 
     `training_overrides` shallow-merges over the real `configs/
     default.yaml`'s `training:` block (itself flat, no nested dicts) --
@@ -128,12 +150,13 @@ def train(
     # training work happens, not merely documented -- `configs/
     # scenarios/s6_migration.yaml` is the one config that sets this
     # `False`. Deliberately keyed on the flag itself, not on a hardcoded
-    # `scenario == "S6"` string check: this stays correct even if a
-    # future session generalizes this file's current hardcoded
-    # `scenario: "S1"` override below (separately flagged technical
-    # debt, not fixed this session) to thread `full_config["scenario"]`
-    # through -- that fix could otherwise silently defeat a
-    # string-keyed guard without anyone noticing.
+    # `scenario == "S6"` string check, nor on the `scenario` parameter
+    # above: this stays correct regardless of what scenario is
+    # requested (e.g. a config that sets `train_eligible: false` for
+    # some other scenario in the future) -- see this session's fix
+    # (2026-08-24, `scenario` param) that generalized `train()` past its
+    # former hardcoded `scenario: "S1"` override without touching this
+    # guard's own logic or location, per instruction.
     if not full_config.get("train_eligible", True):
         raise ValueError(
             f"refusing to train: scenario {full_config.get('scenario')!r} has "
@@ -150,7 +173,7 @@ def train(
     # agents/dqn.py's flatten_state docstring).
     has_forecast = full_config.get("use_foresight", "off") != "off"
 
-    env_config = {**full_config, "scenario": "S1", "seed": training_cfg["seed"]}
+    env_config = {**full_config, "scenario": scenario, "seed": training_cfg["seed"]}
     env = SmartKeyNetEnv(env_config)
     state, info = env.reset(seed=training_cfg["seed"])
     mask = info["action_mask"]
@@ -197,7 +220,7 @@ def train(
             reward_window = []
 
             eval_config = {**full_config, "max_steps": eval_max_steps}
-            eval_result = run_scenario(GreedyDQNPolicy(agent), "S1", eval_config, seed=eval_seed)
+            eval_result = run_scenario(GreedyDQNPolicy(agent), scenario, eval_config, seed=eval_seed)
             record.eval_snapshots.append((step, eval_result))
 
     checkpoint_path = training_cfg["checkpoint_path"]
