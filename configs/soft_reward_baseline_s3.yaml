@@ -1,0 +1,108 @@
+# SmartKeyNet soft-reward baseline agent config -- S3 (QKD degradation)
+# variant (PLAN.md §5; PROGRESS.md's "Next task" follow-up (1): a direct,
+# unmanipulated masked-DQN-vs-soft-reward-baseline comparison on S3).
+#
+# Standalone, directly-loadable (same shape as configs/soft_reward_baseline.yaml
+# and configs/scenarios/s3_degradation.yaml) -- NOT a variant loaded alongside
+# either of those files. `pool:`/`qkd_degradation:` below are copied verbatim
+# from the real, committed, recalibrated `configs/scenarios/s3_degradation.yaml`
+# (2026-08-24 Gate W3 S3 recalibration -- see that file's own header comment
+# for the full root-cause investigation/justification; NOT re-derived or
+# re-tuned here). `security_masking: false` / `soft_reward:` below are copied
+# verbatim from `configs/soft_reward_baseline.yaml`'s own S1 config (2026-08-25
+# soft-reward baseline agent session) -- this is a measurement session, not a
+# tuning session: neither this agent's reward weights nor S3's own recalibrated
+# scarcity parameters are touched here, only recombined into one config so the
+# same agent can be pointed at S3.
+
+scenario: S3  # one of S1..S6 (PLAN.md §5); S6 is held-out eval only (Hard Rule 8)
+
+seed: 0
+
+use_foresight: ewma
+
+# --- env/pool_sim.py -- identical to configs/scenarios/s3_degradation.yaml ---
+pool:
+  capacity_bits: 20_000
+  initial_fill_frac: 0.5
+  bits_per_hybrid_draw: 256
+
+# --- env/masking.py -- identical to configs/soft_reward_baseline.yaml/s3_degradation.yaml ---
+key_lifetime:
+  max_key_age_steps: 500
+
+# env/environment.py's SmartKeyNetEnv.__init__ reads config["reward"]
+# unconditionally to compute its OWN (masked-agent-style, Hard-Rule-1-clean)
+# reward every step, regardless of which agent is actually training -- see
+# configs/soft_reward_baseline.yaml's own comment for the full explanation.
+# Never read by this agent's own training loop or reward function.
+reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_fr: 0.1
+  w_qkd: 1.0
+  r_starve: 10.0
+  c_rekey_base: 1.0
+  c_rekey_load_beta: 1.0
+
+# --- env/environment.py design decision 16 (2026-08-25) ---
+# The Noetzold-style reproduction's defining property: "no action
+# masking -- any action is always available." Identical to
+# configs/soft_reward_baseline.yaml's own S1 config.
+security_masking: false
+
+# --- env/request_generator.py -- identical to s3_degradation.yaml ---
+tenant_graph:
+  n_nodes: 10
+
+load_spike:
+  enabled: false
+  period_steps: 500
+  spike_duration_steps: 20
+  spike_rate_multiplier: 3.0
+  low_rate_multiplier: 0.3
+
+# --- env/pool_sim.py S3 dispatch, via env/environment.py -- identical to
+# the real, committed configs/scenarios/s3_degradation.yaml (2026-08-24
+# recalibration). Required only under scenario: S3. ---
+qkd_degradation:
+  spike_start: 50
+  spike_duration: 150
+  spike_magnitude: 0.6
+  spike_skr_multiplier: 0.0
+
+# S6-only key, present for key-set completeness (scenario: S3 above never reads it).
+migration_schedule: []
+
+# --- agents/dqn.py -- byte-for-byte identical to configs/soft_reward_baseline.yaml's own dqn: block. ---
+dqn:
+  gamma: 0.99
+  lr: 0.001
+  batch_size: 64
+  target_update_every: 1000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 12_500
+
+baselines:
+  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+# --- agents/soft_reward_baseline.py's own reward weights -- identical to
+# configs/soft_reward_baseline.yaml's own S1 config (not re-tuned for S3;
+# this is a measurement session). ---
+soft_reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_sec: 1.0
+
+# --- experiments/train.py::train_soft_reward_baseline ---
+# Same shape/sizing convention as configs/soft_reward_baseline.yaml's own S1
+# training: block; separate checkpoint_path (S3-specific) so this run's
+# saved weights never collide with the S1 checkpoint.
+training:
+  total_steps: 25_000
+  seed: 0
+  eval_every: 2_500
+  eval_seed: 999
+  eval_max_steps: 250
+  checkpoint_path: checkpoints/soft_reward_baseline_s3.pt

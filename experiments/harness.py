@@ -274,6 +274,26 @@ class MultiSeedEvalResult:
     always 0, for every seed; summing (rather than meaning) makes a
     single non-zero seed impossible to average away into a
     reassuring-looking small number."""
+    below_floor_rate_mean: float
+    below_floor_rate_std: float
+    """2026-08-25 addition (masked-DQN-vs-soft-reward-baseline S3
+    comparison session): `floor_violations / max_steps` per seed, then
+    mean/std across seeds -- a RATE (PLAN.md's paper-draft "below-floor
+    service rate", equation 4's numerator over its denominator), not
+    the raw summed count `floor_violations_total` already reports.
+    `max_steps` is read the same way `run_scenario` itself resolves it
+    (`config.get("max_steps", _DEFAULT_MAX_STEPS)`) -- exactly the
+    denominator each of this call's own `run_scenario` invocations
+    actually used, not a separately-guessed number. Meaningful for any
+    policy, masked or not: for a masked policy this is always `0.0` (the
+    same Hard Rule 2 guarantee `floor_violations_total` already
+    verifies, just rate-normalized); for a policy running under
+    `security_masking: false` (see `env/environment.py`'s design
+    decision 16), this is the direct, per-episode fraction of decisions
+    served below the floor that would have applied -- computed exactly
+    the same way `floor_violations` itself is (comparing each decision's
+    real *delivered* tier against the real floor lookup, via
+    `_delivered_tier`), never inferred from other metrics."""
 
 
 def evaluate_multi_seed(
@@ -305,6 +325,15 @@ def evaluate_multi_seed(
     regret_events = [r.episode_metrics.regret_events for r in results]
     pool_exhaustion_events = [r.pool_exhaustion_events for r in results]
 
+    # Same max_steps resolution run_scenario itself used for every one of
+    # the calls above (config.setdefault("max_steps", _DEFAULT_MAX_STEPS)
+    # happens on run_scenario's own *copy* of config, so this file's
+    # original `config` is unaffected either way -- reading it here with
+    # the identical fallback is what keeps this the true denominator, not
+    # a re-guessed one).
+    effective_max_steps = config.get("max_steps", _DEFAULT_MAX_STEPS)
+    below_floor_rates = [r.floor_violations / effective_max_steps for r in results]
+
     return MultiSeedEvalResult(
         scenario=scenario,
         eval_seeds=list(eval_seeds),
@@ -318,4 +347,6 @@ def evaluate_multi_seed(
         regret_events_mean=float(np.mean(regret_events)),
         pool_exhaustion_events_mean=float(np.mean(pool_exhaustion_events)),
         floor_violations_total=sum(r.floor_violations for r in results),
+        below_floor_rate_mean=float(np.mean(below_floor_rates)),
+        below_floor_rate_std=float(np.std(below_floor_rates)),
     )

@@ -300,6 +300,54 @@ def test_evaluate_multi_seed_rejects_empty_eval_seeds():
         evaluate_multi_seed(AlwaysPQCPolicy(), "S1", config, eval_seeds=[])
 
 
+def test_evaluate_multi_seed_below_floor_rate_is_zero_for_a_masked_policy():
+    """2026-08-25 addition: `below_floor_rate_mean`/`_std` -- the rate
+    form of `floor_violations_total` (PLAN.md's paper-draft "below-floor
+    service rate"). Every masked policy has `floor_violations == 0` at
+    every seed by construction (Hard Rule 2), so both the mean and std
+    of the per-seed rate must be exactly `0.0`."""
+    config = load_test_config(overrides={"max_steps": 50})
+    result = evaluate_multi_seed(AlwaysHybridPolicy(), "S1", config, eval_seeds=[1, 2, 3, 4])
+    assert result.below_floor_rate_mean == 0.0
+    assert result.below_floor_rate_std == 0.0
+
+
+def test_evaluate_multi_seed_below_floor_rate_matches_manual_floor_violations_over_max_steps():
+    """Direct, independent proof the rate is genuinely `floor_violations
+    / max_steps` per seed -- not inferred from `forced_rekey_ratio` or
+    any other metric. Uses `security_masking: false` (so a policy can
+    genuinely serve below a real, ratcheted-up floor -- see
+    env/environment.py's design decision 16) + a stub policy that always
+    attempts SERVE_CLASSICAL, same combination
+    tests/test_environment.py's own `security_masking` proof already
+    established."""
+    import numpy as np
+
+    class _AlwaysClassicalPolicy:
+        def act(self, state, mask):
+            return Action.SERVE_CLASSICAL
+
+    max_steps = 200
+    config = load_test_config(
+        overrides={
+            "scenario": "S2",
+            "threat_schedule": {"elevate_at_step": 50, "elevated_signal": 6.0},
+            "security_masking": False,
+            "max_steps": max_steps,
+        }
+    )
+    eval_seeds = [0, 1, 2]
+
+    result = evaluate_multi_seed(_AlwaysClassicalPolicy(), "S2", config, eval_seeds)
+
+    manual_results = [run_scenario(_AlwaysClassicalPolicy(), "S2", config, seed=s) for s in eval_seeds]
+    manual_rates = [r.floor_violations / max_steps for r in manual_results]
+
+    assert result.below_floor_rate_mean == pytest.approx(float(np.mean(manual_rates)))
+    assert result.below_floor_rate_std == pytest.approx(float(np.std(manual_rates)))
+    assert result.below_floor_rate_mean > 0.0  # genuinely exercised, not a vacuous zero-vs-zero check
+
+
 def test_evaluate_multi_seed_single_seed_matches_run_scenario_exactly():
     """A single-eval-seed call must reduce to exactly `run_scenario`'s
     own result, with zero std -- the multi-seed machinery shouldn't

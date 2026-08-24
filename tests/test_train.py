@@ -566,3 +566,63 @@ def test_train_soft_reward_baseline_respects_train_eligible_guard(tmp_path):
                 "checkpoint_path": str(tmp_path / "unused.pt"),
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# configs/soft_reward_baseline_s3.yaml (2026-08-25, masked-vs-soft-reward
+# S3 comparison session) -- the standalone S3 variant of
+# configs/soft_reward_baseline.yaml, PROGRESS.md's "Next task" follow-up
+# (1). Same standalone-config-per-scenario convention as
+# configs/scenarios/s2_hndl.yaml etc.
+# ---------------------------------------------------------------------------
+
+
+def test_soft_reward_baseline_s3_config_loads_and_constructs_a_working_env():
+    """The committed, standalone S3 config must actually be loadable and
+    runnable, not just referenced -- mirrors
+    tests/test_environment.py::test_scenario_config_files_load_and_construct_a_working_env
+    for this file, which lives in configs/ rather than configs/scenarios/
+    (matching configs/soft_reward_baseline.yaml's own location, not the
+    per-scenario subfolder)."""
+    from env.environment import SmartKeyNetEnv
+
+    config = load_full_config("configs/soft_reward_baseline_s3.yaml")
+    assert config["scenario"] == "S3"
+    assert config["security_masking"] is False
+    config["max_steps"] = 20
+
+    env = SmartKeyNetEnv(config)
+    assert env._scenario == "S3"
+    assert env._security_masking is False
+    state, info = env.reset(seed=0)
+    assert info["action_mask"].any()
+
+
+def test_train_soft_reward_baseline_s3_config_smoke_run(tmp_path):
+    """A short real training run against the committed S3 config must
+    complete without crashing (the concrete regression risk: S3's
+    smaller, recalibrated pool interacting with `security_masking: false`
+    -- e.g. a pool-exhaustion/deferral path colliding with an
+    always-legal-SERVE_CLASSICAL mask -- see env/environment.py's design
+    decision 16 for why pool/key-age feasibility rules stay enforced
+    regardless of this flag)."""
+    from experiments.train import train_soft_reward_baseline
+
+    full_config = load_full_config("configs/soft_reward_baseline_s3.yaml")
+    checkpoint_path = tmp_path / "soft_reward_s3_smoke.pt"
+
+    agent, record = train_soft_reward_baseline(
+        full_config,
+        training_overrides={
+            "total_steps": 100,
+            "eval_every": 50,
+            "eval_max_steps": 20,
+            "checkpoint_path": str(checkpoint_path),
+        },
+        scenario="S3",
+    )
+
+    assert isinstance(agent, DQNAgent)
+    assert checkpoint_path.exists()
+    assert len(record.losses) > 0
+    assert all(result.scenario == "S3" for _step, result in record.eval_snapshots)
