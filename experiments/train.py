@@ -52,11 +52,13 @@ import yaml
 
 from agents.baselines import StaticThresholdPolicy
 from agents.dqn import DQNAgent, flatten_state, load_dqn_config
+from agents.soft_reward_baseline import SoftRewardConfig, compute_soft_reward
 from env.contracts import Action, ActionMask, StateDict
 from env.environment import SmartKeyNetEnv
 from experiments.harness import ScenarioResult, run_scenario
 
 _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
+_SOFT_REWARD_CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "soft_reward_baseline.yaml"
 
 
 def load_full_config(path: str | Path | None = None) -> dict[str, Any]:
@@ -220,6 +222,123 @@ def train(
             reward_window = []
 
             eval_config = {**full_config, "max_steps": eval_max_steps}
+            eval_result = run_scenario(GreedyDQNPolicy(agent), scenario, eval_config, seed=eval_seed)
+            record.eval_snapshots.append((step, eval_result))
+
+    checkpoint_path = training_cfg["checkpoint_path"]
+    Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
+    agent.save(checkpoint_path)
+    record.checkpoint_path = checkpoint_path
+
+    return agent, record
+
+
+def train_soft_reward_baseline(
+    full_config: dict[str, Any] | None = None,
+    training_overrides: dict[str, Any] | None = None,
+    scenario: str = "S1",
+) -> tuple[DQNAgent, TrainingRecord]:
+    """`agents.soft_reward_baseline`'s training entry point -- additive,
+    does not touch `train()` above (Hard Rule 1: the masked agent's own
+    training loop must remain byte-for-byte unaffected). A parallel
+    function, not a generalization of `train()`, because the one thing
+    that genuinely differs -- which reward value gets passed to
+    `agent.observe()` -- isn't a parameterizable variation of `train()`'s
+    existing shape; `train()` is tightly coupled to using `env.step()`'s
+    own returned reward, which is exactly what this agent must NOT train
+    against (see `agents/soft_reward_baseline.py`'s module docstring).
+    Everything else is deliberately identical to `train()`'s own loop
+    (same conventions: `total_steps`/`eval_every`/checkpointing), reusing
+    `DQNAgent`/`GreedyDQNPolicy`/`run_scenario` completely unmodified --
+    see this repo's own architecture-reuse convention (`agents/dqn.py`
+    is never subclassed or modified for this agent; only the reward
+    source differs, and that source lives entirely in this function plus
+    `agents/soft_reward_baseline.py`, not in `DQNAgent` itself).
+
+    Defaults to loading `configs/soft_reward_baseline.yaml` (not
+    `configs/default.yaml`) -- that config's own `security_masking:
+    false` is what gives this agent "no action masking" at the
+    environment level (see `env/environment.py`'s design decision 16);
+    a caller who passes a `full_config` without that key gets the
+    ordinary masked-floor environment behavior instead, matching this
+    function's "trust the config" convention (same as `train()` itself
+    never re-validates `full_config["reward"]`'s contents).
+
+    `env.step()`'s own returned reward is computed every step (`SmartKeyNetEnv`
+    always computes its own internal, Hard-Rule-1-clean reward -- it has
+    no notion of which agent is training against it) but is discarded
+    here, never passed to `agent.observe()` -- `compute_soft_reward` is
+    the only reward this agent ever learns from, computed independently
+    from the pre-decision `state` and the chosen `action` alone.
+    """
+    full_config = full_config if full_config is not None else load_full_config(_SOFT_REWARD_CONFIG_PATH)
+
+    # Same Hard Rule 8 guard as train() (mirrored, not shared code --
+    # see that function's own comment for why it's keyed on the flag
+    # itself). No committed soft-reward config sets this False today, but
+    # the guard is a real, structural check, not conditional on that.
+    if not full_config.get("train_eligible", True):
+        raise ValueError(
+            f"refusing to train: scenario {full_config.get('scenario')!r} has "
+            "train_eligible: false (Hard Rule 8 -- the migration-wave scenario is "
+            "held-out evaluation only). Use experiments/harness.py's "
+            "run_scenario/run_grid to evaluate a policy against it instead."
+        )
+
+    training_cfg = {**full_config["training"], **(training_overrides or {})}
+    has_forecast = full_config.get("use_foresight", "off") != "off"
+    soft_reward_cfg = SoftRewardConfig(**full_config["soft_reward"])
+
+    env_config = {**full_config, "scenario": scenario, "seed": training_cfg["seed"]}
+    env = SmartKeyNetEnv(env_config)
+    state, info = env.reset(seed=training_cfg["seed"])
+    mask = info["action_mask"]
+
+    state_dim = flatten_state(state, has_forecast).shape[0]
+    dqn_config = load_dqn_config()
+    agent = DQNAgent(
+        state_dim=state_dim, has_forecast=has_forecast, config=dqn_config, seed=training_cfg["seed"]
+    )
+
+    total_steps = training_cfg["total_steps"]
+    eval_every = training_cfg["eval_every"]
+    eval_seed = training_cfg["eval_seed"]
+    eval_max_steps = training_cfg["eval_max_steps"]
+
+    record = TrainingRecord()
+    reward_window: list[float] = []
+
+    for step in range(1, total_steps + 1):
+        action = agent.act(state, mask)
+        soft_reward = compute_soft_reward(state, action, soft_reward_cfg)
+        next_state, _env_reward, terminated, truncated, info = env.step(action)
+        next_mask = info["action_mask"]
+
+        agent.observe(state, action, soft_reward, next_state, next_mask, terminated)
+        metrics = agent.learn()
+
+        reward_window.append(soft_reward)
+        if metrics["loss"] > 0.0:
+            record.loss_steps.append(step)
+            record.losses.append(metrics["loss"])
+
+        state, mask = next_state, next_mask
+
+        if step % eval_every == 0 or step == total_steps:
+            record.reward_window_avgs.append(sum(reward_window) / len(reward_window))
+            reward_window = []
+
+            eval_config = {**full_config, "max_steps": eval_max_steps}
+            # ScenarioResult.total_reward here is env.step()'s OWN
+            # (masked-agent-style) reward summed over the eval episode --
+            # NOT this agent's soft reward. Still genuinely useful: it's
+            # an apples-to-apples "what would the Hard-Rule-1 formula have
+            # scored this trajectory" number, and (more importantly for
+            # this agent's own purpose) ScenarioResult.floor_violations
+            # is real, direct evidence of whether this checkpoint's greedy
+            # policy actually served any request below its real floor --
+            # exactly the property this agent exists to demonstrate. See
+            # tests/test_train.py's soft-reward-baseline tests.
             eval_result = run_scenario(GreedyDQNPolicy(agent), scenario, eval_config, seed=eval_seed)
             record.eval_snapshots.append((step, eval_result))
 

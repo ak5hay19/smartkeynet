@@ -1,0 +1,116 @@
+# SmartKeyNet soft-reward baseline agent config (Noetzold-style
+# reproduction -- PLAN.md §5 S5's steering-attack target, PLAN2.md §7.5).
+#
+# This is a deliberately SEPARATE config file from configs/default.yaml,
+# not a variant loaded alongside it. The masked agent's `reward:` weights
+# and `security_masking: true` (Hard Rule 1, Hard Rule 2) must remain
+# completely untouched by this agent's own, distinct reward/masking
+# behavior -- see agents/soft_reward_baseline.py's module docstring for
+# the full Hard Rule 1 tension/resolution.
+
+scenario: S1  # same S1-only, unmanipulated comparison the masked agent's own training campaign uses first
+
+seed: 0
+
+use_foresight: ewma
+
+# --- env/pool_sim.py -- identical to configs/default.yaml's own pool: block ---
+pool:
+  capacity_bits: 1_000_000
+  initial_fill_frac: 0.5
+  bits_per_hybrid_draw: 256
+
+# --- env/masking.py -- identical to configs/default.yaml's own key_lifetime: block.
+# Still consulted for the pool-exhaustion/key-age FEASIBILITY rules even
+# with security_masking: false below (see env/environment.py design decision 16) ---
+key_lifetime:
+  max_key_age_steps: 500
+
+# env/environment.py's SmartKeyNetEnv.__init__ reads config["reward"]
+# unconditionally to compute its OWN (masked-agent-style, Hard-Rule-1-clean)
+# reward every step, regardless of which agent is actually training --
+# that computation is harmless overhead here, never wired to
+# agent.observe() by experiments/train.py::train_soft_reward_baseline
+# (which computes and uses agents.soft_reward_baseline.compute_soft_reward
+# instead -- see that module's docstring). These values are copied
+# verbatim from configs/default.yaml purely so SmartKeyNetEnv can
+# construct without a KeyError; they are never read by this agent's own
+# training loop or reward function.
+reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_fr: 0.1
+  w_qkd: 1.0
+  r_starve: 10.0
+  c_rekey_base: 1.0
+  c_rekey_load_beta: 1.0
+
+# --- env/environment.py design decision 16 (2026-08-25) ---
+# The ONE config in this repo that sets this False: the Noetzold-style
+# reproduction's defining property is "no action masking -- any action
+# is always available" (HANDOFF_C's soft-reward-baseline spec). Pool-
+# exhaustion / key-age feasibility rules still apply regardless (see
+# env/environment.py's module docstring for exactly what this does and
+# does not lift).
+security_masking: false
+
+# --- env/request_generator.py -- identical to configs/default.yaml ---
+tenant_graph:
+  n_nodes: 10
+
+load_spike:
+  enabled: false
+  period_steps: 500
+  spike_duration_steps: 20
+  spike_rate_multiplier: 3.0
+  low_rate_multiplier: 0.3
+
+# S6-only key, present for key-set completeness (scenario: S1 above never reads it).
+migration_schedule: []
+
+# --- agents/dqn.py -- byte-for-byte identical to configs/default.yaml's
+# own dqn: block. HANDOFF_C's spec: "The DQN is identical in architecture
+# -- only the reward function differs." Reusing the exact same
+# hyperparameters keeps that claim genuinely true, not just architecturally. ---
+dqn:
+  gamma: 0.99
+  lr: 0.001
+  batch_size: 64
+  target_update_every: 1000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 12_500
+
+# --- experiments/harness.py, agents/baselines.py -- unused by this
+# agent's own training loop (no StaticThresholdPolicy comparison happens
+# here), present only because SmartKeyNetEnv-adjacent tooling expects it. ---
+baselines:
+  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+# --- agents/soft_reward_baseline.py's own reward weights ---
+# HANDOFF_C spec: r = -w_lat*latency - w_en*energy + w_sec*security_score(action).
+# w_lat/w_en reuse configs/default.yaml's own reward.w_lat/w_en values so
+# the latency/energy cost SCALE is comparable across both agents -- only
+# the presence of a security term and the absence of masking are meant to
+# differ, not an arbitrarily different cost scale. w_sec is new: sized to
+# the same order of magnitude as a latency-unit cost (env/environment.py's
+# _LATENCY_UNITS range ~0.2-1.5) so the security term genuinely competes
+# with latency/energy in the trade-off this agent exists to demonstrate,
+# rather than being negligible (security always loses) or overwhelming
+# (security always wins, no trade-off to observe).
+soft_reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_sec: 1.0
+
+# --- experiments/train.py::train_soft_reward_baseline ---
+# Same shape/sizing convention as configs/default.yaml's own training:
+# block (S1-only overfit-on-purpose run); separate checkpoint_path so the
+# two agents' saved weights never collide.
+training:
+  total_steps: 25_000
+  seed: 0
+  eval_every: 2_500
+  eval_seed: 999
+  eval_max_steps: 250
+  checkpoint_path: checkpoints/soft_reward_baseline_s1.pt

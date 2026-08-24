@@ -1105,4 +1105,115 @@ def test_s6_held_out_eval_sanity_run_via_harness():
     result = run_scenario(policy, "S6", s6_config, seed=7)
 
     assert result.floor_violations == 0  # Hard Rule 2, holds across the ratchet too
+
+
+# ---------------------------------------------------------------------------
+# security_masking config flag (2026-08-25, design decision 16 --
+# soft-reward baseline agent session)
+# ---------------------------------------------------------------------------
+
+
+class _AlwaysClassicalPolicy:
+    """Test-local stub: always attempts the weakest tier regardless of
+    state/mask. Would raise `IllegalActionError` under the default
+    (`security_masking: true`) mask the instant the real floor rises
+    above SERVE_CLASSICAL -- used specifically to prove `security_masking:
+    false` genuinely lifts that restriction, not just documents it."""
+
+    def act(self, state, mask):
+        return Action.SERVE_CLASSICAL
+
+
+def test_security_masking_defaults_to_true_and_is_unaffected_by_the_keys_absence():
+    """`config.get("security_masking", True)` -- a config that doesn't
+    set this key at all (e.g. any pre-existing caller written before
+    this session) must behave byte-for-byte identically to one that sets
+    it explicitly `True`. Same S2 elevated-posture config/seed/policy,
+    every mask and reward across a full episode compared directly."""
+    base_config = load_test_config(overrides={"scenario": "S2", "threat_schedule": _S2_THREAT_SCHEDULE})
+    assert base_config["security_masking"] is True  # configs/default.yaml now sets this explicitly
+
+    config_explicit_true = {**base_config, "security_masking": True}
+    config_absent = {k: v for k, v in base_config.items() if k != "security_masking"}
+
+    def run(config: dict[str, Any]) -> tuple[list[np.ndarray], list[float]]:
+        env = SmartKeyNetEnv(config)
+        state, info = env.reset(seed=0)
+        mask = info["action_mask"]
+        masks = [mask.copy()]
+        rewards: list[float] = []
+        policy = RandomPolicy(seed=0)
+        for _ in range(200):
+            action = policy.act(state, mask)
+            state, reward, terminated, truncated, info = env.step(action)
+            mask = info["action_mask"]
+            masks.append(mask.copy())
+            rewards.append(reward)
+        return masks, rewards
+
+    masks_true, rewards_true = run(config_explicit_true)
+    masks_absent, rewards_absent = run(config_absent)
+
+    assert len(masks_true) == len(masks_absent)
+    for m1, m2 in zip(masks_true, masks_absent):
+        assert np.array_equal(m1, m2)
+    assert rewards_true == rewards_absent
+
+
+def test_security_masking_false_lets_a_policy_serve_below_the_real_floor():
+    """The core proof design decision 16 exists for: with
+    `security_masking: false`, a policy that always attempts
+    SERVE_CLASSICAL genuinely serves below a real, ratcheted-up floor
+    (Hard Rule 2's floor rule is not enforced for this config) -- while
+    the SAME scenario/config, left at the default `security_masking:
+    true`, still guarantees `floor_violations == 0` for a real masked
+    policy (`RandomPolicy`, which only ever samples from the mask).
+    Confirms `env/masking.py::compute_mask()` output itself is
+    unaffected -- only which arguments `env/environment.py` passes to it
+    differ (see that function's own unmodified test suite in
+    tests/test_masking.py, which this session left completely untouched)."""
+    base = {"scenario": "S2", "threat_schedule": _S2_THREAT_SCHEDULE, "max_steps": 200}
+
+    masked_config = load_test_config(overrides=base)
+    unmasked_config = load_test_config(overrides={**base, "security_masking": False})
+
+    masked_result = run_scenario(RandomPolicy(seed=0), "S2", masked_config, seed=0)
+    assert masked_result.floor_violations == 0
+
+    unmasked_result = run_scenario(_AlwaysClassicalPolicy(), "S2", unmasked_config, seed=0)
+    assert unmasked_result.floor_violations > 0
+
+
+def test_security_masking_false_still_gates_serve_hybrid_on_pool_and_reuse_on_key_age():
+    """Physical/protocol feasibility rules are NOT part of what
+    `security_masking` lifts (design decision 16): a scarce pool still
+    forces SERVE_HYBRID illegal, and a cold-start session (key_age ==
+    max_key_age, see `_prepare_decision`'s session-creation default)
+    still forces REUSE illegal, even with `security_masking: false`."""
+    scarce_config = load_test_config(overrides={"security_masking": False, "pool": _SCARCITY_POOL})
+    scarce_env = SmartKeyNetEnv(scarce_config)
+    state, info = scarce_env.reset(seed=0)
+    mask = info["action_mask"]
+
+    # The actual lifted rule, sanity-checked: both non-hybrid tiers are
+    # legal regardless of the real floor.
+    assert bool(mask[Action.SERVE_CLASSICAL])
+    assert bool(mask[Action.SERVE_PQC])
+
+    # The NOT-lifted rules, cross-checked against real env state rather
+    # than a hardcoded expectation:
+    pool_can_draw = scarce_env._pool_sim.can_draw(scarce_env._bits_per_hybrid_draw)
+    assert bool(mask[Action.SERVE_HYBRID]) == pool_can_draw
+    assert not bool(mask[Action.REUSE])  # cold-start session: key_age == max_key_age
+
+
+def test_security_masking_false_does_not_crash_a_full_random_valid_episode():
+    """A full episode driven by a policy that samples uniformly from
+    whatever the (floor-free) mask allows must run to completion without
+    ever hitting `IllegalActionError` or a simulator-level crash (e.g.
+    `PoolExhaustedError` from `_apply_action`/`pool_sim.draw()`) -- the
+    concrete regression risk design decision 16's docstring flags."""
+    config = load_test_config(overrides={"security_masking": False, "max_steps": 300})
+    result = run_scenario(RandomPolicy(seed=0), "S1", config, seed=0)
+    assert result.episode_metrics.regret_events >= 0  # ran to completion; no crash
     assert result.episode_metrics.regret_events >= 0  # ran to completion, real metrics produced

@@ -239,6 +239,40 @@ summarized here for anyone reading the code cold):
     `experiments/harness.py`'s `run_scenario`/`run_grid` are
     legitimately meant to run any policy against any scenario,
     including S6, for held-out evaluation.
+16. **`security_masking` config flag (2026-08-25, soft-reward baseline
+    agent session)**: added, flagged, and signed off on before being
+    built (see SESSION_LOG.md's 2026-08-25 entry) -- this session found
+    that `step()`'s `IllegalActionError` (below) enforces the mask
+    unconditionally, at the environment boundary, regardless of which
+    agent is calling. This means `agents/soft_reward_baseline.py`'s
+    Noetzold-style reproduction ("no action masking -- any action is
+    always available") could NOT be achieved purely by that agent's own
+    action-selection code ignoring the mask, the way its reward function
+    could be made to differ purely by that agent's own code -- a genuine
+    surprise this file's own "do not touch without flagging" convention
+    exists to catch. `config["security_masking"]` (default `True` --
+    every pre-existing config/caller is silently unaffected, proven by
+    regression test) is a generic, documented capability, same shape as
+    `use_foresight` -- not a branch on agent identity (Hard Rule 3).
+    When `False`, `_prepare_decision` calls the *same*, unmodified
+    `env/masking.py::compute_mask()` with `floor=Action.SERVE_CLASSICAL`
+    and `current_key_type=None` instead of the real floor/session key
+    type -- this makes the floor-based legality rule and the
+    REUSE-below-floor rule both no-ops (every tier clears a floor of
+    SERVE_CLASSICAL), while `pool_can_draw`/`key_age`/`max_key_age` are
+    passed through unchanged, so the pool-exhaustion and key-age-cap
+    feasibility rules still apply -- those are physical/protocol
+    constraints (Hard Rule 9's deferral semantics, the SP 800-57 age
+    cap), not the security-floor restriction this flag targets, and
+    lifting them too would crash `pool_sim.draw()` or contradict Hard
+    Rule 9. The real floor (from the real `PolicyTable`) is still what
+    `state["policy_floor"]`/`self._current_floor` carry either way, so
+    REKEY_NOW still resolves to at least that floor's tier (a property
+    of what REKEY_NOW *means* via `_resulting_key_type`, not a masking
+    rule) and the soft-reward agent's own reward function can still
+    tell, after the fact, whether a decision landed below the floor it
+    bypassed. Only `configs/soft_reward_baseline.yaml` sets this
+    `False`. Zero `env/masking.py` changes.
 ---------------------------------------------------------------------
 """
 
@@ -401,6 +435,28 @@ class SmartKeyNetEnv(gym.Env):
         self._max_key_age = float(config["key_lifetime"]["max_key_age_steps"])
         self._reward_cfg = config["reward"]
         self._use_foresight = config.get("use_foresight", "off")
+        # 2026-08-25 addition (soft-reward baseline agent session):
+        # `security_masking` (default True -- every pre-existing config/
+        # caller is silently unaffected) controls whether `_prepare_decision`
+        # builds this episode's `ActionMask` against the real policy-table
+        # floor, or against a floor-free variant (see `_prepare_decision`'s
+        # own comment for exactly what "floor-free" means and why it's a
+        # parameterization of the *existing*, unmodified `compute_mask()`
+        # rather than a masking.py change). This is a generic, documented,
+        # config-driven capability -- not a branch on which *agent* is
+        # running (Hard Rule 3) -- exactly the same shape as `use_foresight`
+        # above. Only `configs/soft_reward_baseline.yaml` sets this `False`;
+        # it exists because `agents/soft_reward_baseline.py`'s Noetzold-style
+        # reproduction needs "any action always available" to be genuinely
+        # true at the environment boundary, not just in how an agent
+        # chooses among an already-legal set -- `step()` raises
+        # `IllegalActionError` on any action outside the current mask
+        # regardless of which agent is calling, so the agent's own
+        # action-selection code cannot achieve this alone. See
+        # SESSION_LOG.md's 2026-08-25 entry for the full investigation that
+        # led here (this was flagged and signed off before being built, per
+        # this file's own "do not touch without flagging first" convention).
+        self._security_masking = bool(config.get("security_masking", True))
         self._seed = config.get("seed")
         self._max_steps = config.get("max_steps")
         self._load_spike_cfg = self._build_load_spike_cfg(config.get("load_spike"))
@@ -853,13 +909,34 @@ class SmartKeyNetEnv(gym.Env):
 
         pool_can_draw_hybrid = self._pool_sim.can_draw(self._bits_per_hybrid_draw)
         reuse_masked_due_to_age = session.key_age >= self._max_key_age
+        # `security_masking` (design decision, 2026-08-25): when False,
+        # the mask is built as if `floor` were always SERVE_CLASSICAL (the
+        # lowest tier -- every action's own tier clears it, so
+        # `compute_mask`'s floor rule becomes a no-op) and with
+        # `current_key_type=None` (so the REUSE-below-floor rule, gated on
+        # `current_key_type is not None`, is also a no-op). `floor` itself
+        # (the real one, from the real `PolicyTable`) is untouched below --
+        # it still drives `state["policy_floor"]` and `self._current_floor`
+        # (used by `_apply_action`/`_resulting_key_type`) exactly as before,
+        # so REKEY_NOW still resolves to at least the real floor's tier
+        # (that resolution is a property of what REKEY_NOW *means*, not a
+        # masking rule) and the soft-reward agent's own reward function can
+        # still compare a decision against the real floor it bypassed.
+        # `pool_can_draw`/`key_age`/`max_key_age` are passed through
+        # unchanged either way -- these are physical/protocol feasibility
+        # constraints (pool exhaustion, the SP 800-57 key-age cap), not the
+        # security-floor restriction this flag targets, and lifting them
+        # too would crash `_apply_action`/`pool_sim.draw()` or contradict
+        # Hard Rule 9's deferral semantics. See `env/environment.py`'s
+        # `__init__` and SESSION_LOG.md's 2026-08-25 entry for the full
+        # reasoning and the investigation that led here.
         mask = compute_mask(
             request=request,
-            floor=floor,
+            floor=floor if self._security_masking else Action.SERVE_CLASSICAL,
             key_age=session.key_age,
             max_key_age=self._max_key_age,
             pool_can_draw=pool_can_draw_hybrid,
-            current_key_type=session.key_type,
+            current_key_type=session.key_type if self._security_masking else None,
         )
 
         # Masking gap #1 (discovered via testing, not anticipated by

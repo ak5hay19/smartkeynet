@@ -23,6 +23,15 @@ pool:
 key_lifetime:
   max_key_age_steps: 500  # SP 800-57-derived cap L; forced rekey at/above this (Addition C)
 
+# --- env/environment.py (design decision 16, 2026-08-25) ---
+# True everywhere except configs/soft_reward_baseline.yaml: the security
+# floor (Hard Rule 2) is enforced by env/masking.py::compute_mask() as
+# normal. False there only -- the Noetzold-style soft-reward baseline
+# agent's defining property is that no floor is enforced at all (pool
+# exhaustion / key-age feasibility rules still apply regardless -- see
+# env/environment.py's module docstring, design decision 16).
+security_masking: true
+
 # --- env/environment.py reward (PLAN.md §4; Hard Rule 1 -- no security term, ever) ---
 reward:
   w_lat: 1.0

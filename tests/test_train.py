@@ -400,3 +400,169 @@ def test_greedy_policy_never_mutates_agent_act_call_counter():
     for _ in range(10):
         greedy_policy.act(state, mask)
     assert agent._act_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# train_soft_reward_baseline (2026-08-25) -- agents/soft_reward_baseline.py's
+# training entry point. Additive: none of the tests above this point are
+# touched or affected.
+# ---------------------------------------------------------------------------
+
+
+def test_train_soft_reward_baseline_smoke_run_produces_checkpoint_and_tracks_metrics(tmp_path):
+    """Mirrors test_train_smoke_run_produces_checkpoint_and_tracks_metrics
+    above, for the soft-reward baseline's own training entry point."""
+    from experiments.train import train_soft_reward_baseline
+
+    full_config = load_full_config("configs/soft_reward_baseline.yaml")
+    checkpoint_path = tmp_path / "soft_reward_smoke.pt"
+
+    overrides = {
+        "total_steps": 100,
+        "eval_every": 50,
+        "eval_max_steps": 20,
+        "checkpoint_path": str(checkpoint_path),
+    }
+
+    agent, record = train_soft_reward_baseline(full_config, training_overrides=overrides)
+
+    assert isinstance(agent, DQNAgent)
+    assert checkpoint_path.exists()
+    assert record.checkpoint_path == str(checkpoint_path)
+    assert len(record.losses) > 0
+    assert len(record.reward_window_avgs) == 2
+    assert len(record.eval_snapshots) == 2
+
+
+def test_train_soft_reward_baseline_uses_security_masking_false_environment(monkeypatch, tmp_path):
+    """Direct dispatch proof: the environment this function constructs
+    must genuinely have `security_masking: False` wired through, not
+    silently ignored -- checked via the real `SmartKeyNetEnv.__init__`,
+    not assumed from the config file's own contents."""
+    from env.environment import SmartKeyNetEnv
+    from experiments.train import train_soft_reward_baseline
+
+    seen_configs: list[dict[str, Any]] = []
+    orig_init = SmartKeyNetEnv.__init__
+
+    def capturing_init(self, config, *args, **kwargs):
+        seen_configs.append(config)
+        return orig_init(self, config, *args, **kwargs)
+
+    monkeypatch.setattr(SmartKeyNetEnv, "__init__", capturing_init)
+
+    full_config = load_full_config("configs/soft_reward_baseline.yaml")
+    train_soft_reward_baseline(
+        full_config,
+        training_overrides={
+            "total_steps": 30,
+            "eval_every": 30,
+            "eval_max_steps": 10,
+            "checkpoint_path": str(tmp_path / "masking_check.pt"),
+        },
+    )
+
+    # Two SmartKeyNetEnv constructions expected: the training env, plus
+    # one per eval snapshot (run_scenario constructs its own).
+    assert len(seen_configs) >= 2
+    assert all(cfg["security_masking"] is False for cfg in seen_configs)
+
+
+def test_train_soft_reward_baseline_does_not_use_env_steps_own_reward(monkeypatch, tmp_path):
+    """Hard Rule 1 boundary proof at the training-loop level: whatever
+    `env.step()` itself returns as `reward` must never reach
+    `agent.observe()` for this agent -- only `compute_soft_reward`'s
+    independently-computed value does. Verified by making `env.step()`
+    return an impossible, obviously-wrong reward and confirming the
+    replay buffer's stored transitions never contain it."""
+    from env.environment import SmartKeyNetEnv
+    from experiments.train import train_soft_reward_baseline
+
+    poison_value = -999_999.0
+    orig_step = SmartKeyNetEnv.step
+
+    def poisoning_step(self, action):
+        state, _reward, terminated, truncated, info = orig_step(self, action)
+        return state, poison_value, terminated, truncated, info
+
+    monkeypatch.setattr(SmartKeyNetEnv, "step", poisoning_step)
+
+    full_config = load_full_config("configs/soft_reward_baseline.yaml")
+    agent, _record = train_soft_reward_baseline(
+        full_config,
+        training_overrides={
+            "total_steps": 80,
+            "eval_every": 80,
+            "eval_max_steps": 10,
+            "checkpoint_path": str(tmp_path / "poison_check.pt"),
+        },
+    )
+
+    stored_rewards = [t.reward for t in agent._replay_buffer._storage]
+    assert len(stored_rewards) > 0
+    assert poison_value not in stored_rewards
+
+
+def test_train_soft_reward_baseline_trained_agent_serves_below_the_real_floor(tmp_path):
+    """The actual proof this whole agent exists to produce: a real, short
+    training run's periodic greedy-mode eval snapshots (via the
+    unmodified `experiments/harness.py::run_scenario`, same as `train()`
+    uses) must show `ScenarioResult.floor_violations > 0` for at least
+    one snapshot -- direct, measured evidence this agent's security term
+    is genuinely soft and gets traded away, not merely inferred from the
+    reward formula's shape. Also confirms (a) loss trends in a sane
+    direction (ends lower than it started, on average across the run's
+    two halves) -- both real training-run guarantees this session's
+    brief asked for, from one run."""
+    from experiments.train import train_soft_reward_baseline
+
+    full_config = load_full_config("configs/soft_reward_baseline.yaml")
+    overrides = {
+        "total_steps": 3000,
+        "eval_every": 500,
+        "eval_max_steps": 100,
+        "checkpoint_path": str(tmp_path / "soft_reward_real_run.pt"),
+    }
+
+    agent, record = train_soft_reward_baseline(full_config, training_overrides=overrides)
+
+    assert isinstance(agent, DQNAgent)
+    assert len(record.losses) > 0
+
+    any_below_floor = any(result.floor_violations > 0 for _step, result in record.eval_snapshots)
+    assert any_below_floor, (
+        "expected at least one eval snapshot with floor_violations > 0 -- "
+        "direct evidence the soft-reward agent trades security away, which "
+        "is the entire property this agent exists to demonstrate"
+    )
+
+    half = len(record.losses) // 2
+    first_half_mean = sum(record.losses[:half]) / half
+    second_half_mean = sum(record.losses[half:]) / (len(record.losses) - half)
+    assert second_half_mean < first_half_mean, (
+        f"loss did not trend down: first half mean={first_half_mean:.2f}, "
+        f"second half mean={second_half_mean:.2f}"
+    )
+
+
+def test_train_soft_reward_baseline_respects_train_eligible_guard(tmp_path):
+    """Mirrors train()'s own Hard Rule 8 guard test -- a soft-reward
+    config with train_eligible: false must still refuse to train,
+    proving the guard is shared behavior (both functions check the same
+    full_config.get("train_eligible", True) convention), not something
+    only train() enforces."""
+    from experiments.train import train_soft_reward_baseline
+
+    full_config = load_full_config("configs/soft_reward_baseline.yaml")
+    full_config = {**full_config, "train_eligible": False}
+
+    with pytest.raises(ValueError, match="train_eligible"):
+        train_soft_reward_baseline(
+            full_config,
+            training_overrides={
+                "total_steps": 10,
+                "eval_every": 10,
+                "eval_max_steps": 5,
+                "checkpoint_path": str(tmp_path / "unused.pt"),
+            },
+        )
