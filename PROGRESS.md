@@ -88,15 +88,52 @@ rate:
   full verification. **All five Table V metrics from the prior
   session's comparison stand as reported — none needed correction.**
 
-**Only now, follow-up (2) is next: the attack generator
-(`attack/trace_generator.py`) and the S5 dose-response sweep itself** —
-PLAN.md §5's last remaining scenario row, PLAN2.md §7.5's Panel 5, the
-headline steering-attack result. Both agents being compared are now real,
-and their unmanipulated baseline behavior is measured on both S1 and S3 —
-the precondition this session's own instruction named is now satisfied.
+**Follow-up (2)'s first half is now DONE (2026-08-25, later session) — the
+attack generator (`attack/trace_generator.py`) is real and tested,
+implementing the paper draft's equation 7 input-shaping attack
+(`x̃t = (1-α)xt + α·g(xt)`).** See SESSION_LOG.md's newest entry
+("adversarial trace generator (steering attack, eq. 7)") for the full
+design/testing writeup. `g(xt)` returns an all-zero window (the real floor
+of the current placeholder `[qber, load]` forecaster's benign region) —
+deliberately targeted at the CURRENT placeholder forecaster, not the future
+LSTM one; will need revisiting once that exists. Verified end-to-end
+through the real `MovingAverageForecaster`, not assumed from the formula: a
+genuinely severe `true_window=[5.0,5.0]` (mirroring how S2's own
+`elevated_signal` mechanism already reaches HIGH, since ordinary in-domain
+`[qber,load]` values are structurally capped at ELEVATED per the
+2026-08-24 posture-ceiling finding below) steady-states to HIGH posture,
+and shaping it at `alpha=1.0` steady-states to ELEVATED — a genuine
+discrete floor crossing, not just a lower number. The masking-safety
+property (this session's most important test) was verified directly with
+real numbers: for `sensitivity_class=S2`, `compute_mask()` given only the
+attacked, underestimated `SERVE_PQC` floor never legalizes `SERVE_CLASSICAL`
+(below even the wrong floor), while `SERVE_PQC` itself becomes legal under
+the attack where it wasn't under the true `SERVE_HYBRID` floor — the
+attack's real, measured effect, with the safety guarantee intact — plus a
+general, exhaustive 12-cell (4 sensitivity classes x 3 postures) sweep of
+the same property. Needed **zero changes** to `env/forecast_provider.py`,
+`env/masking.py`, or `env/environment.py` (Hard Rule 3), verified via
+`git diff --stat`. `dashboard/explain.py` was read and confirmed to already
+report a shaped/lowered posture consistently, with no changes needed.
+
+**Only now, the actual S5 dose-response sweep itself is next** — PLAN.md
+§5's last remaining scenario row, PLAN2.md §7.5's Panel 5, the headline
+steering-attack result: running both agents (masked DQN, soft-reward
+baseline) against S3 (or S5's own config, TBD that session) across eleven
+alpha values, reporting `V(π)` (below-floor service rate,
+`experiments/harness.py::MultiSeedEvalResult.below_floor_rate_mean`,
+already built) for both, with the explicit paper prediction (soft-reward
+rises, masked stays flat at zero) confirmed or honestly reported otherwise
+per Hard Rule 7. Both agents being compared are real, their unmanipulated
+baseline behavior is measured on both S1 and S3, and the attack generator
+that will drive the sweep is now real and proven correct in isolation —
+every precondition this thread has named is now satisfied. Explicitly NOT
+run yet — this session's own instruction was to build the generator only,
+not the sweep.
 
 PLAN.md §5's entire scenario table now has working, tested code behind
-every row except S5 itself (the attack/sweep above).
+every row except S5 itself (the sweep above — its input-shaping mechanism
+is now real).
 
 **One thread remains open — Thread 2's Dashboard v2** (blocked on dataset
 ingestion for its next concrete step, but has unblocked alternatives — see
@@ -546,8 +583,14 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       `forecaster/dataset.py`, `forecaster/train.py`, `LSTMForecastProvider`
       in `env/forecast_provider.py`
 - [ ] E-A foresight ablation (off / ewma / lstm on S3 + S6)
-- [ ] Steering attack — adversarial threat-trace generator (`attack/steering_trace.py`)
-      + attack run producing the split-screen result — Gate W5, headline contribution, never cut
+- [ ] Steering attack — adversarial threat-trace generator (`attack/trace_generator.py`,
+      **real and tested since 2026-08-25** — implements paper draft equation 7,
+      `x̃t = (1-α)xt + α·g(xt)`, verified end-to-end through the real forecaster
+      and masking layer, zero changes needed to `env/`; see SESSION_LOG.md's
+      newest entry and this file's `attack/` per-file row)
+      + attack run producing the split-screen result (the S5 dose-response sweep
+      itself — **still not run, next task**) — Gate W5, headline contribution,
+      never cut
 - [x] **S6 migration wave (scripted schedule, held-out eval only) — real and
       dispatched since 2026-08-24.** `config["migration_graph_seed"]`/
       `config["migration_schedule"]` (required only under `scenario: S6`)
@@ -622,7 +665,8 @@ behavioral tests, part of the green `pytest` run).
 
 | File | Status | Notes |
 |---|---|---|
-| `attack/steering_trace.py` | not started | Stub, `test_steering_trace.py` is 1 import-smoke test. |
+| `attack/trace_generator.py` | implemented+tested | **2026-08-25 (new file):** the equation-7 adversarial input-shaping generator (PLAN.md §5 S5, PLAN2.md §7.5 Panel 5). `generate_adversarial_window(true_window, alpha) -> shaped_window` implements `x̃t = (1-α)xt + α·g(xt)` exactly (`alpha` an explicit, independent per-call parameter, not config-baked, so a future dose-response sweep can call it across eleven alpha values against the same base window in one run); `g(xt) -> [0.0]*len(xt)` — a deterministic, all-zero "benign region" target chosen because zero qber / zero load are the real lowest legitimate values `env/environment.py::_threat_features_placeholder()`'s current `[qber, load]` window can take, not an arbitrary choice — deliberately targets the CURRENT placeholder `MovingAverageForecaster`, documented as needing revisiting once the real LSTM forecaster (Addition A) exists. Pure input transformation: never touches `ForecastProvider`/`env/masking.py`/`env/environment.py` — a future sweep session substitutes the shaped window for the true one before it reaches `forecaster.update()`. 23 tests in `test_trace_generator.py`: exact (not approximate) boundary equality at `alpha=0`/`alpha=1`; linearity at `alpha∈{0.25,0.5,0.75}` checked against an independently-recomputed formula in the test itself; a no-mutation/new-object check; an end-to-end attack-effectiveness proof through the real forecaster (a genuinely severe `true_window=[5.0,5.0]` — mirroring how `env/environment.py`'s own real S2 `elevated_signal` mechanism already reaches HIGH, since ordinary in-domain `[qber,load]` values are structurally capped at ELEVATED per the 2026-08-24 posture-ceiling finding in `env/forecast_provider.py`'s row — steady-states to HIGH posture at `alpha=0` and genuinely crosses down to ELEVATED at `alpha=1`, with `threat_score`/`posture_probs[HIGH]`/`posture_probs[CALM]` all moving monotonically across the full alpha grid); and the masking-safety property (this session's most important test) verified with real numbers for `sensitivity_class=S2` (`true_floor=SERVE_HYBRID`, `shaped_floor=SERVE_PQC` — `compute_mask()` given only the attacked floor never legalizes `SERVE_CLASSICAL`, while `SERVE_PQC` becomes legal under the attack where it wasn't under the true floor — the attack's real, measured effect, safety guarantee intact), plus a general, exhaustive 12-cell (4 sensitivity classes x 3 postures) sweep of the same property independent of this session's specific numbers. Zero changes to `env/forecast_provider.py`/`env/masking.py`/`env/environment.py`, verified via `git diff --stat`. See SESSION_LOG.md's newest entry for the full design reasoning and verified numbers. |
+| `attack/steering_trace.py` | not started | Stub, `test_steering_trace.py` is 1 import-smoke test — an older, PLAN.md-era file name/shape for the eventual dose-response sweep module; superseded by PLAN2.md's `attack/trace_generator.py` + `attack/run_attack.py` naming (see PLAN2.md §7.5's table). Not touched or removed this session — out of scope; the future S5 dose-response sweep session should resolve this naming duplication (most likely: build the sweep as a separate, PLAN2.md-named module and retire this stub, rather than reusing it). |
 
 ### dashboard/
 
@@ -668,7 +712,7 @@ behavioral tests, part of the green `pytest` run).
 
 ## Last verified
 
-- **Date:** 2026-08-25 (later session)
-- **Commit:** `6697df9` ("feat: soft-reward baseline agent (Noetzold-style reproduction) -- security as soft reward term, no masking, per Hard Rule 1's reference design -- 2026-08-25") — the commit this session started from; see SESSION_LOG.md for this session's own commit
-- **`pytest` pass count:** 531 passed, 1 xfailed (527 prior + 4 net new: 2 in `tests/test_harness.py` for `evaluate_multi_seed`'s new `below_floor_rate_mean`/`_std` fields, 2 in `tests/test_train.py` for `configs/soft_reward_baseline_s3.yaml`)
-- **Branch:** Confirmed `main`/`dev21` in sync at session start (`git rev-parse main dev21` both `6697df90d9766066c158873aafc0dbb2d181259e`). This session's commit (real code: `configs/soft_reward_baseline_s3.yaml` (new), `experiments/harness.py`'s `below_floor_rate_mean`/`_std` addition to `evaluate_multi_seed`/`MultiSeedEvalResult`, plus the two test files' additions — nothing else touched, confirmed via `git status`; six real, trained, gitignored checkpoints in `checkpoints/` not part of the commit) was ff-merged into `dev21` at the end — see SESSION_LOG.md for the final shared hash. Not pushed to origin this session, per instruction.
+- **Date:** 2026-08-25 (adversarial trace generator session)
+- **Commit:** `36f3b20` ("docs: explain p99_latency saturation as discrete-cost-model artifact, recommend total_reward/below_floor_rate instead -- 2026-08-25") — the commit this session started from; see SESSION_LOG.md for this session's own commit
+- **`pytest` pass count:** 554 passed, 1 xfailed (531 prior + 23 new, all in the new `tests/test_trace_generator.py`)
+- **Branch:** Confirmed `main`/`dev21` in sync at session start (`git rev-parse main dev21` both `36f3b2092be0a9f773a623972b23abcee4729f93`). This session's commit (real code: `attack/trace_generator.py` (new) + `tests/test_trace_generator.py` (new) — nothing else touched, confirmed via `git status --porcelain` and an empty `git diff --stat` on every protected env/agent file) was ff-merged into `dev21` at the end — see SESSION_LOG.md for the final shared hash. Not pushed to origin this session, per instruction.
