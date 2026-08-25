@@ -52,7 +52,34 @@ class ScenarioResult:
     `p99_latency` is coarse (4 discrete values, floor-driven moments
     are environment- not policy-determined) and doesn't discriminate
     well between policies that behave very differently on rekey
-    timing -- this is a less coarse per-policy comparison number."""
+    timing -- this is a less coarse per-policy comparison number.
+
+    2026-08-25 (diagnostic session) -- the coarseness above has an
+    exact, confirmed mechanism, root-caused directly against real
+    checkpoints (not just reasoned about): `latencies` only ever holds
+    one of 4 discrete values (`_LATENCY_UNITS`: REUSE 0.2, SERVE_CLASSICAL
+    1.0, SERVE_PQC 1.2, SERVE_HYBRID 1.5 -- SERVE_HYBRID's real, uncapped
+    per-decision cost, not a ceiling). `np.percentile(latencies, 99)`
+    uses linear interpolation; for a 250-decision episode this reads
+    index `(250-1)*0.99 = 246.51`, i.e. it interpolates between the
+    246th and 247th smallest values (0-indexed). Whenever at least
+    `250 - 246 = 4` of the 250 decisions cost SERVE_HYBRID (>=1.6% of
+    the episode), both of those values are `1.5`, so `p99_latency`
+    reports exactly `1.5000` -- not a bug, a mechanical consequence of
+    computing a percentile over a near-constant-above-threshold discrete
+    series. Verified directly across 48 real eval episodes (masked DQN
+    and soft-reward baseline, 3 training seeds x 8 eval seeds each, real
+    S3 checkpoints): every episode with a SERVE_HYBRID count >= 4/250
+    reported exactly `1.5000`; the one episode landing exactly at the
+    boundary (SERVE_HYBRID count == 3/250) reported `1.3530`, matching
+    the interpolation formula to 4 decimal places. Under S3 specifically,
+    the scarcity-driven floor makes >=1.6% SERVE_HYBRID decisions typical
+    for essentially any real trained policy, which is why this metric
+    saturates for most policy/seed cells on S3 and is a low-information
+    discriminator there -- `total_reward` and `below_floor_rate` (below,
+    on `MultiSeedEvalResult`) are both already-computed, genuinely
+    sharper alternatives for comparing policies on S3; report those
+    instead of leaning on `p99_latency` for this kind of comparison."""
 
 
 def _existing_tier(key_type_onehot: Any) -> Action | None:
@@ -263,6 +290,13 @@ class MultiSeedEvalResult:
     results: list[ScenarioResult]
     p99_latency_mean: float
     p99_latency_std: float
+    """See `ScenarioResult.p99_latency`'s 2026-08-25 docstring note for
+    the exact, confirmed saturation mechanism (a percentile-over-a-4-value
+    -discrete-series artifact, not a cap) -- averaging across eval seeds
+    here does not fix its low-information-content risk under scarcity
+    scenarios (S3): most real policies there report `1.5000` for nearly
+    every seed. Prefer `total_reward_mean`/`_std` or `below_floor_rate_mean`
+    /`_std` below when comparing policies on S3."""
     total_reward_mean: float
     total_reward_std: float
     forced_rekey_ratio_mean: float

@@ -60,7 +60,33 @@ rate:
 - **p99_latency**: close (`1.5000` vs. `1.4064`), and the previously-
   flagged non-discriminating-metric oddity reappears (5/6 policy-seed
   cells tie at exactly `1.5000`), with one genuine exception this session
-  (soft-reward seed 1: `1.2191`) — still not root-caused, flagged again.
+  (soft-reward seed 1: `1.2191`) — **root-caused 2026-08-25 (later,
+  diagnostic session) — NOT A BUG, resolved.** Reloaded all six real S3
+  checkpoints and tallied the exact per-decision `cost_action`
+  distribution across all 48 eval episodes (3 training seeds x 8 eval
+  seeds x 2 agents): `np.percentile`'s linear interpolation on a
+  250-length array reads the 246th/247th smallest values (0-indexed),
+  so `p99_latency` reports exactly `1.5000` (SERVE_HYBRID's real,
+  uncapped per-decision cost — the max of a 4-value discrete set, not a
+  ceiling) whenever >=4/250 decisions (>=1.6%) cost SERVE_HYBRID — true
+  for essentially every real policy tested on S3, since its
+  scarcity-driven floor makes that common. Verified exactly, not
+  approximately: every episode over the threshold reported `1.5000`
+  precisely; the one boundary episode (SERVE_HYBRID count == 3)
+  reported `1.3530`, matching the interpolation formula to 4 decimals —
+  this also explains the one-exception-cell mean (`1.2191`) down to the
+  last decimal (mean of that checkpoint's 8 eval-seed values, 7 at
+  `1.2000` + 1 at `1.3530`). No cap/ceiling/timeout exists anywhere in
+  the latency-computation path (`env/environment.py::_apply_action`,
+  `env/deferral_queue.py` both confirmed clean) — this is a mechanical
+  percentile-over-discrete-data artifact, not a defect, so no code fix
+  was made. `experiments/harness.py`'s `ScenarioResult.p99_latency`/
+  `MultiSeedEvalResult.p99_latency_mean`/`_std` docstrings gained the
+  full mechanism and now point to `total_reward`/`below_floor_rate` as
+  the sharper metrics for S3 comparisons. See SESSION_LOG.md's newest
+  entry ("root-cause p99_latency saturation on S3, diagnostic") for the
+  full verification. **All five Table V metrics from the prior
+  session's comparison stand as reported — none needed correction.**
 
 **Only now, follow-up (2) is next: the attack generator
 (`attack/trace_generator.py`) and the S5 dose-response sweep itself** —
