@@ -273,6 +273,29 @@ summarized here for anyone reading the code cold):
     tell, after the fact, whether a decision landed below the floor it
     bypassed. Only `configs/soft_reward_baseline.yaml` sets this
     `False`. Zero `env/masking.py` changes.
+17. **`forecast_provider_factory` constructor parameter (S5 steering-
+    attack dose-response sweep session)**: `__init__` gained an
+    optional `forecast_provider_factory` parameter, mirroring
+    `request_stream_factory` (design decision 12) exactly -- same
+    shape (`episode_seed -> T | None`, default `None`), same
+    justification (a hardcoded internal construction, `self._forecaster
+    = self._build_forecaster()`, needed to become swappable for a
+    later session that could not otherwise work), same backward-
+    compatibility guarantee (`None` reproduces `reset()`'s prior
+    forecaster-construction behavior byte-for-byte -- proven via a
+    real stashed-diff before/after comparison, not just passing tests;
+    see SESSION_LOG.md's newest entry). Unlike `request_stream_factory`,
+    this session found NO pre-existing injection point for the
+    forecaster (`_build_forecaster()` was the only construction site,
+    hardcoded to read `config["use_foresight"]` directly) -- flagged
+    before being built, per this file's own "do not touch without
+    flagging" convention, and signed off on explicitly. Exists so
+    `attack/attacking_provider.py::AttackingForecastProvider` (PLAN.md
+    §5 S5) can be substituted in place of the real forecaster for a
+    single episode without this file needing any notion that an attack
+    is happening -- a caller passes e.g. `lambda seed:
+    AttackingForecastProvider(MovingAverageForecaster(), alpha)`; no
+    other line in this file branches on which forecaster is in use.
 ---------------------------------------------------------------------
 """
 
@@ -414,6 +437,7 @@ class SmartKeyNetEnv(gym.Env):
         self,
         config: dict[str, Any],
         request_stream_factory: Callable[[int | None], Iterator[Request]] | None = None,
+        forecast_provider_factory: Callable[[int | None], ForecastProvider | None] | None = None,
     ) -> None:
         """`request_stream_factory` (design decision 12) is the one
         injection point Hard Rule 3's swap test needs: an optional
@@ -426,9 +450,31 @@ class SmartKeyNetEnv(gym.Env):
         graph-driven stream instead passes e.g. `lambda seed:
         iter(RequestGenerator(build_tenant_graph(seed=0), seed=seed))`
         -- no other line in this file branches on which generator is
-        in use."""
+        in use.
+
+        `forecast_provider_factory` (design decision 17) mirrors
+        `request_stream_factory` exactly, same shape and same
+        justification: an optional `episode_seed -> ForecastProvider |
+        None` callable, called fresh on every `reset()`. Defaults to
+        `None`, which preserves the exact prior behavior
+        (`self._build_forecaster()`, driven entirely by
+        `config["use_foresight"]`) byte-for-byte -- every existing
+        caller that constructs `SmartKeyNetEnv(config)` without this
+        argument is completely unaffected. A caller wanting a
+        wrapped/attacked forecaster instead passes e.g. `lambda seed:
+        AttackingForecastProvider(MovingAverageForecaster(), alpha)` --
+        no other line in this file branches on which forecaster is in
+        use. Flagged and signed off on before being built (a session
+        found no existing injection point for the forecaster, unlike
+        the request stream -- see SESSION_LOG.md's S5 dose-response
+        sweep entry); this is the second, narrowly-scoped instance of
+        the identical pattern design decision 12 established, for the
+        identical reason: a hardcoded internal construction needed to
+        become swappable for a later session (the steering-attack
+        sweep) that could not otherwise work without it."""
         self._config = config
         self._request_stream_factory = request_stream_factory
+        self._forecast_provider_factory = forecast_provider_factory
         self._pool_capacity = float(config["pool"]["capacity_bits"])
         self._pool_initial_fill_frac = float(config["pool"]["initial_fill_frac"])
         self._bits_per_hybrid_draw = float(config["pool"]["bits_per_hybrid_draw"])
@@ -572,7 +618,11 @@ class SmartKeyNetEnv(gym.Env):
         self._last_pool_state = self._pool_sim.reset()
         self._deferral_queue = DeferralQueue()
         self._policy_table = PolicyTable()  # fresh every episode -- sticky ratchet must not carry over
-        self._forecaster = self._build_forecaster()
+        self._forecaster = (
+            self._forecast_provider_factory(episode_seed)
+            if self._forecast_provider_factory is not None
+            else self._build_forecaster()
+        )
         self._request_generator = None
         if self._request_stream_factory is not None:
             self._request_stream = self._request_stream_factory(episode_seed)

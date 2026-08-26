@@ -1216,4 +1216,95 @@ def test_security_masking_false_does_not_crash_a_full_random_valid_episode():
     config = load_test_config(overrides={"security_masking": False, "max_steps": 300})
     result = run_scenario(RandomPolicy(seed=0), "S1", config, seed=0)
     assert result.episode_metrics.regret_events >= 0  # ran to completion; no crash
-    assert result.episode_metrics.regret_events >= 0  # ran to completion, real metrics produced
+
+
+# ---------------------------------------------------------------------------
+# forecast_provider_factory (design decision 17, S5 dose-response sweep
+# session) -- mirrors request_stream_factory's own swap-test precedent
+# above (design decision 12).
+# ---------------------------------------------------------------------------
+
+
+def test_forecast_provider_factory_none_is_byte_for_byte_identical_to_default():
+    """`forecast_provider_factory=None` (the default) must reproduce
+    `reset()`'s prior forecaster-construction behavior exactly -- same
+    full-episode trajectory as constructing `SmartKeyNetEnv` with no
+    such argument at all."""
+    from env.forecast_provider import MovingAverageForecaster
+
+    config = load_test_config(overrides={"use_foresight": "ewma", "max_steps": 100})
+
+    baseline_env = SmartKeyNetEnv(config)
+    state_a, info_a = baseline_env.reset(seed=11)
+
+    explicit_none_env = SmartKeyNetEnv(config, forecast_provider_factory=None)
+    state_b, info_b = explicit_none_env.reset(seed=11)
+
+    policy_a, policy_b = RandomPolicy(seed=5), RandomPolicy(seed=5)
+    truncated_a = truncated_b = False
+    while not truncated_a:
+        action_a = policy_a.act(state_a, info_a["action_mask"])
+        action_b = policy_b.act(state_b, info_b["action_mask"])
+        assert action_a == action_b
+        state_a, reward_a, _, truncated_a, info_a = baseline_env.step(action_a)
+        state_b, reward_b, _, truncated_b, info_b = explicit_none_env.step(action_b)
+        assert reward_a == reward_b
+        assert state_a == state_b
+
+    assert isinstance(baseline_env._forecaster, MovingAverageForecaster)
+    assert isinstance(explicit_none_env._forecaster, MovingAverageForecaster)
+    assert baseline_env._forecaster.get_threat_forecast() == explicit_none_env._forecaster.get_threat_forecast()
+
+
+def test_forecast_provider_factory_swap_is_a_genuine_drop_in():
+    """Hard Rule 3's swap test, for the forecaster this time: a caller
+    supplying a `forecast_provider_factory` gets a genuinely different
+    forecaster instance actually driving the episode's floor -- proof
+    it's load-bearing, not silently ignored -- while no other line in
+    this file needs to know or care which provider is in use."""
+
+    class _ConstantHighForecastProvider:
+        """A trivial stand-in ForecastProvider (not MovingAverageForecaster) --
+        always reports HIGH posture, regardless of what it's updated with."""
+
+        def update(self, observation):
+            pass
+
+        def get_threat_forecast(self):
+            from env.contracts import ThreatForecast
+
+            return ThreatForecast(threat_score=1.0, posture_probs=[0.0, 0.0, 1.0], horizon_scores=[1.0] * 5)
+
+        def get_pool_forecast(self):
+            from env.contracts import PoolForecast
+
+            return PoolForecast(pool_level_hat=[0.0] * 3, skr_mean_hat=[0.0] * 3, hybrid_demand_hat=[0.0] * 3)
+
+    config = load_test_config(overrides={"use_foresight": "ewma", "max_steps": 20})
+    env = SmartKeyNetEnv(config, forecast_provider_factory=lambda seed: _ConstantHighForecastProvider())
+    state, info = env.reset(seed=0)
+
+    assert isinstance(env._forecaster, _ConstantHighForecastProvider)
+    # HIGH posture, every sensitivity class -> floor is at least SERVE_PQC
+    # (S0/S1) or SERVE_HYBRID (S2/S3) from the very first decision --
+    # never CALM's SERVE_CLASSICAL floor, which a request_generator-driven
+    # S0 request would otherwise get on a fresh episode.
+    assert state["policy_floor"] >= int(Action.SERVE_PQC)
+
+
+def test_forecast_provider_factory_receives_episode_seed():
+    """The factory is called with the same `episode_seed` `reset()`
+    itself resolves (`seed` argument if given, else `config["seed"]`) --
+    mirroring `request_stream_factory`'s own contract exactly."""
+    seen_seeds: list[int | None] = []
+
+    def factory(episode_seed):
+        seen_seeds.append(episode_seed)
+        return None  # use_foresight handling: env tolerates a None forecaster (== "off" behavior)
+
+    config = load_test_config(overrides={"use_foresight": "off", "max_steps": 10})
+    env = SmartKeyNetEnv(config, forecast_provider_factory=factory)
+    env.reset(seed=77)
+    env.reset(seed=88)
+
+    assert seen_seeds == [77, 88]

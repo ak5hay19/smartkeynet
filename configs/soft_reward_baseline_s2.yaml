@@ -1,0 +1,105 @@
+# SmartKeyNet soft-reward baseline agent config -- S2 (HNDL posture)
+# variant (PLAN.md §5; the S5 dose-response sweep session's substrate --
+# S2 is genuinely posture-varying via a scripted schedule, unlike S3
+# which is pool-focused, not posture-focused, and the steering attack
+# (attack/trace_generator.py) targets the threat-feature window the
+# posture classifier reads).
+#
+# Standalone, directly-loadable (same shape as configs/soft_reward_baseline.yaml
+# and configs/soft_reward_baseline_s3.yaml) -- NOT a variant loaded alongside
+# either of those files. `pool:` below is copied verbatim from
+# configs/soft_reward_baseline.yaml's own S1 config (S2 does not change pool
+# settings at all -- see configs/scenarios/s2_hndl.yaml's own `pool:` block,
+# byte-for-byte identical to configs/default.yaml's). `threat_schedule:` is
+# copied verbatim from configs/scenarios/s2_hndl.yaml (S2's own, real,
+# already-verified schedule -- not re-derived or re-tuned here). `security_masking:
+# false` / `soft_reward:` are copied verbatim from configs/soft_reward_baseline.yaml.
+
+scenario: S2  # one of S1..S6 (PLAN.md §5); S6 is held-out eval only (Hard Rule 8)
+
+seed: 0
+
+use_foresight: ewma
+
+# --- env/pool_sim.py -- identical to configs/soft_reward_baseline.yaml/configs/default.yaml ---
+pool:
+  capacity_bits: 1_000_000
+  initial_fill_frac: 0.5
+  bits_per_hybrid_draw: 256
+
+# --- env/masking.py -- identical to configs/soft_reward_baseline.yaml ---
+key_lifetime:
+  max_key_age_steps: 500
+
+# env/environment.py's SmartKeyNetEnv.__init__ reads config["reward"]
+# unconditionally to compute its OWN (masked-agent-style, Hard-Rule-1-clean)
+# reward every step, regardless of which agent is actually training -- see
+# configs/soft_reward_baseline.yaml's own comment for the full explanation.
+# Never read by this agent's own training loop or reward function.
+reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_fr: 0.1
+  w_qkd: 1.0
+  r_starve: 10.0
+  c_rekey_base: 1.0
+  c_rekey_load_beta: 1.0
+
+# --- env/environment.py design decision 16 (2026-08-25) ---
+# The Noetzold-style reproduction's defining property: "no action
+# masking -- any action is always available." Identical to
+# configs/soft_reward_baseline.yaml's own S1 config.
+security_masking: false
+
+# --- env/request_generator.py -- identical to s2_hndl.yaml/soft_reward_baseline.yaml ---
+tenant_graph:
+  n_nodes: 10
+
+load_spike:
+  enabled: false
+  period_steps: 500
+  spike_duration_steps: 20
+  spike_rate_multiplier: 3.0
+  low_rate_multiplier: 0.3
+
+# --- env/environment.py S2 dispatch (Hard Rule 2), identical to the real,
+# committed configs/scenarios/s2_hndl.yaml. Required only under scenario: S2. ---
+threat_schedule:
+  elevate_at_step: 50
+  elevated_signal: 6.0
+
+# S6-only key, present for key-set completeness (scenario: S2 above never reads it).
+migration_schedule: []
+
+# --- agents/dqn.py -- byte-for-byte identical to configs/soft_reward_baseline.yaml's own dqn: block. ---
+dqn:
+  gamma: 0.99
+  lr: 0.001
+  batch_size: 64
+  target_update_every: 1000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 12_500
+
+baselines:
+  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+# --- agents/soft_reward_baseline.py's own reward weights -- identical to
+# configs/soft_reward_baseline.yaml's own S1 config (not re-tuned for S2;
+# this is a measurement session). ---
+soft_reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_sec: 1.0
+
+# --- experiments/train.py::train_soft_reward_baseline ---
+# Same shape/sizing convention as configs/soft_reward_baseline.yaml's own S1
+# training: block; separate checkpoint_path (S2-specific) so this run's
+# saved weights never collide with the S1/S3 checkpoints.
+training:
+  total_steps: 25_000
+  seed: 0
+  eval_every: 2_500
+  eval_seed: 999
+  eval_max_steps: 250
+  checkpoint_path: checkpoints/soft_reward_baseline_s2.pt

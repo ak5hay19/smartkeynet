@@ -11,6 +11,76 @@
 
 ## Next task
 
+**The S5 steering-attack dose-response sweep is now real and complete
+(2026-08-26) — PLAN.md §5's last scenario row, the paper's headline result.**
+`attack/attacking_provider.py::AttackingForecastProvider` (live equation-7
+wrapper) + `experiments/harness.py`'s dual-tracking measurement
+(`run_scenario_under_attack`/`evaluate_attack_multi_seed`, real `V(pi)` per
+paper eq. 4, measured against TRUE posture via a parallel shadow
+`PolicyTable`, never the agent's own attacked floor) ran the real 11-alpha
+sweep on S2 (masked DQN vs. soft-reward baseline, fresh 25,000-step
+checkpoints for both, 5 eval seeds each). **The central, most important
+finding: the masked agent's `V(pi)` is NOT flat zero everywhere, contradicting
+this thread's own pre-registered prediction** — `0.0000` through alpha=0.4,
+rising to `0.0016-0.0096` at alpha 0.5-0.8, then `0.3000` at alpha>=0.9.
+Investigated immediately and rigorously, per Hard Rule 7, to a confident
+mechanistic conclusion, **not left as an open bug**:
+- **Ruled out a `compute_mask`/`PolicyTable` implementation bug directly**:
+  the masked agent's delivered tier is below the floor it was actually
+  *shown* exactly `0` times, at every one of 5 eval seeds, at every one of
+  11 alphas — Hard Rule 2's literal guarantee (the mask enforces whatever
+  floor it computes) holds perfectly throughout.
+- **The real mechanism, traced per-decision**: `AttackingForecastProvider`
+  shapes every window from tick 1 onward, including before S2's own
+  `elevate_at_step=50`. At alpha=0.7 the real signal is only diluted, not
+  erased — the live environment's own ratchet still detects it and locks
+  HIGH within 2 decisions of the schedule firing. At alpha>=0.9 the real
+  signal is suppressed so completely that the ratchet **never fires at
+  all** for the rest of the episode — there is no already-detected floor
+  for the one-way ratchet to defend, because its only channel of truth
+  (the same forecaster the attack shapes) never detected anything.
+- **This is a real, now-precisely-quantified boundary of the one-way
+  ratchet's defense, not a masking defect**: it stops an adversary from
+  talking an *already-ratcheted* floor back down; it cannot manufacture a
+  detection the sensor was never allowed to make when the attack is strong
+  and persistent enough to suppress the true signal for the entire episode.
+  A supplementary, scratchpad-only delayed-onset sweep (attack applied only
+  from `elevate_at_step` onward, leaving the — mostly irrelevant —
+  pre-elevation portion untouched) reproduced nearly identical numbers,
+  confirming the gap is about continuous suppression during/after the real
+  elevation window, not an artifact of shaping the pre-elevation noise.
+- **The soft-reward agent's own `V(pi)` also did not match the paper's
+  clean "rises monotonically with alpha" prediction**: already substantially
+  nonzero at alpha=0.0 (`0.2896` — this agent has no masking at all, so it
+  violates real floors as a baseline property, independent of any attack),
+  flat through alpha=0.8, then a step to `0.3256` at alpha>=0.9 — the same
+  "needs enough dilution to cross a threshold" shape the masked agent's own
+  curve has, just starting from a much higher floor, not the smooth curve
+  originally anticipated.
+
+**This finding belongs in the paper's existing Limitations section** — cite
+this session's exact figures (masked `V(pi)`: `0.0000` at alpha<=0.4 up to
+`0.3000` at alpha>=0.9; 0 attacked-floor violations throughout, confirming
+it is a ratchet-scope boundary, not an implementation bug) rather than
+presenting the split-screen result as an unconditional, always-zero
+guarantee. **A possible mitigation direction is flagged here as future
+work only, not built this session, for whoever next picks up
+masking-adjacent work**: e.g. a conservative default/startup floor that
+doesn't relax until the forecaster has observed some minimum variance in
+its input (a suspiciously flat/constant sensor reading for an extended
+window could itself be treated as a signal that the input channel may be
+compromised, rather than trusted as genuine calm). See SESSION_LOG.md's
+newest entry ("S5 steering-attack dose-response sweep: masked DQN vs
+soft-reward baseline") for the full numbers, per-decision mechanism trace,
+and Hard Rules 2/7 reasoning.
+
+**Remaining lower-priority items, now that the headline result exists in
+real form**: the standing `env/forecast_provider.py` posture-ceiling item
+(below, unchanged), the real LSTM dual-head forecaster (Addition A), and
+Dashboard v2 (Thread 2, below).
+
+---
+
 **Threads 1 and 3 are now both closed, and the soft-reward baseline agent is
 now real too (2026-08-25).** Gate W3 is genuinely, fully met on both halves
 (2026-08-24), **the full S1-S6 scenario grid is real and dispatched
@@ -116,8 +186,16 @@ the same property. Needed **zero changes** to `env/forecast_provider.py`,
 `git diff --stat`. `dashboard/explain.py` was read and confirmed to already
 report a shaped/lowered posture consistently, with no changes needed.
 
-**Only now, the actual S5 dose-response sweep itself is next** — PLAN.md
-§5's last remaining scenario row, PLAN2.md §7.5's Panel 5, the headline
+**Superseded 2026-08-26 — the actual S5 dose-response sweep described below
+has now been run for real** (on S2, not S3 — S2's own scripted
+`elevate_at_step`/`elevated_signal` schedule genuinely reaches HIGH posture,
+avoiding the standing posture-ceiling limitation that would have narrowed
+S3's informative alpha range). See "Next task" above and SESSION_LOG.md's
+newest entry for the full result — the paper prediction was **not**
+confirmed as stated (masked agent's `V(pi)` is not flat zero everywhere),
+investigated to a real, non-bug mechanistic conclusion, reported honestly
+per Hard Rule 7. Original framing, kept for history: PLAN.md §5's last
+remaining scenario row, PLAN2.md §7.5's Panel 5, the headline
 steering-attack result: running both agents (masked DQN, soft-reward
 baseline) against S3 (or S5's own config, TBD that session) across eleven
 alpha values, reporting `V(π)` (below-floor service rate,
@@ -131,9 +209,8 @@ every precondition this thread has named is now satisfied. Explicitly NOT
 run yet — this session's own instruction was to build the generator only,
 not the sweep.
 
-PLAN.md §5's entire scenario table now has working, tested code behind
-every row except S5 itself (the sweep above — its input-shaping mechanism
-is now real).
+PLAN.md §5's entire scenario table now has working, tested code AND a real
+run behind every row, including S5 (2026-08-26 — see above).
 
 **One thread remains open — Thread 2's Dashboard v2** (blocked on dataset
 ingestion for its next concrete step, but has unblocked alternatives — see
@@ -583,14 +660,22 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       `forecaster/dataset.py`, `forecaster/train.py`, `LSTMForecastProvider`
       in `env/forecast_provider.py`
 - [ ] E-A foresight ablation (off / ewma / lstm on S3 + S6)
-- [ ] Steering attack — adversarial threat-trace generator (`attack/trace_generator.py`,
-      **real and tested since 2026-08-25** — implements paper draft equation 7,
+- [x] Steering attack — adversarial threat-trace generator (`attack/trace_generator.py`,
+      real and tested since 2026-08-25 — implements paper draft equation 7,
       `x̃t = (1-α)xt + α·g(xt)`, verified end-to-end through the real forecaster
-      and masking layer, zero changes needed to `env/`; see SESSION_LOG.md's
-      newest entry and this file's `attack/` per-file row)
-      + attack run producing the split-screen result (the S5 dose-response sweep
-      itself — **still not run, next task**) — Gate W5, headline contribution,
-      never cut
+      and masking layer, zero changes needed to `env/`)
+      + **the attack run itself, real and complete since 2026-08-26**:
+      `attack/attacking_provider.py::AttackingForecastProvider` (live equation-7
+      wrapper, injected via `env/environment.py`'s new, flagged/signed-off
+      `forecast_provider_factory` param) + `experiments/harness.py`'s dual-tracking
+      measurement (`run_scenario_under_attack`/`evaluate_attack_multi_seed`, real
+      `V(pi)` per paper eq. 4) produced the real 11-alpha split-screen result on
+      S2 (masked DQN vs. soft-reward baseline, 5 eval seeds each) — Gate W5
+      **attempted, with a real, more-nuanced-than-predicted result** (masked
+      agent's `V(pi)` is NOT flat zero everywhere — see "Next task" below and
+      SESSION_LOG.md's newest entry for the full mechanism and honest read).
+      Headline contribution never cut; the finding itself belongs in the paper's
+      Limitations section, not treated as a failed gate.
 - [x] **S6 migration wave (scripted schedule, held-out eval only) — real and
       dispatched since 2026-08-24.** `config["migration_graph_seed"]`/
       `config["migration_schedule"]` (required only under `scenario: S6`)

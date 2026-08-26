@@ -25,12 +25,16 @@ from agents.baselines import (
 )
 from env.contracts import Action, KeyType
 from experiments.harness import (
+    AttackScenarioResult,
+    MultiSeedAttackEvalResult,
     MultiSeedEvalResult,
     ScenarioResult,
     _delivered_tier,
+    evaluate_attack_multi_seed,
     evaluate_multi_seed,
     run_grid,
     run_scenario,
+    run_scenario_under_attack,
 )
 from metrics.regret import EpisodeMetrics
 
@@ -361,3 +365,175 @@ def test_evaluate_multi_seed_single_seed_matches_run_scenario_exactly():
     assert multi.p99_latency_mean == pytest.approx(direct.p99_latency)
     assert multi.p99_latency_std == pytest.approx(0.0)
     assert multi.total_reward_mean == pytest.approx(direct.total_reward)
+
+
+# ---------------------------------------------------------------------------
+# S5 steering-attack dual-tracking measurement (run_scenario_under_attack /
+# evaluate_attack_multi_seed) -- Part 1 of the dose-response sweep session.
+# Real tests, proven BEFORE any real sweep is run, per that session's
+# instruction.
+# ---------------------------------------------------------------------------
+
+
+def test_run_scenario_under_attack_alpha_zero_matches_run_scenario_exactly():
+    """alpha=0.0 means no attack at all -- the live episode the agent
+    acts in must be byte-for-byte identical to the unattacked
+    `run_scenario` path (same forecaster trajectory, same actions, same
+    every metric), and the TRUE-tracked floor must equal the ATTACKED
+    floor at every single decision (there's no divergence to track when
+    nothing was shaped)."""
+    config = load_test_config(
+        overrides={
+            "scenario": "S2",
+            "threat_schedule": {"elevate_at_step": 50, "elevated_signal": 6.0},
+            "max_steps": 100,
+        }
+    )
+    policy = AlwaysPQCPolicy()
+
+    direct = run_scenario(policy, "S2", config, seed=3)
+    attacked = run_scenario_under_attack(policy, "S2", config, seed=3, alpha=0.0)
+
+    assert attacked.scenario_result.total_reward == pytest.approx(direct.total_reward)
+    assert attacked.scenario_result.p99_latency == pytest.approx(direct.p99_latency)
+    assert attacked.scenario_result.floor_violations == direct.floor_violations
+    assert attacked.scenario_result.episode_metrics == direct.episode_metrics
+    # no attack -> nothing for the TRUE track to ever disagree with
+    assert attacked.below_floor_true_count == 0
+    assert attacked.below_floor_rate_true == 0.0
+
+
+def test_run_scenario_under_attack_below_floor_rate_true_is_zero_for_a_masked_policy():
+    """Hard Rule 2's structural guarantee under attack: a masked policy
+    can never be steered below whatever floor it's given -- see
+    attack/trace_generator.py's own masking-safety proof. Full attack
+    (alpha=1.0) on S2, `AlwaysHybridPolicy` (always tries the highest
+    tier, so it's never itself the reason a decision looks short)."""
+    config = load_test_config(
+        overrides={
+            "scenario": "S2",
+            "threat_schedule": {"elevate_at_step": 50, "elevated_signal": 6.0},
+            "max_steps": 100,
+        }
+    )
+    result = run_scenario_under_attack(AlwaysHybridPolicy(), "S2", config, seed=0, alpha=1.0)
+    assert result.below_floor_true_count == 0
+    assert result.below_floor_rate_true == 0.0
+    assert result.scenario_result.floor_violations == 0
+
+
+class _AlwaysServeAttackedFloorPolicy:
+    """Serves exactly the tier the ATTACKED floor currently requires --
+    zero violations against what it was told (`state["policy_floor"]`
+    is itself the attacked-floor tier action), so this policy is never
+    itself "at fault" by the attacked side's own bookkeeping. Requires
+    `security_masking: false` (no real mask is enforcing this -- the
+    policy just happens to always comply with the lie it's shown)."""
+
+    def act(self, state, mask):
+        return Action(state["policy_floor"])
+
+
+def test_run_scenario_under_attack_below_floor_rate_true_detects_a_real_divergence():
+    """This session's most important harness-level test (per
+    instruction): a case where TRUE and ATTACKED posture genuinely
+    diverge across a discrete floor-table boundary, verified with real
+    masking/floor computation (env/masking.py::PolicyTable, the same
+    class env/environment.py itself uses) -- not a hardcoded expected
+    rate.
+
+    Full attack (alpha=1.0) on real S2 (`threat_schedule.elevate_at_step
+    =50`, `elevated_signal=6.0`) means the live episode's forecaster
+    only ever sees `g(xt) == [0.0, 0.0]` (attack/trace_generator.py's
+    benign-region target), regardless of what the true window was at
+    that tick -- so the ATTACKED posture never reaches HIGH the way S2's
+    real scripted schedule is documented to (SESSION_LOG.md 2026-08-19:
+    "posture reaches HIGH by internal tick ~55"), while the parallel,
+    measurement-only shadow track (fed the TRUE window) does. With
+    `security_masking: false` and a policy that always serves exactly
+    the ATTACKED floor's own tier (`_AlwaysServeAttackedFloorPolicy`
+    above -- by construction, zero violations against the attacked
+    floor, i.e. `scenario_result.floor_violations == 0`), any nonzero
+    `below_floor_true_count` can only come from the TRUE-posture track
+    genuinely disagreeing with the attacked one -- not from the policy
+    itself picking a bad action."""
+    config = load_test_config(
+        overrides={
+            "scenario": "S2",
+            "threat_schedule": {"elevate_at_step": 50, "elevated_signal": 6.0},
+            "security_masking": False,
+            "max_steps": 200,
+        }
+    )
+    policy = _AlwaysServeAttackedFloorPolicy()
+
+    result = run_scenario_under_attack(policy, "S2", config, seed=0, alpha=1.0)
+
+    # the policy is, by construction, never at fault relative to what it was shown
+    assert result.scenario_result.floor_violations == 0
+
+    # yet the TRUE-posture track catches real, measured violations --
+    # independently recomputed from the per-decision logs, not just
+    # trusting the function's own counter
+    manual_below_floor_true_count = sum(
+        1
+        for true_floor, delivered in zip(result.true_floor_log, result.delivered_tier_log)
+        if int(delivered) < int(true_floor)
+    )
+    assert result.below_floor_true_count == manual_below_floor_true_count
+    assert result.below_floor_true_count > 0
+    assert result.below_floor_rate_true == pytest.approx(
+        result.below_floor_true_count / result.total_requests
+    )
+
+    # a concrete instance of the actual discrete crossing this test is about:
+    # at least one decision where the TRUE floor demanded HYBRID but the
+    # (attack-compliant) delivered tier was only PQC
+    assert any(
+        true_floor == Action.SERVE_HYBRID and delivered == Action.SERVE_PQC
+        for true_floor, delivered in zip(result.true_floor_log, result.delivered_tier_log)
+    )
+
+    # sanity: the TRUE floor genuinely reaches HIGH-posture territory
+    # (SERVE_HYBRID, for at least S2/S3-sensitivity requests) at some
+    # point, matching S2's documented real schedule -- the ATTACKED
+    # floor track (recoverable via scenario_result together with the
+    # policy's own choices) never needed to, since it only ever saw the
+    # zeroed, attacked window.
+    assert Action.SERVE_HYBRID in result.true_floor_log
+
+
+def test_evaluate_attack_multi_seed_matches_manual_run_scenario_under_attack():
+    """Direct, independent proof `evaluate_attack_multi_seed` is
+    genuinely computed from `run_scenario_under_attack`'s own per-seed
+    results, mirroring `evaluate_multi_seed`'s own single-seed
+    reduction test."""
+    config = load_test_config(
+        overrides={
+            "scenario": "S2",
+            "threat_schedule": {"elevate_at_step": 50, "elevated_signal": 6.0},
+            "max_steps": 60,
+        }
+    )
+    policy = AlwaysPQCPolicy()
+    alpha = 0.5
+    eval_seeds = [1, 2, 3]
+
+    import numpy as np
+
+    result = evaluate_attack_multi_seed(policy, "S2", config, eval_seeds, alpha)
+
+    manual = [run_scenario_under_attack(policy, "S2", config, seed=s, alpha=alpha) for s in eval_seeds]
+    manual_rates = [r.below_floor_rate_true for r in manual]
+
+    assert result.below_floor_rate_true_mean == pytest.approx(float(np.mean(manual_rates)))
+    assert result.below_floor_rate_true_std == pytest.approx(float(np.std(manual_rates)))
+    assert [r.below_floor_true_count for r in result.results] == [
+        r.below_floor_true_count for r in manual
+    ]
+
+
+def test_evaluate_attack_multi_seed_rejects_empty_eval_seeds():
+    config = load_test_config(overrides={"max_steps": 20})
+    with pytest.raises(ValueError):
+        evaluate_attack_multi_seed(AlwaysPQCPolicy(), "S1", config, eval_seeds=[], alpha=0.5)

@@ -18,8 +18,11 @@ from typing import Any
 import numpy as np
 
 from agents.baselines import Policy
-from env.contracts import Action, KeyType
+from attack.attacking_provider import AttackingForecastProvider
+from env.contracts import Action, KeyType, SensitivityClass, ThreatPosture
 from env.environment import _KEY_TYPE_TO_SERVE_ACTION, _LATENCY_UNITS, SmartKeyNetEnv
+from env.forecast_provider import MovingAverageForecaster
+from env.masking import PolicyTable
 from metrics.regret import EpisodeMetrics, compute_episode_metrics
 
 _DEFAULT_MAX_STEPS = 250
@@ -383,4 +386,240 @@ def evaluate_multi_seed(
         floor_violations_total=sum(r.floor_violations for r in results),
         below_floor_rate_mean=float(np.mean(below_floor_rates)),
         below_floor_rate_std=float(np.std(below_floor_rates)),
+    )
+
+
+# ---------------------------------------------------------------------------
+# S5 steering-attack dual-tracking measurement (PLAN.md §5; paper draft
+# equation 4 -- V(pi), below-floor service rate measured against TRUE
+# posture, not estimated/attacked posture). Built this session, on top of
+# `attack/attacking_provider.py::AttackingForecastProvider` and
+# `env/environment.py`'s new `forecast_provider_factory` injection point
+# (design decision 17) -- see SESSION_LOG.md's newest entry.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AttackScenarioResult:
+    """One (policy, scenario, seed, alpha) run's outcome under the
+    steering attack.
+
+    `below_floor_rate_true` is the real V(pi) (equation 4): the
+    fraction of decisions whose actually-DELIVERED tier fell below the
+    floor the TRUE (unshaped) posture would have required at that same
+    decision -- computed via a parallel, measurement-only shadow
+    `MovingAverageForecaster` + `PolicyTable` fed the TRUE window every
+    tick (see `AttackingForecastProvider`'s `shadow_provider`), never
+    influencing the live episode itself. This is a DIFFERENT quantity
+    from `ScenarioResult.floor_violations` / `MultiSeedEvalResult.
+    below_floor_rate_*` above: those compare the delivered tier against
+    the floor the AGENT ITSELF saw (i.e. under attack) -- trivially 0
+    for any masked policy by construction, since the mask enforces
+    exactly that (attacked) floor. `below_floor_rate_true` instead asks
+    whether the attack succeeded at getting the agent to serve below
+    what reality actually demanded -- the only quantity that can
+    distinguish "the mask held against a lie it was told" (masked
+    agent, expected V(pi)=0 always, Hard Rule 2) from "the mask held
+    against the truth because there was no mask to fool" (soft-reward
+    agent, expected V(pi) to rise with alpha).
+    """
+
+    scenario: str
+    seed: int
+    alpha: float
+    below_floor_rate_true: float
+    below_floor_true_count: int
+    total_requests: int
+    true_floor_log: list[Action]
+    """Per-decision TRUE floor (equation 4's denominator side) -- also
+    the raw material for a served-tier-vs-true-floor histogram."""
+    delivered_tier_log: list[Action]
+    """Per-decision actually-delivered tier -- same value
+    `_delivered_tier` would compute, logged here so a caller can build
+    a served-tier histogram without re-running the episode."""
+    scenario_result: ScenarioResult
+    """The standard metrics (p99_latency, total_reward, forced_rekey_ratio,
+    regret/pool-exhaustion events, ATTACKED-floor floor_violations),
+    computed identically to `run_scenario` -- for dose-response
+    reporting alongside `below_floor_rate_true` above."""
+
+
+def run_scenario_under_attack(
+    policy: Policy, scenario: str, config: dict[str, Any], seed: int, alpha: float
+) -> AttackScenarioResult:
+    """Run one episode of `scenario` with `policy`, under the equation-7
+    steering attack at strength `alpha`, and return its
+    `AttackScenarioResult`.
+
+    Mirrors `run_scenario` almost exactly (same episode loop, same
+    metric bookkeeping) -- the two genuine differences are (1) the env
+    is constructed with a `forecast_provider_factory` that substitutes
+    `AttackingForecastProvider` for the real forecaster, so every
+    decision the policy actually acts on is driven by the ATTACKED
+    (shaped) window, and (2) a parallel, measurement-only shadow
+    `PolicyTable` tracks what the floor would have been under the TRUE
+    (unshaped) window at that same decision, via
+    `AttackingForecastProvider.get_true_threat_forecast()` -- never
+    influencing the live episode, only this function's own bookkeeping.
+    Not written as a parameterized variant of `run_scenario` itself
+    (e.g. an optional `alpha` there) because the shadow-tracking
+    bookkeeping is genuinely new state with no analogue in the
+    unattacked path, matching this file's own precedent of separate
+    functions for genuinely different concerns (`run_scenario` vs.
+    `evaluate_multi_seed`).
+    """
+    env_config = {**config, "scenario": scenario, "seed": seed}
+    env_config.setdefault("max_steps", _DEFAULT_MAX_STEPS)
+
+    shadow_provider = MovingAverageForecaster()
+    attacking_provider = AttackingForecastProvider(
+        base_provider=MovingAverageForecaster(), alpha=alpha, shadow_provider=shadow_provider
+    )
+    shadow_policy_table = PolicyTable()
+
+    env = SmartKeyNetEnv(env_config, forecast_provider_factory=lambda _seed: attacking_provider)
+    state, info = env.reset(seed=seed)
+
+    latencies: list[float] = []
+    regret_events: list[Any] = list(info["regret_events"])
+    deferred_steps: list[Any] = list(info["deferred_critical_steps"])
+    forced_rekeys: list[Any] = []
+    floor_violations = 0
+    total_rekeys = 0
+    total_requests = 0
+    discretionary_hybrid_serves = 0
+    total_reward = 0.0
+    below_floor_true_count = 0
+    true_floor_log: list[Action] = []
+    delivered_tier_log: list[Action] = []
+
+    truncated = False
+    while not truncated:
+        mask = info["action_mask"]
+        floor = Action(state["policy_floor"])  # the ATTACKED floor -- what the agent itself saw
+        key_type_onehot = state["key_type_onehot"]
+        hybrid_mandatory = bool(env._current_request["hybrid_mandatory"])
+        sensitivity_class = SensitivityClass(env._current_request["sensitivity_class"])
+
+        # TRUE-posture-tracked floor for this exact decision -- read
+        # BEFORE act()/step(), same relative timing env/environment.py's
+        # own _prepare_decision uses for the attacked side (the
+        # forecaster/policy_table state a decision is shown reflects
+        # every tick's update() up to and including the one that
+        # surfaced this decision, never a tick ahead).
+        true_forecast = attacking_provider.get_true_threat_forecast()
+        true_posture = ThreatPosture(int(np.argmax(true_forecast.posture_probs)))
+        shadow_policy_table.ratchet_up(true_posture)
+        true_floor = shadow_policy_table.floor(sensitivity_class, true_posture)
+
+        action = policy.act(state, mask)
+
+        delivered_tier = _delivered_tier(action, key_type_onehot, floor)
+        if int(delivered_tier) < int(floor):
+            floor_violations += 1  # against the ATTACKED floor -- same check run_scenario makes
+        if int(delivered_tier) < int(true_floor):
+            below_floor_true_count += 1  # equation 4's real V(pi) numerator
+        true_floor_log.append(true_floor)
+        delivered_tier_log.append(delivered_tier)
+
+        cost_action = _resolved_cost_action(action, key_type_onehot, floor)
+        latencies.append(_LATENCY_UNITS[cost_action])
+
+        is_rekey = action is not Action.REUSE
+        if is_rekey:
+            total_rekeys += 1
+            if cost_action is Action.SERVE_HYBRID and not hybrid_mandatory:
+                discretionary_hybrid_serves += 1
+        total_requests += 1
+
+        state, reward, terminated, truncated, info = env.step(action)
+        total_reward += reward
+
+        regret_events.extend(info["regret_events"])
+        deferred_steps.extend(info["deferred_critical_steps"])
+        if "forced_rekey" in info:
+            forced_rekeys.append(info["forced_rekey"])
+
+    episode_metrics = compute_episode_metrics(
+        regret_events=regret_events,
+        deferred_steps=deferred_steps,
+        forced_rekeys=forced_rekeys,
+        total_rekeys=total_rekeys,
+        total_requests=total_requests,
+        discretionary_hybrid_serves=discretionary_hybrid_serves,
+    )
+    p99_latency = float(np.percentile(latencies, 99)) if latencies else 0.0
+
+    scenario_result = ScenarioResult(
+        scenario=scenario,
+        seed=seed,
+        episode_metrics=episode_metrics,
+        p99_latency=p99_latency,
+        pool_exhaustion_events=len(regret_events),
+        floor_violations=floor_violations,
+        total_reward=total_reward,
+    )
+
+    return AttackScenarioResult(
+        scenario=scenario,
+        seed=seed,
+        alpha=alpha,
+        below_floor_rate_true=below_floor_true_count / total_requests,
+        below_floor_true_count=below_floor_true_count,
+        total_requests=total_requests,
+        true_floor_log=true_floor_log,
+        delivered_tier_log=delivered_tier_log,
+        scenario_result=scenario_result,
+    )
+
+
+@dataclass
+class MultiSeedAttackEvalResult:
+    """Mean + spread of one policy's `below_floor_rate_true` (and the
+    standard scenario metrics) across several eval seeds, at one fixed
+    `alpha` -- the `evaluate_multi_seed` analogue for the attacked
+    path. `results` holds every real per-seed `AttackScenarioResult`,
+    never discarded."""
+
+    scenario: str
+    alpha: float
+    eval_seeds: list[int]
+    results: list[AttackScenarioResult]
+    below_floor_rate_true_mean: float
+    below_floor_rate_true_std: float
+    total_reward_mean: float
+    total_reward_std: float
+    forced_rekey_ratio_mean: float
+    forced_rekey_ratio_std: float
+
+
+def evaluate_attack_multi_seed(
+    policy: Policy, scenario: str, config: dict[str, Any], eval_seeds: list[int], alpha: float
+) -> MultiSeedAttackEvalResult:
+    """Run `policy` on `scenario` under attack strength `alpha` across
+    every seed in `eval_seeds` via `run_scenario_under_attack`, and
+    summarize `below_floor_rate_true` (equation 4's real V(pi)) plus
+    the standard metrics as mean + std -- never a bare single-seed
+    point estimate, matching `evaluate_multi_seed`'s own convention.
+    """
+    if not eval_seeds:
+        raise ValueError("eval_seeds must be non-empty")
+
+    results = [run_scenario_under_attack(policy, scenario, config, seed, alpha) for seed in eval_seeds]
+
+    below_floor_rates_true = [r.below_floor_rate_true for r in results]
+    total_rewards = [r.scenario_result.total_reward for r in results]
+    forced_rekey_ratios = [r.scenario_result.episode_metrics.forced_rekey_ratio for r in results]
+
+    return MultiSeedAttackEvalResult(
+        scenario=scenario,
+        alpha=alpha,
+        eval_seeds=list(eval_seeds),
+        results=results,
+        below_floor_rate_true_mean=float(np.mean(below_floor_rates_true)),
+        below_floor_rate_true_std=float(np.std(below_floor_rates_true)),
+        total_reward_mean=float(np.mean(total_rewards)),
+        total_reward_std=float(np.std(total_rewards)),
+        forced_rekey_ratio_mean=float(np.mean(forced_rekey_ratios)),
+        forced_rekey_ratio_std=float(np.std(forced_rekey_ratios)),
     )
