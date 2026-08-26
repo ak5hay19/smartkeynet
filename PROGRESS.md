@@ -11,6 +11,54 @@
 
 ## Next task
 
+**Housekeeping pointer (for final paper drafting — not part of any thread's own work):** a paper-limitations addendum file exists at
+**`docs/steering_attack_limitations_addendum.md`** (added 2026-08-27, commit
+`81a1a17`, 81 lines, covering the masked agent's S5 dose-response findings).
+Not read into or acted on by any session's own investigation work — noted
+here, redundantly with SESSION_LOG.md's newest entry, purely so it isn't
+forgotten when the paper's Limitations section is finally drafted.
+
+**The soft-reward baseline's own S5 `V(pi)` curve shape — RESOLVED
+2026-08-27 (see SESSION_LOG.md's newest entry for the full mechanism trace).**
+Real, code-verified answers, no retraining needed (reused the still-on-disk
+`checkpoints/soft_reward_baseline_s2.pt`):
+- `agents/soft_reward_baseline.py::compute_soft_reward` does **not** read
+  `threat_score`/`posture_probs` at all — `security_score(tier)` is a fixed
+  3-value lookup keyed only on the delivered tier. The one real exception:
+  `state["policy_floor"]` (a discrete, one-way-ratchet-processed value, the
+  SAME mechanism the masked agent's own floor uses) feeds `REKEY_NOW`'s
+  delivery resolution (`max(existing, floor)`) — a narrow, direct,
+  non-Q-network-mediated posture channel, but only for that one action type.
+- **Flag for whoever does final paper integration**: if the paper draft's
+  Fig. 5 narrative describes a continuous `p̂_t` term entering this agent's
+  reward with the security term shrinking under attack, **that does not
+  match what was actually built** — the real design is a fixed, tier-only
+  security term plus one narrow discrete side-channel, not a continuously
+  threat-weighted term. Revise Fig. 5's description (or the surrounding
+  prose) to match the mechanism above rather than the originally
+  anticipated shape.
+- The flat-then-step curve shape is the **same discrete-posture-bucket-
+  crossing mechanism** already established for the masked agent's own
+  alpha>=0.9 finding: a finer-grained re-run (alpha step 0.05 near the
+  boundary) pinned the soft-reward agent's own crossing to `alpha 0.80 ->
+  0.85` (posture-bucket-mismatch rate jumps `0.0224 -> 0.8112` in that exact
+  interval, coincident with `V(pi)_true`'s own step `0.2896 -> 0.3256`).
+- A direct, controlled same-state-except-posture comparison (100
+  tier-establishing decisions at alpha=0.9, 16 posture-divergent) found the
+  Q-network's chosen ACTION never changes (0/16) — the agent reliably picks
+  `REKEY_NOW` regardless of perceived posture — but the TIER THAT `REKEY_NOW`
+  DELIVERS changes in 6/16 of those cases, purely via the deterministic
+  resolution formula reading the attacked `policy_floor`. This corrects the
+  prior session's own softer "Q-network sees different inputs and decides
+  differently" hypothesis with a more precise, evidence-backed mechanism.
+- The already-substantial alpha=0 baseline (`0.2896`, no attack at all) is
+  confirmed structural, not attack-related — same root cause as the
+  already-documented unmanipulated S3 below-floor rate (`0.1687`): this
+  agent's reward has no incentive to proactively rekey once holding a
+  tier, so a floor that ratchets up mid-episode (S2's own scripted
+  `elevate_at_step=50`) leaves an already-established lower-tier session
+  key simply `REUSE`d indefinitely, with or without any attacker.
+
 **The S5 steering-attack dose-response sweep is now real and complete
 (2026-08-26) — PLAN.md §5's last scenario row, the paper's headline result.**
 `attack/attacking_provider.py::AttackingForecastProvider` (live equation-7
