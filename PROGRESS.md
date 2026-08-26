@@ -11,12 +11,23 @@
 
 ## Next task
 
-**Housekeeping pointer (for final paper drafting — not part of any thread's own work):** a paper-limitations addendum file exists at
-**`docs/steering_attack_limitations_addendum.md`** (added 2026-08-27, commit
-`81a1a17`, 81 lines, covering the masked agent's S5 dose-response findings).
-Not read into or acted on by any session's own investigation work — noted
-here, redundantly with SESSION_LOG.md's newest entry, purely so it isn't
-forgotten when the paper's Limitations section is finally drafted.
+**Housekeeping pointer (for final paper drafting — not part of any thread's own work):** two ready-to-paste paper addenda now exist together in `docs/`, both drafted, neither yet inserted into any paper source:
+- **`docs/steering_attack_limitations_addendum.md`** (added 2026-08-27, commit
+  `81a1a17`, 81 lines) — the masked agent's S5 dose-response findings
+  (the one-way-ratchet boundary at alpha>=0.9).
+- **`docs/soft_reward_curve_addendum.md`** (added 2026-08-27, commit
+  following `9eec891`) — the soft-reward baseline's own curve-shape
+  mechanism (below) PLUS a proposed correction to the paper's Fig. 5
+  reward-mechanism description. **Concrete item for final paper
+  integration**: this file found that no paper source file
+  (`smartkeynet_ieee_paper_5.pdf` or its source) exists anywhere in this
+  repo, so its "exact suggested edit" is built from a reconstructed
+  paraphrase, not a verified verbatim quote — whoever holds the real
+  paper source must locate Fig. 5's actual sentence(s), confirm/adjust
+  the proposed correction, and decide whether Fig. 5's diagram itself
+  (not just its caption) needs a matching fix.
+
+Read both together when drafting the paper's Limitations section and Fig. 5.
 
 **The soft-reward baseline's own S5 `V(pi)` curve shape — RESOLVED
 2026-08-27 (see SESSION_LOG.md's newest entry for the full mechanism trace).**
