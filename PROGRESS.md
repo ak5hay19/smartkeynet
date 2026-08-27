@@ -11,23 +11,72 @@
 
 ## Next task
 
-**Housekeeping pointer (for final paper drafting — not part of any thread's own work):** two ready-to-paste paper addenda now exist together in `docs/`, both drafted, neither yet inserted into any paper source:
+**Paper integration of both addenda — DONE 2026-08-27** (real
+`docs/smartkeynet_ieee_paper_5.tex` now exists in the repo; see
+SESSION_LOG.md's newest entry, "paper integration: S5 limitations +
+soft-reward Fig. 5 correction into the real .tex", for the full
+comparison/insertion writeup). Both addenda below are now superseded as
+"not yet inserted" — their real findings are in the paper's
+`\subsection{Limitations}`. Two concrete items remain open from that
+session, neither resolved:
+
+- **Fig. 5's TikZ diagram itself still needs a matching visual fix, not
+  yet applied — needs sign-off first.** Fig. 5 (`\label{fig:steering}`)
+  is a TikZ diagram, not an image; its node text ("$\hat p_t$ enters the
+  reward" -> "security term shrinks; latency outbids it" -> "weaker
+  tier served") matches the addendum's own reconstructed paraphrase
+  almost verbatim, so the reconstruction was accurate — but that also
+  means the inaccurate claim lives in the diagram's own node text, not
+  in the caption or body prose (which is generic and not inaccurate).
+  The Limitations-section text fix is done; the diagram's `s1`/`s2` node
+  text (in the `soft` block, around the `\node[softbox]` lines) still
+  visually implies a continuous "posture enters the reward, security
+  term shrinks" mechanism that the soft-reward addendum's own finding
+  contradicts (only `REKEY_NOW`'s discrete tier-resolution reads the
+  floor — no continuous term exists). Left unedited, per instruction,
+  pending explicit sign-off on the specific node-text change.
+- **Table V's numbers do not match the real measured S3-comparison
+  figures — flagged, not touched.** Table V currently reads (Masked /
+  Soft-reward): p99 lat `150.0`/`120.0`, Exhaustion `0.0`/`19.5`, Regret
+  `0.0`/`19.5`, Rekey% `12.1`/`9.5`, Below-floor `0`/`27,301` — internally
+  consistent with the abstract/conclusion's own `27,301`/`42` figures, so
+  a real (not placeholder) six-policy result set, but from a different
+  run/config than the 2026-08-25 masked-vs-soft-reward S3 comparison
+  session's real numbers: p99 `1.5000`/`1.4064`, Exhaustion/Regret
+  `0.00`/`3.54`, Rekey% `15.6`/`70.3`, Below-floor rate `0.0000`/`0.1687`.
+  Scales don't reconcile cleanly (e.g. table's Exhaustion==Regret==`19.5`
+  vs. measured `3.54`; below-floor as a raw count of `27,301` vs. a
+  `0.1687` rate). **Not blocking, not urgent, but real**: deciding units
+  and re-deriving the full six-policy Table V row set (likely needs
+  fresh S3 runs for the four non-RL baselines too, which have never been
+  measured against the recalibrated S3 config) is a separate, dedicated
+  task.
+
+`docs/report.md` re-confirmed 2026-08-27: still a bare section-outline
+skeleton (owners + TODOs only, PLAN.md cross-references), no Fig. 5
+prose, no Table V — out of scope for paper integration, the real paper
+is the `.tex` file.
+
+Original addenda pointers, kept for history (superseded by the
+integration above):
 - **`docs/steering_attack_limitations_addendum.md`** (added 2026-08-27, commit
   `81a1a17`, 81 lines) — the masked agent's S5 dose-response findings
-  (the one-way-ratchet boundary at alpha>=0.9).
+  (the one-way-ratchet boundary at alpha>=0.9). **Its "supplementary
+  sweep" claim (an honest pre-attack warm-up window as a mitigation) was
+  found factually wrong against its own cited source during 2026-08-27's
+  integration session — the real data show the opposite (see that
+  session's SESSION_LOG.md entry) — the paper was written from the real
+  numbers/conclusion, not this file's paragraph verbatim.** This file
+  itself was left uncorrected, since editing addendum `.md` files was
+  out of scope for that session.
 - **`docs/soft_reward_curve_addendum.md`** (added 2026-08-27, commit
   following `9eec891`) — the soft-reward baseline's own curve-shape
-  mechanism (below) PLUS a proposed correction to the paper's Fig. 5
-  reward-mechanism description. **Concrete item for final paper
-  integration**: this file found that no paper source file
-  (`smartkeynet_ieee_paper_5.pdf` or its source) exists anywhere in this
-  repo, so its "exact suggested edit" is built from a reconstructed
-  paraphrase, not a verified verbatim quote — whoever holds the real
-  paper source must locate Fig. 5's actual sentence(s), confirm/adjust
-  the proposed correction, and decide whether Fig. 5's diagram itself
-  (not just its caption) needs a matching fix.
-
-Read both together when drafting the paper's Limitations section and Fig. 5.
+  mechanism PLUS a proposed correction to the paper's Fig. 5
+  reward-mechanism description. Checked against its cited source during
+  integration and found accurate; inserted into the paper with only
+  notational conversion. Its own "exact suggested edit" section (a
+  reconstructed paraphrase) is superseded — the real Fig. 5 sentence
+  was located during integration and matched the reconstruction closely.
 
 **The soft-reward baseline's own S5 `V(pi)` curve shape — RESOLVED
 2026-08-27 (see SESSION_LOG.md's newest entry for the full mechanism trace).**
