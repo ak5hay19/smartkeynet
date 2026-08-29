@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartKeyNet -- Steering Attack Dose-Response</title>
+<style>
+:root{
+  --bg:#0A0E13; --panel:#111820; --panel-2:#151D27; --line:#212C39; --line-soft:#171F29;
+  --text:#E9EEF4; --text-dim:#8FA0B3; --text-faint:#4C5A6B;
+  --classical:#8B95A5; --pqc:#E8A33D; --hybrid:#33D687; --quantum:#6E7EFF; --danger:#FF5C6C;
+  --radius:12px; --radius-sm:7px;
+  --mono:ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;
+  --disp:-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:var(--disp);padding:28px 20px 60px;}
+.wrap{max-width:800px;margin:0 auto;}
+.beat-head{margin-bottom:22px;}
+.beat-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--quantum);}
+.beat-title{font-family:var(--disp);font-weight:700;font-size:22px;margin-top:4px;}
+.beat-desc{color:var(--text-dim);font-size:13px;margin-top:6px;line-height:1.5;}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 18px 16px;}
+.card-label{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-faint);display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+
+.dose-chart{width:100%;height:260px;display:block;}
+.dose-axis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--text-faint);margin-top:6px;}
+
+.legend-row{display:flex;gap:18px;margin-top:12px;flex-wrap:wrap;}
+.legend-item{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-dim);}
+.legend-swatch{width:10px;height:10px;border-radius:3px;display:inline-block;}
+
+.callout{margin-top:14px;font-size:11.5px;color:var(--text-dim);border-left:2px solid var(--quantum);padding:8px 11px;background:var(--panel-2);border-radius:var(--radius-sm);line-height:1.55;}
+.callout.boundary{border-left-color:var(--danger);}
+.callout b{color:var(--text);}
+
+.provenance{margin-top:16px;font-family:var(--mono);font-size:10px;color:var(--text-faint);line-height:1.6;}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="beat-head">
+    <div class="beat-eyebrow">Steering Attack &middot; Scenario S2</div>
+    <div class="beat-title">Dose-response: V(&pi;) vs. attack strength</div>
+    <div class="beat-desc">Below-floor service rate measured against the TRUE (unshaped) posture -- paper eq. 4 -- as the equation-7 input-shaping attack strength &alpha; increases from 0.0 to 1.0. Every point below is a real measured value; error bars show the real spread across eval seeds.</div>
+  </div>
+  <div class="card">
+    <div class="card-label"><span>V(&pi;) &middot; below-floor service rate (true posture)</span><span>&alpha; 0.0 &rarr; 1.0</span></div>
+    <svg class="dose-chart" viewBox="0 0 720 260" preserveAspectRatio="xMidYMid meet"><line x1="44" y1="232.0" x2="704" y2="232.0" stroke="#212C39" stroke-width="1"/><text x="38" y="235.0" text-anchor="end" font-family="monospace" font-size="9" fill="#4C5A6B">0.00</text><line x1="44" y1="123.0" x2="704" y2="123.0" stroke="#212C39" stroke-width="1"/><text x="38" y="126.0" text-anchor="end" font-family="monospace" font-size="9" fill="#4C5A6B">0.23</text><line x1="44" y1="14.0" x2="704" y2="14.0" stroke="#212C39" stroke-width="1"/><text x="38" y="17.0" text-anchor="end" font-family="monospace" font-size="9" fill="#4C5A6B">0.47</text><line x1="44.0" y1="232.0" x2="44.0" y2="232.0" stroke="#33D687" stroke-width="1.4" opacity="0.45"/><line x1="110.0" y1="232.0" x2="110.0" y2="232.0" stroke="#33D687" stroke-width="1.4" opacity="0.45"/><line x1="176.0" y1="232.0" x2="176.0" y2="232.0" stroke="#33D687" stroke-width="1.4" opacity="0.45"/><line x1="242.0" y1="232.0" x2="242.0" y2="232.0" stroke="#33D687" stroke-width="1.4" opacity="0.45"/><line x1="308.0" y1="232.0" x2="308.0" y2="232.0" stroke="#33D687" stroke-width="1.4" opacity="0.45"/><line x1="374.0" y1="232.0" x2="374.0" y2="230.3" stroke="#33D687" stroke-width="1.4" opacity="0.45"/><line x1="440.0" y1="231.8" x2="440.0" y2="230.0" stroke="#33D687" stroke-width="1.4" opacity="0.45"/><line x1="506.0" y1="231.6" x2="506.0" y2="227.9" stroke="#33D687" stroke-width="1.4" opacity="0.45"/><line x1="572.0" y1="229.0" x2="572.0" y2="226.0" stroke="#33D687" stroke-width="1.4" opacity="0.45"/><line x1="638.0" y1="95.3" x2="638.0" y2="88.2" stroke="#33D687" stroke-width="1.4" opacity="0.45"/><line x1="704.0" y1="95.3" x2="704.0" y2="88.2" stroke="#33D687" stroke-width="1.4" opacity="0.45"/><polyline points="44.0,232.0 110.0,232.0 176.0,232.0 242.0,232.0 308.0,232.0 374.0,231.3 440.0,230.9 506.0,229.8 572.0,227.5 638.0,91.7 704.0,91.7" fill="none" stroke="#33D687" stroke-width="2.2"/><circle cx="44.0" cy="232.0" r="3.2" fill="#33D687" data-alpha="0" data-mean="0" data-std="0"/><circle cx="110.0" cy="232.0" r="3.2" fill="#33D687" data-alpha="0.1" data-mean="0" data-std="0"/><circle cx="176.0" cy="232.0" r="3.2" fill="#33D687" data-alpha="0.2" data-mean="0" data-std="0"/><circle cx="242.0" cy="232.0" r="3.2" fill="#33D687" data-alpha="0.3" data-mean="0" data-std="0"/><circle cx="308.0" cy="232.0" r="3.2" fill="#33D687" data-alpha="0.4" data-mean="0" data-std="0"/><circle cx="374.0" cy="231.3" r="3.2" fill="#33D687" data-alpha="0.5" data-mean="0.0016" data-std="0.00195959"/><circle cx="440.0" cy="230.9" r="3.2" fill="#33D687" data-alpha="0.6" data-mean="0.0024" data-std="0.00195959"/><circle cx="506.0" cy="229.8" r="3.2" fill="#33D687" data-alpha="0.7" data-mean="0.0048" data-std="0.00391918"/><circle cx="572.0" cy="227.5" r="3.2" fill="#33D687" data-alpha="0.8" data-mean="0.0096" data-std="0.0032"/><circle cx="638.0" cy="91.7" r="3.2" fill="#33D687" data-alpha="0.9" data-mean="0.3" data-std="0.00758947"/><circle cx="704.0" cy="91.7" r="3.2" fill="#33D687" data-alpha="1" data-mean="0.3" data-std="0.00758947"/><line x1="44.0" y1="128.3" x2="44.0" y2="64.9" stroke="#FF5C6C" stroke-width="1.4" opacity="0.45"/><line x1="110.0" y1="128.3" x2="110.0" y2="64.9" stroke="#FF5C6C" stroke-width="1.4" opacity="0.45"/><line x1="176.0" y1="128.3" x2="176.0" y2="64.9" stroke="#FF5C6C" stroke-width="1.4" opacity="0.45"/><line x1="242.0" y1="128.3" x2="242.0" y2="64.9" stroke="#FF5C6C" stroke-width="1.4" opacity="0.45"/><line x1="308.0" y1="128.3" x2="308.0" y2="64.9" stroke="#FF5C6C" stroke-width="1.4" opacity="0.45"/><line x1="374.0" y1="128.3" x2="374.0" y2="64.9" stroke="#FF5C6C" stroke-width="1.4" opacity="0.45"/><line x1="440.0" y1="128.3" x2="440.0" y2="64.9" stroke="#FF5C6C" stroke-width="1.4" opacity="0.45"/><line x1="506.0" y1="128.3" x2="506.0" y2="64.9" stroke="#FF5C6C" stroke-width="1.4" opacity="0.45"/><line x1="572.0" y1="128.3" x2="572.0" y2="64.9" stroke="#FF5C6C" stroke-width="1.4" opacity="0.45"/><line x1="638.0" y1="117.1" x2="638.0" y2="42.4" stroke="#FF5C6C" stroke-width="1.4" opacity="0.45"/><line x1="704.0" y1="117.1" x2="704.0" y2="42.4" stroke="#FF5C6C" stroke-width="1.4" opacity="0.45"/><polyline points="44.0,96.6 110.0,96.6 176.0,96.6 242.0,96.6 308.0,96.6 374.0,96.6 440.0,96.6 506.0,96.6 572.0,96.6 638.0,79.8 704.0,79.8" fill="none" stroke="#FF5C6C" stroke-width="2.2"/><circle cx="44.0" cy="96.6" r="3.2" fill="#FF5C6C" data-alpha="0" data-mean="0.2896" data-std="0.0678162"/><circle cx="110.0" cy="96.6" r="3.2" fill="#FF5C6C" data-alpha="0.1" data-mean="0.2896" data-std="0.0678162"/><circle cx="176.0" cy="96.6" r="3.2" fill="#FF5C6C" data-alpha="0.2" data-mean="0.2896" data-std="0.0678162"/><circle cx="242.0" cy="96.6" r="3.2" fill="#FF5C6C" data-alpha="0.3" data-mean="0.2896" data-std="0.0678162"/><circle cx="308.0" cy="96.6" r="3.2" fill="#FF5C6C" data-alpha="0.4" data-mean="0.2896" data-std="0.0678162"/><circle cx="374.0" cy="96.6" r="3.2" fill="#FF5C6C" data-alpha="0.5" data-mean="0.2896" data-std="0.0678162"/><circle cx="440.0" cy="96.6" r="3.2" fill="#FF5C6C" data-alpha="0.6" data-mean="0.2896" data-std="0.0678162"/><circle cx="506.0" cy="96.6" r="3.2" fill="#FF5C6C" data-alpha="0.7" data-mean="0.2896" data-std="0.0678162"/><circle cx="572.0" cy="96.6" r="3.2" fill="#FF5C6C" data-alpha="0.8" data-mean="0.2896" data-std="0.0678162"/><circle cx="638.0" cy="79.8" r="3.2" fill="#FF5C6C" data-alpha="0.9" data-mean="0.3256" data-std="0.0798639"/><circle cx="704.0" cy="79.8" r="3.2" fill="#FF5C6C" data-alpha="1" data-mean="0.3256" data-std="0.0798639"/></svg>
+    <div class="dose-axis"><span>0</span><span>0.1</span><span>0.2</span><span>0.3</span><span>0.4</span><span>0.5</span><span>0.6</span><span>0.7</span><span>0.8</span><span>0.9</span><span>1</span></div>
+    <div class="legend-row"><div class="legend-item"><span class="legend-swatch" style="background:#33D687"></span>Masked DQN</div><div class="legend-item"><span class="legend-swatch" style="background:#FF5C6C"></span>Soft-reward baseline</div></div>
+  </div>
+  <div class="callout boundary"><b>Masked DQN</b>: V(&pi;) first becomes measurably nonzero at &alpha;=0.5 (mean 0.0016 &plusmn; 0.0020), climbing to its plateau of 0.3000 &plusmn; 0.0076 by &alpha;=0.9.</div><div class="callout boundary"><b>Soft-reward baseline</b>: V(&pi;) first becomes measurably nonzero at &alpha;=0 (mean 0.2896 &plusmn; 0.0678), climbing to its plateau of 0.3256 &plusmn; 0.0799 by &alpha;=0.9.</div>
+  <div class="provenance">Masked DQN: 11 real alpha points, each mean&plusmn;std over its own real eval seeds.<br>Soft-reward baseline: 11 real alpha points, each mean&plusmn;std over its own real eval seeds.</div>
+</main>
+</body>
+</html>

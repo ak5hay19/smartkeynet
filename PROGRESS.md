@@ -11,6 +11,49 @@
 
 ## Next task
 
+**Dose-response + S3 comparison demo visuals rendered from real data
+— DONE 2026-08-29.** The project's two headline results are now real,
+self-contained visual assets for the review/demo, not just numbers in
+SESSION_LOG.md prose. **Demo-asset location — pull these up during the
+review**: `dashboard/samples/dose_response_chart.html` (S5
+steering-attack V(π) vs. alpha, both agents, real spread), `dashboard/
+samples/s3_comparison_table.html` (masked-vs-soft-reward S3 metrics),
+`dashboard/samples/results_data.json` (the saved raw numbers both were
+rendered from — open any of the three directly in a browser/editor).
+**Data provenance, explicit**: no saved raw-results file existed
+anywhere for either the S5 sweep (2026-08-26) or the S3 comparison
+(2026-08-25) — both lived only in SESSION_LOG.md prose. But the real
+checkpoints both sessions trained were still on disk (gitignored, not
+deleted): `checkpoints/dqn_s2.pt`/`soft_reward_baseline_s2.pt` (S5),
+`checkpoints/s3_{masked,soft_reward}_seed{1,4,7}.pt` (S3). This
+session reloaded them and **re-ran the real evals fresh** (`evaluate_
+multi_seed`/`evaluate_attack_multi_seed`, eval-only, well under a
+minute total) rather than transcribing — spot-checked reproducibility
+first (a reloaded checkpoint's re-run matched SESSION_LOG.md's own
+per-seed numbers exactly before any renderer was built), then the full
+fresh run matched every prior figure to 4 decimal places. `dashboard/
+render_dose_response.py` + `dashboard/render_comparison_table.py`
+(pure renderers, same self-contained-static-HTML philosophy as
+`dashboard/render_explain.py`, zero new dependencies — inline SVG for
+the chart, no charting library) + `dashboard/render_results_demo.py`
+(the real driver). **Hard Rule 7, honored explicitly**: the masked
+agent's real curve shows its genuine alpha>=0.9 boundary (flat near-
+zero through alpha<=0.8, rising to `0.3000` at alpha>=0.9) — never
+flattened to a "clean" always-zero story; the comparison table's
+`p99_latency` row (when shown) always carries its documented discrete-
+cost-model-percentile-artifact caveat, and `regret_events` is always
+labeled as identical to `pool_exhaustion_events` by construction. 19
+new tests (`tests/test_render_dose_response.py`,
+`tests/test_render_comparison_table.py`), incl. dedicated Hard Rule 7
+guards (`test_masked_curve_is_not_flat_zero_everywhere`, `test_p99_
+latency_always_carries_its_caveat_when_shown`). Full suite: **597
+passed, 1 xfailed** (578 prior + 19 new). Zero changes to any protected
+file. See SESSION_LOG.md's newest entry for the full provenance
+writeup and reproducibility checks. **Cross-reference for the standing
+Table V item below**: `dashboard/samples/results_data.json`/
+`s3_comparison_table.html` are now the source of truth for folding
+real numbers into the paper's Table V.
+
 **Explain Decision panel rendered — DONE 2026-08-29.** The first
 VISUAL/frontend piece of the project (every prior session was
 backend/experiment work): `dashboard/explain.py`'s real, tested
@@ -111,7 +154,13 @@ session, neither resolved:
   and re-deriving the full six-policy Table V row set (likely needs
   fresh S3 runs for the four non-RL baselines too, which have never been
   measured against the recalibrated S3 config) is a separate, dedicated
-  task.
+  task. **2026-08-29: the masked-vs-soft-reward half of this re-
+  derivation now has a real, re-confirmed source to pull from** —
+  `dashboard/samples/results_data.json`/`s3_comparison_table.html`
+  (freshly re-run, not re-transcribed; matches this same session's own
+  numbers to 4 decimal places) — still leaves the four non-RL baselines
+  unmeasured on the recalibrated S3 config, and the unit-reconciliation
+  question above untouched.
 
 `docs/report.md` re-confirmed 2026-08-27: still a bare section-outline
 skeleton (owners + TODOs only, PLAN.md cross-references), no Fig. 5
@@ -868,9 +917,15 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       the Explain Decision panel (one of seven) now has a real render
       layer** (`dashboard/render_explain.py`, real samples in
       `dashboard/samples/`) — see this file's "Next task" and
-      `dashboard/`'s per-file rows below. `dashboard/app.py` itself
-      (the live, wired 4-beat demo shell) is still not started; the
-      other six panels are still mockup-only.
+      `dashboard/`'s per-file rows below. **2026-08-29 (later session):
+      the two headline demo visuals — S5 dose-response chart + S3
+      comparison table — also now render from real, freshly re-run
+      data** (`dashboard/render_dose_response.py`, `dashboard/
+      render_comparison_table.py`, samples in `dashboard/samples/`).
+      `dashboard/app.py` itself (the live, wired 4-beat demo shell) is
+      still not started; the other four panels (Living System,
+      Budgeting Brain, Migration Wave, Threat Input) are still
+      mockup-only.
 - [ ] AWS-KMS-style API facade (`api/main.py`)
 - [ ] Report (`docs/report.md`) — currently a section-header skeleton with TODOs only
 
@@ -937,6 +992,9 @@ behavioral tests, part of the green `pytest` run).
 |---|---|---|
 | `dashboard/app.py` | not started | Stub, `test_dashboard_app.py` is 1 import-smoke test. |
 | `dashboard/render_explain.py` | implemented+tested | **2026-08-29 (new file):** Explain Decision panel's view layer -- renders `dashboard/explain.py`'s real `DecisionTrace` objects as a self-contained static HTML page (inline CSS, zero JS, zero server, zero build step, zero new dependencies -- deliberately does not reach for `dash`/`plotly` despite both already being in `requirements.txt` for the eventual full live dashboard). `render_trace_html(trace, *, title=...)` (pure function, six private `_render_stepN_*` helpers, each reading only `DecisionTrace` fields) + `write_trace_html(trace, path, *, title=...)`. Styled to visually match `dashboard/mockups/smartkeynet_dashboard_mockup_v2.html`'s Explain Decision tab (dark theme, floor grid, mask chips, cost bars) but reads zero data from it -- that file's example numbers are 100% fabricated per its own header. Floor-grid cells carry a `data-cell="{SensClass}-{Posture}"` attribute so the fired cell is programmatically verifiable, not just visual. Every dynamic string passed through `html.escape`. 10 tests (`test_render_explain.py`), incl. two exact-match Hard Rule 10 tests stepping a real `SmartKeyNetEnv` for 15 decisions and asserting the rendered per-action reasons/final sentence/cost-row ordering are character-for-character identical to the real trace's own fields (never invented), a floor-grid `hit`-cell test parametrized across all 12 real `(SensitivityClass, ThreatPosture)` cells, and two HTML well-formedness tests via a small balanced-tag `HTMLParser` subclass (no new dependency). See SESSION_LOG.md's newest entry for the full design-decision writeup. |
+| `dashboard/render_dose_response.py` | implemented+tested | **2026-08-29 (new file, later session):** S5 dose-response chart renderer -- the second headline demo visual. `DoseResponsePoint(alpha, mean, std)`/`DoseResponseSeries(label, series_key, points)` (a thin, real-field-projecting input contract, populated 1:1 from `MultiSeedAttackEvalResult.alpha`/`.below_floor_rate_true_mean`/`_std`, never re-derived) + `render_dose_response_html(series, ...)` (pure function, inline SVG chart -- polyline + circles + per-point error bars, y-axis auto-scaled off the real data, zero charting library). Styled to the mockup's dose-chart look (masked=`--hybrid` green, soft-reward=`--danger` red) but reads zero numbers from it. **The one derived annotation (the "first nonzero alpha" boundary callout) is computed live from the input series itself** (never a hardcoded alpha), so a genuinely flat-zero series gets an honest "flat zero across the range shown" callout instead of a fabricated boundary. 9 tests (`test_render_dose_response.py`), incl. the central Hard Rule 7 guards `test_masked_agent_alpha_0_9_nonzero_value_is_faithfully_shown` and `test_masked_curve_is_not_flat_zero_everywhere` (asserts `max(means) == 0.3`, guarding specifically against the tempting flat-zero-everywhere render), a no-fabrication check, and HTML well-formedness. |
+| `dashboard/render_comparison_table.py` | implemented+tested | **2026-08-29 (new file, later session):** masked-vs-soft-reward S3 comparison table renderer -- the first headline demo visual. `AgentMetrics` (one agent's real, checkpoint-averaged S3 metrics)/`ComparisonTableData(scenario, masked, soft_reward, include_p99=True)` + `render_comparison_table_html(data, ...)`. `below_floor_rate` always leads the table (hero-styled row), per instruction. **Hard Rule 7 honesty, structural, not just a note**: if `include_p99=True` the `p99_latency` row is ALWAYS paired with a fixed caveat block quoting `experiments/harness.py::ScenarioResult.p99_latency`'s own documented discrete-cost-model-percentile-artifact mechanism (never rendered without it); `regret_events` always carries a `(== pool_exhaustion_events)` label plus a standing "same event by construction" note, quoting `run_scenario`'s own docstring. 10 tests (`test_render_comparison_table.py`), incl. `test_p99_latency_always_carries_its_caveat_when_shown` / a companion test proving `include_p99=False` omits the row, its caveat, AND its value together (no orphaned caveat either direction), a no-fabrication check parsing every `<tbody>` row's numeric leads against the real `AgentMetrics` fields, and HTML well-formedness with/without the p99 row. |
+| `dashboard/render_results_demo.py` | implemented+tested | **2026-08-29 (new file, later session):** the real driver for both renderers above. Data provenance decision (see SESSION_LOG.md's newest entry for the full reasoning): no saved raw-results file existed for either the 2026-08-25 S3 comparison or the 2026-08-26 S5 sweep, but the real checkpoints both sessions trained were still on disk (gitignored, not deleted) -- `collect_real_s3_comparison()` reloads `checkpoints/s3_{masked,soft_reward}_seed{1,4,7}.pt` (`_load_greedy_policy` reconstructs the `DQNAgent`/`GreedyDQNPolicy` the same way `experiments/train.py::train()` derives `state_dim`/`has_forecast`) and re-runs real `evaluate_multi_seed` calls (8 eval seeds, matching the original session), aggregating the 3 per-training-seed results into one `AgentMetrics` via the same "checkpoint-averaged, training-seed std" methodology Gate W3 established (verified to reproduce `-10214.82`/`1303.25` exactly). `collect_real_dose_response()` reloads `checkpoints/dqn_s2.pt`/`soft_reward_baseline_s2.pt` and re-runs real `evaluate_attack_multi_seed` across the real 11-alpha grid (5 eval seeds, matching the original sweep). `main()` saves the full fresh output to `dashboard/samples/results_data.json` (with an explicit `"provenance"` field) and renders both HTML files from the SAME live objects the JSON was built from. Reproducibility spot-checked before this driver was built (a reloaded checkpoint's fresh re-run matched SESSION_LOG.md's own per-seed numbers exactly); the full fresh run this session performed matched every prior figure to 4 decimal places. Run via `python -m dashboard.render_results_demo`. |
 | `dashboard/render_explain_demo.py` | implemented+tested | **2026-08-29 (new file):** the real driver for `render_explain.py`. `collect_real_traces()` runs a genuine S2 episode (`configs/scenarios/s2_hndl.yaml`, loaded via `experiments.train.load_full_config`) through the real `SmartKeyNetEnv` under the real `agents.baselines.StaticThresholdPolicy(0.5)` baseline -- not hand-authored inputs -- calling `explain_decision_from_env` once per decision, mirroring `experiments/harness.py::run_scenario`'s loop shape. `pick_demo_traces()` selects 3 genuinely different real decisions (first decision; a floor-driven decision, `floor is Action.SERVE_HYBRID`; a genuine multi-cost tradeoff). `main()` writes them to `dashboard/samples/*.html` -- the findable sample outputs for demo/review. **Real investigation documented in this module's own docstring**: searched (100+ real seeds, all four real baseline policies, both real elevated-threat scenario configs) for a genuine "floor-driven, only-one-legal-action" decision (the case `dashboard/explain.py`'s own `cost_note` field flags) and never found one occurring naturally under current calibration -- traced to a real structural cause (`env/masking.py::compute_mask`'s `REKEY_NOW` has no illegality rule once any tier clears the floor, so it stays legal almost everywhere a tier does) rather than assumed or silently worked around; the driver's floor-driven selector uses "only one SERVE tier clears the floor" instead, letting that decision's own real `cost_note` display honestly. Run via `python -m dashboard.render_explain_demo`. |
 | `dashboard/explain.py` | implemented+tested | **2026-08-19 (new file):** Explain Decision panel backend (PLAN2.md §7.3, Addition D; Hard Rule 10) -- Person D's first real code this project. `explain_decision(...)` (pure function, all six inputs explicit) + `explain_decision_from_env(env, state, chosen_action)` (convenience wrapper pulling those inputs off a live `SmartKeyNetEnv`, mirroring `experiments/harness.py`'s established precedent for reaching into a few private env attributes the public Gym API doesn't yet surface). Returns a `DecisionTrace` dataclass covering all six PLAN2.md §7.3 steps: threat score + source, posture probs + resolved posture, floor lookup (+ the full real floor table, imported from `env.masking`, never re-typed), the action mask (calls `env.masking.compute_mask()` directly -- zero possible drift between this module's legal/reason fields and the masking layer's real behavior, by construction, not by convention), cost comparison (reads `env.environment`'s real `_LATENCY_UNITS`/`_ENERGY_UNITS`/`_KEY_TYPE_TO_SERVE_ACTION`, never re-derived), and a deterministically templated final sentence. Policy-agnostic by design (no dependency on `agents/dqn.py`) -- verified in a scratchpad sanity script against `StaticThresholdPolicy` on real S1 steps, which also caught and fixed one real bug: the final-sentence template originally said "a learned preference from the policy" for the cost-tradeoff case, which is wrong for a non-learning baseline; reworded to "the policy's own preference among legal options." 29 tests (`test_explain.py`, up from 26), incl. every (sensitivity_class, posture) floor-table cell checked against a fresh `PolicyTable`, 6 parametrized mask edge cases (pool empty, key age at/over cap, cold start, all-legal, HYBRID-floor-with-empty-pool) each checked against a real `compute_mask()` call, REKEY_NOW cost-resolution cases (existing-tier and cold-start-adopts-floor), and an end-to-end test stepping a real `SmartKeyNetEnv` and cross-checking every trace against a fresh `compute_mask()` call built from the same env state. **2026-08-19 (same day, later session): updated to track `env/masking.py`'s Hard Rule 2 fix** — `_mask_entries()` now passes `current_key_type` into `compute_mask()` and gained the matching stale-tier reason case (would otherwise crash on the new illegality reason), `_resolved_cost_action()` updated to the same `max(existing, floor)` REKEY_NOW resolution (would otherwise display a cost for a tier that was never actually served). Explicitly out of scope this session (per PLAN2.md's Hard Rule 11 and Hard Rule 10's scoping): pcap ingestion / Threat Input panel (§7.1) and any dashboard HTML/frontend -- this is a Python module returning structured data only. |
 

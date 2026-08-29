@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartKeyNet -- Masked DQN vs Soft-Reward Baseline</title>
+<style>
+:root{
+  --bg:#0A0E13; --panel:#111820; --panel-2:#151D27; --line:#212C39; --line-soft:#171F29;
+  --text:#E9EEF4; --text-dim:#8FA0B3; --text-faint:#4C5A6B;
+  --classical:#8B95A5; --pqc:#E8A33D; --hybrid:#33D687; --quantum:#6E7EFF; --danger:#FF5C6C;
+  --radius:12px; --radius-sm:7px;
+  --mono:ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;
+  --disp:-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:var(--disp);padding:28px 20px 60px;}
+.wrap{max-width:820px;margin:0 auto;}
+.beat-head{margin-bottom:22px;}
+.beat-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--quantum);}
+.beat-title{font-family:var(--disp);font-weight:700;font-size:22px;margin-top:4px;}
+.beat-desc{color:var(--text-dim);font-size:13px;margin-top:6px;line-height:1.5;}
+
+.table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);}
+table{width:100%;border-collapse:collapse;font-size:12.5px;}
+thead th{text-align:left;font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-faint);background:var(--panel-2);padding:12px 16px;border-bottom:1px solid var(--line);white-space:nowrap;}
+tbody td{padding:13px 16px;border-bottom:1px solid var(--line-soft);font-family:var(--mono);}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr.hero{background:rgba(110,126,255,.06);}
+tbody tr.hero td:first-child{position:relative;}
+tbody tr.hero td:first-child::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--quantum);}
+tbody tr.caveat td{background:rgba(255,92,108,.04);}
+.metric-name{color:var(--text);}
+.num-good{color:var(--hybrid);}
+.num-bad{color:var(--danger);}
+.spread{color:var(--text-faint);font-size:10.5px;}
+
+.note{margin-top:14px;font-size:11.5px;color:var(--text-dim);border-left:2px solid var(--quantum);padding:8px 11px;background:var(--panel-2);border-radius:var(--radius-sm);line-height:1.55;}
+.note.caveat{border-left-color:var(--danger);}
+.note b{color:var(--text);}
+
+.provenance{margin-top:16px;font-family:var(--mono);font-size:10px;color:var(--text-faint);line-height:1.6;}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="beat-head">
+    <div class="beat-eyebrow">Results &middot; Scenario S3</div>
+    <div class="beat-title">Masked DQN vs. soft-reward baseline</div>
+    <div class="beat-desc">Checkpoint-averaged real measurements (3 training seeds &times; 8 eval seeds per checkpoint, masked agent; 3 &times; 8, soft-reward agent). Spread is the standard deviation across training-seed checkpoints, never a bare point estimate.</div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Metric</th><th>Masked DQN</th><th>Soft-reward baseline</th></tr></thead>
+      <tbody><tr class="hero"><td class="metric-name">below_floor_rate <span class="spread">(V(&pi;), eq. 4)</span></td><td class="num-good">0.0000 <span class="spread">&plusmn; 0.0000</span></td><td class="num-bad">0.1687 <span class="spread">&plusmn; 0.0759</span></td></tr><tr><td class="metric-name">total_reward</td><td>-10214.82 <span class="spread">&plusmn; 1303.25</span></td><td>-11010.19 <span class="spread">&plusmn; 12380.91</span></td></tr><tr><td class="metric-name">forced_rekey_ratio</td><td>0.156 <span class="spread">&plusmn; 0.037</span></td><td>0.703 <span class="spread">&plusmn; 0.408</span></td></tr><tr class="caveat"><td class="metric-name">regret_events <span class="spread">(== pool_exhaustion_events)</span></td><td>0.00 <span class="spread">&plusmn; 0.00</span></td><td>3.54 <span class="spread">&plusmn; 5.01</span></td></tr><tr><td class="metric-name">floor_violations_total <span class="spread">(summed, all episodes)</span></td><td>0</td><td>1012</td></tr><tr class="caveat"><td class="metric-name">p99_latency <span class="spread">(see caveat below)</span></td><td>1.5000 <span class="spread">&plusmn; 0.0000</span></td><td>1.4064 <span class="spread">&plusmn; 0.1324</span></td></tr></tbody>
+    </table>
+  </div>
+  <div class="note caveat"><b>p99_latency caveat:</b> p99_latency is a discrete-cost-model percentile artifact, not a meaningful tail-latency discriminator: whenever &gt;=4/250 (&gt;=1.6%) of an episode&#x27;s decisions cost SERVE_HYBRID (the max of a 4-value discrete cost set), np.percentile&#x27;s interpolation saturates at exactly 1.5000 -- see experiments/harness.py::ScenarioResult.p99_latency&#x27;s own docstring for the full, numerically-verified mechanism. Included here for completeness, not as a differentiator.</div>
+  <div class="note"><b>regret_events note:</b> regret_events and pool_exhaustion_events are the same count by construction in this environment (every logged RegretEvent is a pool-exhaustion event) -- see experiments/harness.py::run_scenario&#x27;s own docstring. Shown once, not as two independent results.</div>
+  <div class="provenance">below_floor_rate leads this table deliberately -- the cleanest, most thesis-relevant metric (Hard Rule 2's guarantee for the masked agent, measured, not assumed).</div>
+</main>
+</body>
+</html>

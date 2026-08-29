@@ -1,0 +1,200 @@
+{
+  "provenance": "Re-run this session (see SESSION_LOG.md) from real, already-trained checkpoints on disk (checkpoints/dqn_s2.pt, checkpoints/soft_reward_baseline_s2.pt, checkpoints/s3_{masked,soft_reward}_seed{1,4,7}.pt) via experiments.harness.evaluate_multi_seed/evaluate_attack_multi_seed -- eval only, no retraining. Spot-checked against SESSION_LOG.md's own 2026-08-25/2026-08-26 figures and reproduced byte-for-byte before this driver was built.",
+  "s3_comparison": {
+    "scenario": "S3",
+    "eval_seeds": [
+      900,
+      901,
+      902,
+      903,
+      904,
+      905,
+      906,
+      907
+    ],
+    "training_seeds": [
+      1,
+      4,
+      7
+    ],
+    "masked": {
+      "label": "Masked DQN",
+      "below_floor_rate_mean": 0.0,
+      "below_floor_rate_std": 0.0,
+      "total_reward_mean": -10214.82025833332,
+      "total_reward_std": 1303.2496391278473,
+      "forced_rekey_ratio_mean": 0.15611195724832438,
+      "forced_rekey_ratio_std": 0.037172776030660895,
+      "regret_events_mean": 0.0,
+      "regret_events_std": 0.0,
+      "p99_latency_mean": 1.5,
+      "p99_latency_std": 0.0,
+      "floor_violations_total": 0,
+      "n_training_seeds": 3,
+      "n_eval_seeds_per_checkpoint": 8
+    },
+    "soft_reward": {
+      "label": "Soft-reward baseline",
+      "below_floor_rate_mean": 0.16866666666666666,
+      "below_floor_rate_std": 0.07594991039421237,
+      "total_reward_mean": -11010.185075000001,
+      "total_reward_std": 12380.90890619608,
+      "forced_rekey_ratio_mean": 0.702586312136793,
+      "forced_rekey_ratio_std": 0.4080446924873719,
+      "regret_events_mean": 3.5416666666666665,
+      "regret_events_std": 5.008673033404712,
+      "p99_latency_mean": 1.406375,
+      "p99_latency_std": 0.13240574477718123,
+      "floor_violations_total": 1012,
+      "n_training_seeds": 3,
+      "n_eval_seeds_per_checkpoint": 8
+    }
+  },
+  "s5_dose_response": {
+    "scenario": "S2",
+    "eval_seeds": [
+      900,
+      901,
+      902,
+      903,
+      904
+    ],
+    "alphas": [
+      0.0,
+      0.1,
+      0.2,
+      0.3,
+      0.4,
+      0.5,
+      0.6,
+      0.7,
+      0.8,
+      0.9,
+      1.0
+    ],
+    "series": [
+      {
+        "label": "Masked DQN",
+        "series_key": "masked",
+        "points": [
+          {
+            "alpha": 0.0,
+            "mean": 0.0,
+            "std": 0.0
+          },
+          {
+            "alpha": 0.1,
+            "mean": 0.0,
+            "std": 0.0
+          },
+          {
+            "alpha": 0.2,
+            "mean": 0.0,
+            "std": 0.0
+          },
+          {
+            "alpha": 0.3,
+            "mean": 0.0,
+            "std": 0.0
+          },
+          {
+            "alpha": 0.4,
+            "mean": 0.0,
+            "std": 0.0
+          },
+          {
+            "alpha": 0.5,
+            "mean": 0.0016,
+            "std": 0.0019595917942265427
+          },
+          {
+            "alpha": 0.6,
+            "mean": 0.0024000000000000002,
+            "std": 0.0019595917942265423
+          },
+          {
+            "alpha": 0.7,
+            "mean": 0.0048000000000000004,
+            "std": 0.0039191835884530846
+          },
+          {
+            "alpha": 0.8,
+            "mean": 0.009600000000000001,
+            "std": 0.0032
+          },
+          {
+            "alpha": 0.9,
+            "mean": 0.3,
+            "std": 0.007589466384404117
+          },
+          {
+            "alpha": 1.0,
+            "mean": 0.3,
+            "std": 0.007589466384404117
+          }
+        ]
+      },
+      {
+        "label": "Soft-reward baseline",
+        "series_key": "soft_reward",
+        "points": [
+          {
+            "alpha": 0.0,
+            "mean": 0.28959999999999997,
+            "std": 0.06781622224807277
+          },
+          {
+            "alpha": 0.1,
+            "mean": 0.28959999999999997,
+            "std": 0.06781622224807277
+          },
+          {
+            "alpha": 0.2,
+            "mean": 0.28959999999999997,
+            "std": 0.06781622224807277
+          },
+          {
+            "alpha": 0.3,
+            "mean": 0.28959999999999997,
+            "std": 0.06781622224807277
+          },
+          {
+            "alpha": 0.4,
+            "mean": 0.28959999999999997,
+            "std": 0.06781622224807277
+          },
+          {
+            "alpha": 0.5,
+            "mean": 0.28959999999999997,
+            "std": 0.06781622224807277
+          },
+          {
+            "alpha": 0.6,
+            "mean": 0.28959999999999997,
+            "std": 0.06781622224807277
+          },
+          {
+            "alpha": 0.7,
+            "mean": 0.28959999999999997,
+            "std": 0.06781622224807277
+          },
+          {
+            "alpha": 0.8,
+            "mean": 0.28959999999999997,
+            "std": 0.06781622224807277
+          },
+          {
+            "alpha": 0.9,
+            "mean": 0.3256,
+            "std": 0.07986388420306138
+          },
+          {
+            "alpha": 1.0,
+            "mean": 0.3256,
+            "std": 0.07986388420306138
+          }
+        ]
+      }
+    ]
+  }
+}
