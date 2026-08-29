@@ -11,6 +11,48 @@
 
 ## Next task
 
+**Living System panel rendered from real tenant-graph episode data —
+DONE 2026-08-29.** The fourth of seven dashboard panels, and the first
+to render a real graph (not just a real trace/table/chart). **Demo-asset
+location — pull these up during the review, alongside the other three
+below**: `dashboard/samples/living_system_01_first_decision.html`,
+`_02_graph_fully_populated.html`, `_03_final_decision.html` — three
+real static snapshots (not animated/live) from one real S2 (HNDL
+posture) episode under `StaticThresholdPolicy(0.5)`, run through the
+real `build_tenant_graph`-backed tenant graph via `request_stream_
+factory` injection. `dashboard/render_living_system.py` (pure renderer:
+real tenant nodes/edges tier-colored by each tenant's real most-
+recently-served key tier, resolved via `SmartKeyNetEnv.
+_resulting_key_type` — the same ground-truth function the environment
+itself uses, never re-derived) + `dashboard/render_living_system_demo.py`
+(driver). **Real, honestly-investigated finding along the way (Hard
+Rule 7), flagged here — not fixed, needs sign-off**: on this
+graph-driven request stream, S2's scripted `threat_schedule.
+elevate_at_step=50` turns out NOT to be what first raises the floor —
+`env/forecast_provider.py`'s placeholder threat-feature formula mixes
+an ordinary `load` (queue-backlog) term into what's meant to represent
+threat, and `load` climbs fast enough under real per-tenant traffic
+that the one-way ratchet fires within the first 1-2 real decisions of
+every seed checked (0-3), 40-50 decisions before the scripted
+elevation. This is a *load-sensitivity* finding, related to but
+distinct from the standing posture-*ceiling* item below (both point at
+the same placeholder formula needing a future calibration pass — flag
+both together for whoever picks that up). This session's snapshot
+selection was redesigned around real milestones (first decision /
+graph-fully-populated / final decision) rather than assuming the
+scripted schedule's timing, once this was found. A real bug was also
+caught before shipping: `KeyType.CLASSICAL == 0` is a falsy `IntEnum`
+value, so an early truthy check silently mislabeled CLASSICAL-served
+tenants as "no traffic yet" — caught by a dedicated per-tier exact-color
+test, fixed, re-verified (see SESSION_LOG.md's newest entry). 17 new
+tests. Full suite: **614 passed, 1 xfailed** (597 prior + 17 new). Zero
+changes to any protected file. **Remaining mockup-only panels, now
+three, not six**: Budgeting Brain, Migration Wave, Threat Input (the
+last still blocked on the real forecaster) — the paper's Table V fix
+and the real LSTM forecaster/API facade remain the other open items.
+See SESSION_LOG.md's newest entry for the full design-decision writeup
+and investigation.
+
 **Dose-response + S3 comparison demo visuals rendered from real data
 — DONE 2026-08-29.** The project's two headline results are now real,
 self-contained visual assets for the review/demo, not just numbers in
@@ -922,10 +964,13 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       comparison table — also now render from real, freshly re-run
       data** (`dashboard/render_dose_response.py`, `dashboard/
       render_comparison_table.py`, samples in `dashboard/samples/`).
+      **2026-08-29 (this session): the Living System panel (real
+      tenant graph + tier-colored recent decisions) also now renders
+      from real data** (`dashboard/render_living_system.py`, static
+      snapshots in `dashboard/samples/living_system_*.html`).
       `dashboard/app.py` itself (the live, wired 4-beat demo shell) is
-      still not started; the other four panels (Living System,
-      Budgeting Brain, Migration Wave, Threat Input) are still
-      mockup-only.
+      still not started; the other three panels (Budgeting Brain,
+      Migration Wave, Threat Input) are still mockup-only.
 - [ ] AWS-KMS-style API facade (`api/main.py`)
 - [ ] Report (`docs/report.md`) — currently a section-header skeleton with TODOs only
 
@@ -996,6 +1041,8 @@ behavioral tests, part of the green `pytest` run).
 | `dashboard/render_comparison_table.py` | implemented+tested | **2026-08-29 (new file, later session):** masked-vs-soft-reward S3 comparison table renderer -- the first headline demo visual. `AgentMetrics` (one agent's real, checkpoint-averaged S3 metrics)/`ComparisonTableData(scenario, masked, soft_reward, include_p99=True)` + `render_comparison_table_html(data, ...)`. `below_floor_rate` always leads the table (hero-styled row), per instruction. **Hard Rule 7 honesty, structural, not just a note**: if `include_p99=True` the `p99_latency` row is ALWAYS paired with a fixed caveat block quoting `experiments/harness.py::ScenarioResult.p99_latency`'s own documented discrete-cost-model-percentile-artifact mechanism (never rendered without it); `regret_events` always carries a `(== pool_exhaustion_events)` label plus a standing "same event by construction" note, quoting `run_scenario`'s own docstring. 10 tests (`test_render_comparison_table.py`), incl. `test_p99_latency_always_carries_its_caveat_when_shown` / a companion test proving `include_p99=False` omits the row, its caveat, AND its value together (no orphaned caveat either direction), a no-fabrication check parsing every `<tbody>` row's numeric leads against the real `AgentMetrics` fields, and HTML well-formedness with/without the p99 row. |
 | `dashboard/render_results_demo.py` | implemented+tested | **2026-08-29 (new file, later session):** the real driver for both renderers above. Data provenance decision (see SESSION_LOG.md's newest entry for the full reasoning): no saved raw-results file existed for either the 2026-08-25 S3 comparison or the 2026-08-26 S5 sweep, but the real checkpoints both sessions trained were still on disk (gitignored, not deleted) -- `collect_real_s3_comparison()` reloads `checkpoints/s3_{masked,soft_reward}_seed{1,4,7}.pt` (`_load_greedy_policy` reconstructs the `DQNAgent`/`GreedyDQNPolicy` the same way `experiments/train.py::train()` derives `state_dim`/`has_forecast`) and re-runs real `evaluate_multi_seed` calls (8 eval seeds, matching the original session), aggregating the 3 per-training-seed results into one `AgentMetrics` via the same "checkpoint-averaged, training-seed std" methodology Gate W3 established (verified to reproduce `-10214.82`/`1303.25` exactly). `collect_real_dose_response()` reloads `checkpoints/dqn_s2.pt`/`soft_reward_baseline_s2.pt` and re-runs real `evaluate_attack_multi_seed` across the real 11-alpha grid (5 eval seeds, matching the original sweep). `main()` saves the full fresh output to `dashboard/samples/results_data.json` (with an explicit `"provenance"` field) and renders both HTML files from the SAME live objects the JSON was built from. Reproducibility spot-checked before this driver was built (a reloaded checkpoint's fresh re-run matched SESSION_LOG.md's own per-seed numbers exactly); the full fresh run this session performed matched every prior figure to 4 decimal places. Run via `python -m dashboard.render_results_demo`. |
 | `dashboard/render_explain_demo.py` | implemented+tested | **2026-08-29 (new file):** the real driver for `render_explain.py`. `collect_real_traces()` runs a genuine S2 episode (`configs/scenarios/s2_hndl.yaml`, loaded via `experiments.train.load_full_config`) through the real `SmartKeyNetEnv` under the real `agents.baselines.StaticThresholdPolicy(0.5)` baseline -- not hand-authored inputs -- calling `explain_decision_from_env` once per decision, mirroring `experiments/harness.py::run_scenario`'s loop shape. `pick_demo_traces()` selects 3 genuinely different real decisions (first decision; a floor-driven decision, `floor is Action.SERVE_HYBRID`; a genuine multi-cost tradeoff). `main()` writes them to `dashboard/samples/*.html` -- the findable sample outputs for demo/review. **Real investigation documented in this module's own docstring**: searched (100+ real seeds, all four real baseline policies, both real elevated-threat scenario configs) for a genuine "floor-driven, only-one-legal-action" decision (the case `dashboard/explain.py`'s own `cost_note` field flags) and never found one occurring naturally under current calibration -- traced to a real structural cause (`env/masking.py::compute_mask`'s `REKEY_NOW` has no illegality rule once any tier clears the floor, so it stays legal almost everywhere a tier does) rather than assumed or silently worked around; the driver's floor-driven selector uses "only one SERVE tier clears the floor" instead, letting that decision's own real `cost_note` display honestly. Run via `python -m dashboard.render_explain_demo`. |
+| `dashboard/render_living_system.py` | implemented+tested | **2026-08-29 (new file, this session):** Living System panel renderer -- the fourth of seven dashboard panels. `TenantNodeView`/`RecentDecisionView`/`LivingSystemSnapshot` dataclasses + `build_snapshot()` (pure fold: real decision history up to a real ordinal cutoff -> one frozen snapshot; "most recently served tier per tenant," `None` for a tenant untouched so far, shown honestly as "no traffic yet," never defaulted) + `render_living_system_html()` (pure view: inline SVG, hub-and-spoke ring layout computed from however many real tenant nodes the graph actually has -- never a fixed count -- edges/nodes tier-colored via the same hex values `render_explain.py`'s CSS already established) + `write_living_system_html()`. 17 tests (`test_render_living_system.py`), all against the real `build_tenant_graph` (never a hand-built `nx.Graph`): real node-count/topology parametrized across `n_nodes` in {3,7,10}, tier-color-correctness parametrized across all three real tiers (this test caught a real bug -- `KeyType.CLASSICAL == 0` is falsy, so an early truthy check silently mislabeled CLASSICAL-served tenants as untouched; fixed to `is not None`), a no-fabrication check, and HTML/SVG well-formedness. See SESSION_LOG.md's newest entry for the full design-decision writeup and the real S2-ratchet-timing finding. |
+| `dashboard/render_living_system_demo.py` | implemented+tested | **2026-08-29 (new file, this session):** the real driver for `render_living_system.py`. Builds the real graph (`build_tenant_graph(n_nodes=10, seed=7)` -- a dedicated structural seed, same rationale as S4/S6's own `graph_seed`), runs a real 250-decision S2 episode via `request_stream_factory` injection (the same swap-test precedent `tests/test_environment.py` established), and for each decision resolves the real served tier via `SmartKeyNetEnv._resulting_key_type` (the exact ground-truth function `_apply_action` itself uses -- never re-derived from the action alone, since `REUSE`/`REKEY_NOW` don't map to a tier that way). `pick_snapshot_indices()` selects three real milestones (first decision / first decision by which every real tenant has been served / final decision) -- redesigned mid-session after finding the originally-planned "before/after S2's scripted `elevate_at_step`" predicate doesn't hold on this stream (see SESSION_LOG.md). Writes `dashboard/samples/living_system_0{1,2,3}_*.html`. Run via `python -m dashboard.render_living_system_demo`. |
 | `dashboard/explain.py` | implemented+tested | **2026-08-19 (new file):** Explain Decision panel backend (PLAN2.md §7.3, Addition D; Hard Rule 10) -- Person D's first real code this project. `explain_decision(...)` (pure function, all six inputs explicit) + `explain_decision_from_env(env, state, chosen_action)` (convenience wrapper pulling those inputs off a live `SmartKeyNetEnv`, mirroring `experiments/harness.py`'s established precedent for reaching into a few private env attributes the public Gym API doesn't yet surface). Returns a `DecisionTrace` dataclass covering all six PLAN2.md §7.3 steps: threat score + source, posture probs + resolved posture, floor lookup (+ the full real floor table, imported from `env.masking`, never re-typed), the action mask (calls `env.masking.compute_mask()` directly -- zero possible drift between this module's legal/reason fields and the masking layer's real behavior, by construction, not by convention), cost comparison (reads `env.environment`'s real `_LATENCY_UNITS`/`_ENERGY_UNITS`/`_KEY_TYPE_TO_SERVE_ACTION`, never re-derived), and a deterministically templated final sentence. Policy-agnostic by design (no dependency on `agents/dqn.py`) -- verified in a scratchpad sanity script against `StaticThresholdPolicy` on real S1 steps, which also caught and fixed one real bug: the final-sentence template originally said "a learned preference from the policy" for the cost-tradeoff case, which is wrong for a non-learning baseline; reworded to "the policy's own preference among legal options." 29 tests (`test_explain.py`, up from 26), incl. every (sensitivity_class, posture) floor-table cell checked against a fresh `PolicyTable`, 6 parametrized mask edge cases (pool empty, key age at/over cap, cold start, all-legal, HYBRID-floor-with-empty-pool) each checked against a real `compute_mask()` call, REKEY_NOW cost-resolution cases (existing-tier and cold-start-adopts-floor), and an end-to-end test stepping a real `SmartKeyNetEnv` and cross-checking every trace against a fresh `compute_mask()` call built from the same env state. **2026-08-19 (same day, later session): updated to track `env/masking.py`'s Hard Rule 2 fix** — `_mask_entries()` now passes `current_key_type` into `compute_mask()` and gained the matching stale-tier reason case (would otherwise crash on the new illegality reason), `_resolved_cost_action()` updated to the same `max(existing, floor)` REKEY_NOW resolution (would otherwise display a cost for a tier that was never actually served). Explicitly out of scope this session (per PLAN2.md's Hard Rule 11 and Hard Rule 10's scoping): pcap ingestion / Threat Input panel (§7.1) and any dashboard HTML/frontend -- this is a Python module returning structured data only. |
 
 ### api/
