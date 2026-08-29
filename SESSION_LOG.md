@@ -46,6 +46,37 @@
 
 ## Sessions (newest first)
 
+### [SOLO — read-only repo state verification: branch/sync, test suite, PROGRESS accuracy checkpoint] — 2026-08-29 — main
+
+**Session goal:** establish trustworthy ground truth after several prior sessions ended with "not pushed to origin" and at least one past branch-drift surprise — read-only investigation only, per explicit instruction (no source/config/test file touched).
+
+**Step 0 — branch/sync state:** `main` and `dev21` were identical locally at session start (`227c7e8`), no divergence. Working tree clean, checked-out branch was `main` (not `dev21` — contradicts the standing branch-note memory, which itself says to re-verify each session). **Found real unpushed-commit drift**: `origin/main` and `origin/dev21` were both one commit behind, at `34640ca` — the missing commit on both was `227c7e8` itself, a clean fast-forward, not a conflicting divergence (`git log origin/main..main` / `origin/dev21..dev21` each showed exactly that one commit; local `main`↔`dev21` diff both directions was empty). Per the STOP-and-report rule, reported this plainly and asked before acting rather than reconciling unilaterally. **User approved pushing both.** `git push origin main` and `git push origin dev21` both landed as clean fast-forwards (`34640ca..227c7e8`). Post-push verification: `git rev-parse main dev21 origin/main origin/dev21` all four return the identical hash `227c7e85cf62ebc85d311a57022ccd291e3b821c` — fully in sync, confirmed directly, not assumed. Also noticed (not investigated, out of this session's branch scope): `dev21`'s local tracking upstream is actually `origin/dev` (shown "ahead 4" in `git branch -vv`), not `origin/dev21` — a pre-existing tracking-branch oddity, flagged only. Other branches (`capstone-build-2026-08-20`, `feat/scarcity-calibration-floor-fixes-and-experiments`) noted to exist, not fetched/read/compared, per instruction.
+
+**Step 1 — real test suite result:** `python -m pytest -q` → **568 passed, 1 xfailed in 44.58s**. Matches SESSION_LOG.md's most recently claimed numbers exactly — no discrepancy, no modification made to any test to produce this result.
+
+**Step 2 — PROGRESS.md vs. filesystem spot-check (not exhaustive, per instruction) — zero mismatches found, every claim checked confirmed accurate:**
+- `agents/soft_reward_baseline.py` (211 lines) — real, `SoftRewardConfig`/`compute_soft_reward` present, no `NotImplementedError`.
+- `attack/trace_generator.py` (84 lines) and `attack/attacking_provider.py` (114 lines) — both real.
+- `env/request_generator.py` (454 lines) — real `build_tenant_graph()` and `RequestGenerator` class both present.
+- `configs/scenarios/`: `s2_hndl.yaml`, `s3_degradation.yaml`, `s4_ddos.yaml`, `s6_migration.yaml` all present on disk; S1 = `configs/default.yaml`, S5 = the attack sweep run against S2's config (matches PROGRESS.md's own stated framing, no dedicated S5 file expected).
+- `experiments/harness.py` (625 lines) — `evaluate_multi_seed`, `run_scenario_under_attack`, `evaluate_attack_multi_seed` all present as real functions (grepped by name, not inferred).
+- `dashboard/explain.py` (387 lines) — real, not a stub.
+- `env/forecast_provider.py` (122 lines) — **confirmed still a stub for the claimed-open gap**: only `MovingAverageForecaster` (EWMA) exists; no `LSTMForecastProvider` class anywhere in the file, biggest claimed gap remains accurately claimed.
+- `docs/`: all four claimed files present — `smartkeynet_ieee_paper_5.tex`, `steering_attack_limitations_addendum.md`, `soft_reward_curve_addendum.md`, `report.md`.
+
+**Step 3 — the two known open instrumentation items, status confirmed (not investigated/fixed, per instruction):**
+- **p99_latency saturation**: the discrete-cost-model explanation genuinely exists **in code**, not only in SESSION_LOG.md prose — `experiments/harness.py`'s `ScenarioResult.p99_latency` docstring (~lines 54-85) and `MultiSeedEvalResult.p99_latency_mean` docstring (~lines 296-300) both carry the full percentile-over-a-4-value-discrete-series mechanism explanation.
+- **exhaustion == regret identity**: also documented directly in code, not just logs — `experiments/harness.py`'s `pool_exhaustion_events` field docstring (~lines 161-165) states plainly that every regret event *is* a pool-exhaustion event by construction in the current environment. This is not carried anywhere in PROGRESS.md as an open/unresolved item — it is a documented, resolved design characteristic, not a live gap.
+
+**What got done:** full read-only ground-truth verification across git state, test suite, and PROGRESS.md accuracy; one approved git reconciliation (push main + dev21 to origin); this log entry + a PROGRESS.md confirmation note.
+**What's working:** repo is now genuinely, verifiably in sync across all four refs; test suite is genuinely green at the claimed count; PROGRESS.md's factual claims all check out against the filesystem, no corrections were needed.
+**What's broken / incomplete:** nothing new found broken this session — this was a checkpoint, not a bug hunt. The two pre-existing open paper-integration items (Fig. 5 TikZ diagram sign-off, Table V units reconciliation) remain exactly as the 2026-08-27 entries left them, untouched.
+**Blockers:** none.
+**Next session will:** resume PROGRESS.md's own "Next task" section (Fig. 5 TikZ sign-off / Table V reconciliation) — this session made no changes to that priority queue, only verified it against reality.
+**Hard Rules check:** no source/config/test file was touched this session (read-only investigation only, per explicit instruction); the one write action taken — pushing `main`/`dev21` to origin — was explicitly reported and approved by the user before being executed, per the STOP-and-report rule, not done unilaterally.
+
+---
+
 ### [SOLO — paper integration: S5 limitations + soft-reward Fig. 5 correction into the real .tex] — 2026-08-27 — main
 
 **Branch sync confirmed before starting:** `git rev-parse main dev21` both `34640ca6c6ccd177f776b5907aabace956ba00bf`.

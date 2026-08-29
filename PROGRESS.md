@@ -11,6 +11,20 @@
 
 ## Next task
 
+**Read-only repo state verification — DONE 2026-08-29.** Ground-truth
+checkpoint: branch/sync confirmed clean after pushing one commit of
+drift found on both `main`/`dev21` (approved fast-forward, not a
+divergence — all four refs now identical, `227c7e8`); test suite
+re-confirmed genuinely green (`568 passed, 1 xfailed`, matches prior
+claim exactly); this file's per-file status table and milestone
+checklist spot-checked against the filesystem — **zero corrections
+needed, every claim checked was accurate**; both standing
+instrumentation items (p99_latency saturation, exhaustion==regret
+identity) reconfirmed as already resolved and documented directly in
+`experiments/harness.py`'s own docstrings, not just in session-log
+prose. See SESSION_LOG.md's newest entry for full detail. This did not
+change any priority below — resume where the entry underneath left off.
+
 **Paper integration of both addenda — DONE 2026-08-27** (real
 `docs/smartkeynet_ieee_paper_5.tex` now exists in the repo; see
 SESSION_LOG.md's newest entry, "paper integration: S5 limitations +
