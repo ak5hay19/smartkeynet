@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartKeyNet -- Explain Decision -- 03_real_cost_tradeoff</title>
+<style>
+:root{
+  --bg:#0A0E13; --panel:#111820; --panel-2:#151D27; --line:#212C39; --line-soft:#171F29;
+  --text:#E9EEF4; --text-dim:#8FA0B3; --text-faint:#4C5A6B;
+  --classical:#8B95A5; --pqc:#E8A33D; --hybrid:#33D687; --quantum:#6E7EFF;
+  --radius:12px; --radius-sm:7px;
+  --mono:ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;
+  --disp:-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:var(--disp);padding:28px 20px 60px;}
+.wrap{max-width:760px;margin:0 auto;}
+.beat-head{margin-bottom:22px;}
+.beat-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-faint);}
+.beat-title{font-family:var(--disp);font-weight:700;font-size:22px;margin-top:4px;}
+.beat-desc{color:var(--text-dim);font-size:13px;margin-top:6px;line-height:1.5;}
+
+.trace{position:relative;padding-left:42px;}
+.trace::before{content:"";position:absolute;left:14px;top:6px;bottom:6px;width:2px;background:var(--line);}
+.trace-step{position:relative;margin-bottom:26px;}
+.trace-step:last-child{margin-bottom:0;}
+.step-num{
+  position:absolute;left:-42px;top:0;width:29px;height:29px;border-radius:50%;
+  background:var(--panel);border:2px solid var(--quantum);display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:12px;font-weight:700;color:var(--quantum);
+}
+.step-title{font-family:var(--disp);font-weight:600;font-size:14.5px;margin-bottom:10px;}
+.step-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 17px;}
+
+.signal-row{display:flex;align-items:center;gap:18px;flex-wrap:wrap;}
+.signal-score{font-family:var(--mono);font-weight:700;font-size:30px;color:var(--quantum);}
+.signal-meta{font-size:12px;color:var(--text-dim);}
+.signal-meta .src{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);display:block;margin-top:3px;}
+
+.posture-off{font-size:12.5px;color:var(--text-dim);}
+
+.prob-bars{display:flex;flex-direction:column;gap:8px;}
+.prob-row{display:grid;grid-template-columns:82px 1fr 48px;align-items:center;gap:10px;}
+.prob-label{font-family:var(--mono);font-size:10.5px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;}
+.prob-track{height:9px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);overflow:hidden;}
+.prob-fill{height:100%;border-radius:999px;background:var(--text-faint);}
+.prob-row.resolved .prob-label{color:var(--text);font-weight:600;}
+.prob-row.resolved .prob-fill{background:var(--quantum);}
+.prob-pct{font-family:var(--mono);font-size:11px;color:var(--text-dim);text-align:right;}
+
+.floor-grid{display:grid;grid-template-columns:56px repeat(3,1fr);gap:6px;margin-top:4px;}
+.fg-head{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint);text-align:center;padding:6px 2px;}
+.fg-rowlabel{font-family:var(--mono);font-size:10.5px;color:var(--text-dim);display:flex;align-items:center;padding-left:2px;}
+.floor-cell{
+  font-family:var(--mono);font-size:11px;font-weight:600;text-align:center;padding:9px 4px;border-radius:6px;
+  border:1px solid var(--line-soft);background:var(--panel-2);color:var(--text-faint);
+}
+.floor-cell.cl{color:var(--classical);}
+.floor-cell.pqc{color:var(--pqc);}
+.floor-cell.hy{color:var(--hybrid);}
+.floor-cell.hit{border-color:var(--quantum);background:rgba(110,126,255,.14);box-shadow:0 0 0 1px var(--quantum) inset;}
+
+.floor-result{margin-top:12px;display:flex;align-items:center;justify-content:space-between;background:var(--panel-2);border-radius:var(--radius-sm);padding:10px 13px;}
+.floor-result .k{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.06em;}
+.floor-result .v{font-family:var(--mono);font-weight:700;font-size:14px;}
+
+.mask-row{display:flex;gap:8px;flex-wrap:wrap;}
+.mask-item{flex:1;min-width:118px;border-radius:var(--radius-sm);padding:11px 10px;text-align:center;border:1px solid var(--line-soft);background:var(--panel-2);}
+.mask-item.legal{border-color:rgba(51,214,135,.32);background:rgba(51,214,135,.06);}
+.mask-item .a-name{font-family:var(--mono);font-size:10.5px;font-weight:600;}
+.mask-item.legal .a-name{color:var(--hybrid);}
+.mask-item:not(.legal) .a-name{color:var(--text-faint);text-decoration:line-through;}
+.mask-item .a-reason{font-size:10px;color:var(--text-faint);margin-top:5px;line-height:1.4;}
+.mask-item.legal .a-reason{color:var(--hybrid);opacity:.8;}
+
+.cost-rows{display:flex;flex-direction:column;gap:9px;}
+.cost-row{display:grid;grid-template-columns:132px 1fr 100px;align-items:center;gap:10px;}
+.cost-name{font-family:var(--mono);font-size:11px;color:var(--text-dim);}
+.cost-track{height:10px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);overflow:hidden;}
+.cost-fill{height:100%;border-radius:999px;background:var(--text-faint);}
+.cost-row.chosen .cost-name{color:var(--text);font-weight:600;}
+.cost-row.chosen .cost-fill{background:var(--hybrid);}
+.cost-nums{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);text-align:right;}
+.cost-note{margin-top:10px;font-size:11.5px;color:var(--text-dim);}
+
+.final-pick{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+.final-chip{font-family:var(--mono);font-weight:700;font-size:15px;letter-spacing:.02em;padding:9px 16px;border-radius:8px;background:rgba(110,126,255,.14);border:1px solid var(--quantum);color:var(--quantum);}
+.final-text{flex:1;min-width:220px;font-size:12.5px;color:var(--text-dim);line-height:1.55;}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="beat-head">
+    <div class="beat-eyebrow">Explainability</div>
+    <div class="beat-title">Why this key, not another</div>
+    <div class="beat-desc">There's no narrated reasoning here -- the explanation <i>is</i> the pipeline. Signal &rarr; posture &rarr; floor lookup &rarr; action mask &rarr; cost comparison &rarr; pick. Every step below is a real, inspectable computation from this one decision.</div>
+  </div>
+  <div class="trace">
+      <div class="trace-step">
+        <div class="step-num">1</div>
+        <div class="step-title">Threat signal ingested</div>
+        <div class="step-card">
+          <div class="signal-row">
+            <div class="signal-score">0.1508</div>
+            <div class="signal-meta">threat_score (0-1)
+              <span class="src">MovingAverageForecaster</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="trace-step">
+        <div class="step-num">2</div>
+        <div class="step-title">Posture classified</div>
+        <div class="step-card"><div class="prob-bars">
+            <div class="prob-row resolved">
+              <div class="prob-label">CALM</div>
+              <div class="prob-track"><div class="prob-fill" style="width:65.55%"></div></div>
+              <div class="prob-pct">65.5%</div>
+            </div>
+            <div class="prob-row">
+              <div class="prob-label">ELEVATED</div>
+              <div class="prob-track"><div class="prob-fill" style="width:33.83%"></div></div>
+              <div class="prob-pct">33.8%</div>
+            </div>
+            <div class="prob-row">
+              <div class="prob-label">HIGH</div>
+              <div class="prob-track"><div class="prob-fill" style="width:0.62%"></div></div>
+              <div class="prob-pct">0.6%</div>
+            </div></div></div>
+      </div>
+      <div class="trace-step">
+        <div class="step-num">3</div>
+        <div class="step-title">Policy floor lookup -- (sensitivity class &times; posture)</div>
+        <div class="step-card"><div class="floor-grid"><div class="fg-head"></div><div class="fg-head">Calm</div><div class="fg-head">Elevated</div><div class="fg-head">High</div><div class="fg-rowlabel">S0</div><div class="floor-cell cl hit">CL</div><div class="floor-cell cl">CL</div><div class="floor-cell pqc">PQC</div><div class="fg-rowlabel">S1</div><div class="floor-cell cl">CL</div><div class="floor-cell pqc">PQC</div><div class="floor-cell pqc">PQC</div><div class="fg-rowlabel">S2</div><div class="floor-cell pqc">PQC</div><div class="floor-cell pqc">PQC</div><div class="floor-cell hy">HY</div><div class="fg-rowlabel">S3</div><div class="floor-cell pqc">PQC</div><div class="floor-cell hy">HY</div><div class="floor-cell hy">HY</div></div>
+          <div class="floor-result">
+            <span class="k">S0 + CALM</span>
+            <span class="v">floor = SERVE_CLASSICAL</span>
+          </div></div>
+      </div>
+      <div class="trace-step">
+        <div class="step-num">4</div>
+        <div class="step-title">Action mask computed</div>
+        <div class="step-card"><div class="mask-row">
+          <div class="mask-item legal">
+            <div class="a-name">SERVE_CLASSICAL</div>
+            <div class="a-reason">clears floor (requires &gt;= SERVE_CLASSICAL)</div>
+          </div>
+          <div class="mask-item legal">
+            <div class="a-name">SERVE_PQC</div>
+            <div class="a-reason">clears floor (requires &gt;= SERVE_CLASSICAL)</div>
+          </div>
+          <div class="mask-item legal">
+            <div class="a-name">SERVE_HYBRID</div>
+            <div class="a-reason">clears floor (requires &gt;= SERVE_CLASSICAL)</div>
+          </div>
+          <div class="mask-item">
+            <div class="a-name">REUSE</div>
+            <div class="a-reason">no existing key yet (cold start)</div>
+          </div>
+          <div class="mask-item legal">
+            <div class="a-name">REKEY_NOW</div>
+            <div class="a-reason">clears floor (requires &gt;= SERVE_CLASSICAL)</div>
+          </div></div></div>
+      </div>
+      <div class="trace-step">
+        <div class="step-num">5</div>
+        <div class="step-title">Cost comparison among legal actions</div>
+        <div class="step-card"><div class="cost-rows">
+          <div class="cost-row">
+            <div class="cost-name">SERVE_CLASSICAL</div>
+            <div class="cost-track"><div class="cost-fill" style="width:64.5%"></div></div>
+            <div class="cost-nums">lat 1 &middot; en 1</div>
+          </div>
+          <div class="cost-row">
+            <div class="cost-name">REKEY_NOW</div>
+            <div class="cost-track"><div class="cost-fill" style="width:64.5%"></div></div>
+            <div class="cost-nums">lat 1 &middot; en 1</div>
+          </div>
+          <div class="cost-row">
+            <div class="cost-name">SERVE_PQC</div>
+            <div class="cost-track"><div class="cost-fill" style="width:80.6%"></div></div>
+            <div class="cost-nums">lat 1.2 &middot; en 1.3</div>
+          </div>
+          <div class="cost-row chosen">
+            <div class="cost-name">SERVE_HYBRID ✓</div>
+            <div class="cost-track"><div class="cost-fill" style="width:100.0%"></div></div>
+            <div class="cost-nums">lat 1.5 &middot; en 1.6</div>
+          </div></div></div>
+      </div>
+      <div class="trace-step">
+        <div class="step-num">6</div>
+        <div class="step-title">Final decision</div>
+        <div class="step-card">
+          <div class="final-pick">
+            <span class="final-chip">SERVE_HYBRID</span>
+            <span class="final-text">Floor requires &gt;= SERVE_CLASSICAL at S0 + CALM posture. SERVE_CLASSICAL was legal and cheaper (latency 1, energy 1), but SERVE_HYBRID (latency 1.5, energy 1.6) was chosen instead -- the policy&#x27;s own preference among legal options, not a rule the masking layer enforces.</span>
+          </div>
+        </div>
+      </div></div>
+</main>
+</body>
+</html>

@@ -11,6 +11,53 @@
 
 ## Next task
 
+**Explain Decision panel rendered — DONE 2026-08-29.** The first
+VISUAL/frontend piece of the project (every prior session was
+backend/experiment work): `dashboard/explain.py`'s real, tested
+Explain Decision backend (real since 2026-08-19) now has a real view
+layer. `dashboard/render_explain.py::render_trace_html()` -- a pure,
+zero-new-dependency function -- turns a real `DecisionTrace` into a
+self-contained static HTML page (inline CSS, no server, no JS
+framework, no build step), styled to match
+`dashboard/mockups/smartkeynet_dashboard_mockup_v2.html`'s Explain
+Decision tab visually, but driven entirely by real computed trace
+values (Hard Rule 10) -- that mockup's own example numbers are never
+read. `dashboard/render_explain_demo.py` is the real driver: runs a
+genuine S2 episode through `SmartKeyNetEnv` under the real
+`StaticThresholdPolicy` baseline (not hand-authored inputs),
+collecting one real `DecisionTrace` per decision, and writes 3
+genuinely different real samples to `dashboard/samples/*.html` (first
+decision, a floor-driven decision, a real cost-tradeoff-not-taken
+decision). `tests/test_render_explain.py` (10 new tests) verify Hard
+Rule 10 by exact-match assertion (not just design intent): every
+rendered per-action reason and the final sentence are checked
+character-for-character against the real trace's own fields across 15
+real decisions of a stepped episode, plus the floor grid's highlighted
+cell is checked against all 12 real `(SensitivityClass, ThreatPosture)`
+combinations. **Real, honestly-reported finding along the way**: this
+session searched (100+ real seeds, all four real baseline policies,
+both real elevated-threat scenario configs) for a genuine
+"floor-driven, only-one-legal-action" episode decision (the case
+`dashboard/explain.py`'s own `cost_note` field flags) and never found
+one occurring naturally -- traced to a real structural cause
+(`REKEY_NOW` has no illegality rule in `env/masking.py::compute_mask`
+once any tier clears the floor, so it stays legal almost everywhere),
+documented in `dashboard/render_explain_demo.py`'s own docstring
+rather than worked around. Full suite: **578 passed, 1 xfailed** (568
+prior + 10 new). Zero changes to any protected file (`env/contracts.py`,
+`dashboard/explain.py`, `env/environment.py`, `env/masking.py`,
+`agents/*`, `experiments/*`, `reward.*`, the mockup HTML) -- verified
+via `git status --short`/`git diff --stat` showing only new files. See
+SESSION_LOG.md's newest entry for the full design-decision writeup and
+investigation. **This session deliberately did ONE dashboard panel
+(the one whose backend already existed), not all seven** -- the
+remaining six (Living System, Budgeting Brain, Steering Attack,
+Migration Wave, Results, Threat Input) are still mockup-only, each
+needing its own backend + render work; the real LSTM forecaster
+(Addition A) and the API facade (`api/main.py`) remain the other two
+large not-started items. This did not change any priority below --
+resume from whichever of those the next session picks.
+
 **Read-only repo state verification — DONE 2026-08-29.** Ground-truth
 checkpoint: branch/sync confirmed clean after pushing one commit of
 drift found on both `main`/`dev21` (approved fast-forward, not a
@@ -487,7 +534,10 @@ deliberately, not incidentally.
 
 **Thread 2 — Dashboard v2 (started 2026-08-19).** `dashboard/explain.py`
 (the Explain Decision panel's backend, PLAN2.md §7.3) is now
-implemented+tested — see its `dashboard/` per-file row below. The
+implemented+tested — see its `dashboard/` per-file row below.
+**2026-08-29: the Explain Decision panel is now also rendered** —
+`dashboard/render_explain.py` + `dashboard/render_explain_demo.py`,
+see this file's "Next task" and `dashboard/`'s per-file rows. The
 concrete next Dashboard v2 step is the Threat Input panel (PLAN2.md
 §7.1), but that's blocked on Person A's feature-extraction work (the
 shared RT-IoT2022/pcap feature-extraction function PLAN2.md §6 and
@@ -814,7 +864,13 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       milestone** — see `env/environment.py`'s/`env/request_generator.py`'s
       per-file rows and SESSION_LOG.md's newest entry for the full mechanism,
       the three-event schedule chosen and why, and all test results.
-- [ ] Live dashboard (`dashboard/app.py`) — 4-beat demo
+- [ ] Live dashboard (`dashboard/app.py`) — 4-beat demo. **2026-08-29:
+      the Explain Decision panel (one of seven) now has a real render
+      layer** (`dashboard/render_explain.py`, real samples in
+      `dashboard/samples/`) — see this file's "Next task" and
+      `dashboard/`'s per-file rows below. `dashboard/app.py` itself
+      (the live, wired 4-beat demo shell) is still not started; the
+      other six panels are still mockup-only.
 - [ ] AWS-KMS-style API facade (`api/main.py`)
 - [ ] Report (`docs/report.md`) — currently a section-header skeleton with TODOs only
 
@@ -880,6 +936,8 @@ behavioral tests, part of the green `pytest` run).
 | File | Status | Notes |
 |---|---|---|
 | `dashboard/app.py` | not started | Stub, `test_dashboard_app.py` is 1 import-smoke test. |
+| `dashboard/render_explain.py` | implemented+tested | **2026-08-29 (new file):** Explain Decision panel's view layer -- renders `dashboard/explain.py`'s real `DecisionTrace` objects as a self-contained static HTML page (inline CSS, zero JS, zero server, zero build step, zero new dependencies -- deliberately does not reach for `dash`/`plotly` despite both already being in `requirements.txt` for the eventual full live dashboard). `render_trace_html(trace, *, title=...)` (pure function, six private `_render_stepN_*` helpers, each reading only `DecisionTrace` fields) + `write_trace_html(trace, path, *, title=...)`. Styled to visually match `dashboard/mockups/smartkeynet_dashboard_mockup_v2.html`'s Explain Decision tab (dark theme, floor grid, mask chips, cost bars) but reads zero data from it -- that file's example numbers are 100% fabricated per its own header. Floor-grid cells carry a `data-cell="{SensClass}-{Posture}"` attribute so the fired cell is programmatically verifiable, not just visual. Every dynamic string passed through `html.escape`. 10 tests (`test_render_explain.py`), incl. two exact-match Hard Rule 10 tests stepping a real `SmartKeyNetEnv` for 15 decisions and asserting the rendered per-action reasons/final sentence/cost-row ordering are character-for-character identical to the real trace's own fields (never invented), a floor-grid `hit`-cell test parametrized across all 12 real `(SensitivityClass, ThreatPosture)` cells, and two HTML well-formedness tests via a small balanced-tag `HTMLParser` subclass (no new dependency). See SESSION_LOG.md's newest entry for the full design-decision writeup. |
+| `dashboard/render_explain_demo.py` | implemented+tested | **2026-08-29 (new file):** the real driver for `render_explain.py`. `collect_real_traces()` runs a genuine S2 episode (`configs/scenarios/s2_hndl.yaml`, loaded via `experiments.train.load_full_config`) through the real `SmartKeyNetEnv` under the real `agents.baselines.StaticThresholdPolicy(0.5)` baseline -- not hand-authored inputs -- calling `explain_decision_from_env` once per decision, mirroring `experiments/harness.py::run_scenario`'s loop shape. `pick_demo_traces()` selects 3 genuinely different real decisions (first decision; a floor-driven decision, `floor is Action.SERVE_HYBRID`; a genuine multi-cost tradeoff). `main()` writes them to `dashboard/samples/*.html` -- the findable sample outputs for demo/review. **Real investigation documented in this module's own docstring**: searched (100+ real seeds, all four real baseline policies, both real elevated-threat scenario configs) for a genuine "floor-driven, only-one-legal-action" decision (the case `dashboard/explain.py`'s own `cost_note` field flags) and never found one occurring naturally under current calibration -- traced to a real structural cause (`env/masking.py::compute_mask`'s `REKEY_NOW` has no illegality rule once any tier clears the floor, so it stays legal almost everywhere a tier does) rather than assumed or silently worked around; the driver's floor-driven selector uses "only one SERVE tier clears the floor" instead, letting that decision's own real `cost_note` display honestly. Run via `python -m dashboard.render_explain_demo`. |
 | `dashboard/explain.py` | implemented+tested | **2026-08-19 (new file):** Explain Decision panel backend (PLAN2.md §7.3, Addition D; Hard Rule 10) -- Person D's first real code this project. `explain_decision(...)` (pure function, all six inputs explicit) + `explain_decision_from_env(env, state, chosen_action)` (convenience wrapper pulling those inputs off a live `SmartKeyNetEnv`, mirroring `experiments/harness.py`'s established precedent for reaching into a few private env attributes the public Gym API doesn't yet surface). Returns a `DecisionTrace` dataclass covering all six PLAN2.md §7.3 steps: threat score + source, posture probs + resolved posture, floor lookup (+ the full real floor table, imported from `env.masking`, never re-typed), the action mask (calls `env.masking.compute_mask()` directly -- zero possible drift between this module's legal/reason fields and the masking layer's real behavior, by construction, not by convention), cost comparison (reads `env.environment`'s real `_LATENCY_UNITS`/`_ENERGY_UNITS`/`_KEY_TYPE_TO_SERVE_ACTION`, never re-derived), and a deterministically templated final sentence. Policy-agnostic by design (no dependency on `agents/dqn.py`) -- verified in a scratchpad sanity script against `StaticThresholdPolicy` on real S1 steps, which also caught and fixed one real bug: the final-sentence template originally said "a learned preference from the policy" for the cost-tradeoff case, which is wrong for a non-learning baseline; reworded to "the policy's own preference among legal options." 29 tests (`test_explain.py`, up from 26), incl. every (sensitivity_class, posture) floor-table cell checked against a fresh `PolicyTable`, 6 parametrized mask edge cases (pool empty, key age at/over cap, cold start, all-legal, HYBRID-floor-with-empty-pool) each checked against a real `compute_mask()` call, REKEY_NOW cost-resolution cases (existing-tier and cold-start-adopts-floor), and an end-to-end test stepping a real `SmartKeyNetEnv` and cross-checking every trace against a fresh `compute_mask()` call built from the same env state. **2026-08-19 (same day, later session): updated to track `env/masking.py`'s Hard Rule 2 fix** — `_mask_entries()` now passes `current_key_type` into `compute_mask()` and gained the matching stale-tier reason case (would otherwise crash on the new illegality reason), `_resolved_cost_action()` updated to the same `max(existing, floor)` REKEY_NOW resolution (would otherwise display a cost for a tier that was never actually served). Explicitly out of scope this session (per PLAN2.md's Hard Rule 11 and Hard Rule 10's scoping): pcap ingestion / Threat Input panel (§7.1) and any dashboard HTML/frontend -- this is a Python module returning structured data only. |
 
 ### api/
