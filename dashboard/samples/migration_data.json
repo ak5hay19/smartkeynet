@@ -1,0 +1,1082 @@
+{
+  "provenance": "Real, held-out S6 (migration wave) episode, seed=900, run fresh this session via dashboard/render_migration_wave_demo.py -- masked DQN reloaded from checkpoints/dqn_s1.pt (trained on S1, steady state; eval only, no retraining -- s6_migration.yaml's own train_eligible=False guard was verified, Hard Rule 8). Real migration_schedule read directly from configs/scenarios/s6_migration.yaml. Attribution per event computed by dashboard/render_migration_wave.py::attribute_floor_change from real before/after observations -- never assumed 'scripted' by default.",
+  "scenario": "S6",
+  "seed": 900,
+  "policy_label": "Masked DQN",
+  "checkpoint_note": "checkpoints/dqn_s1.pt, trained on S1 (steady state), held-out eval on S6",
+  "n_decisions": 250,
+  "trajectory": [
+    {
+      "step": 2,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 4,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 6,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 7,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 8,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 9,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 14,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 16,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 17,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 18,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 19,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 20,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 21,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 22,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 23,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 24,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 25,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 26,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 27,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 28,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 30,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 31,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 32,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 33,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 37,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 38,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 39,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 40,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 41,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 43,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 44,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 45,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 46,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 47,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 48,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 49,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 50,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 51,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 52,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 53,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 54,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 55,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 56,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 57,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 58,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 59,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 62,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 63,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 64,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 65,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 66,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 67,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 68,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 69,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 70,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 72,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 73,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 74,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 75,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 76,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 77,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 78,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 79,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 80,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 81,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 82,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 83,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 84,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 85,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 86,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 87,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 88,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 89,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 90,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 91,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 92,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 93,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 94,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 95,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 96,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 97,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 98,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 99,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 100,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 101,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 102,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 103,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 104,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 105,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 106,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 107,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 108,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 109,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 110,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 111,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 112,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 113,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 114,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 115,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 116,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 117,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 118,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 119,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 120,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 121,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 122,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 123,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 124,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 125,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 126,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 127,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 128,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 129,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 130,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 131,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 132,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 133,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 134,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 135,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 136,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 137,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 138,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 139,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 140,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 141,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 142,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 143,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 144,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 145,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 146,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 147,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 148,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 149,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 150,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 151,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 152,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 153,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 154,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 155,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 156,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 157,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 158,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 159,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 160,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 161,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 162,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 163,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 164,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 165,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 166,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 167,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 168,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 169,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 171,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 172,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 173,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 174,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 176,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 179,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 180,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 181,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 182,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 183,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 184,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 185,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 186,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 187,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 191,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 193,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 194,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 195,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 196,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 197,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 198,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 199,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 200,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 201,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 202,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 203,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 204,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 205,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 206,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 207,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 208,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 209,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 210,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 211,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 212,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 213,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 214,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 217,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 218,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 219,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 220,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 221,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 222,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 224,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 225,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 226,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 227,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 228,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 231,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 233,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 234,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 236,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 237,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 239,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 241,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 242,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 243,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 244,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 245,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 246,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 247,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 248,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 249,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 250,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 251,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 252,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 253,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 254,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 255,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 256,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 257,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 258,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 259,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 260,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 261,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 262,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 263,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 264,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 265,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 266,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 267,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 268,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 269,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 270,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 271,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 272,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 273,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 274,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 275,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 276,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 277,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 278,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 279,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 280,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 281,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 282,
+      "pool_fill": 1.0
+    },
+    {
+      "step": 283,
+      "pool_fill": 1.0
+    }
+  ],
+  "events": [
+    {
+      "step": 60,
+      "tenant_id": "tenant_0",
+      "old_sensitivity_class": "S1",
+      "new_sensitivity_class": "S3",
+      "before": null,
+      "after": {
+        "step": 79,
+        "tenant": "tenant_0",
+        "service": "notify",
+        "sensitivity_class": 3,
+        "posture": 1,
+        "floor": 2,
+        "served_tier": 2
+      },
+      "attribution": "no_before_observation",
+      "attribution_note": "No real decision for tenant tenant_0 was observed before step 60 in this episode -- there is nothing to compare the post-event floor against, so no floor-change claim is made for this event. The only real fact available: the first decision observed after the event that actually reflects the new class S3 (t=79) showed floor=SERVE_HYBRID at posture ELEVATED."
+    },
+    {
+      "step": 130,
+      "tenant_id": "tenant_3",
+      "old_sensitivity_class": "S2",
+      "new_sensitivity_class": "S3",
+      "before": {
+        "step": 121,
+        "tenant": "tenant_3",
+        "service": "auth",
+        "sensitivity_class": 2,
+        "posture": 1,
+        "floor": 1,
+        "served_tier": 1
+      },
+      "after": {
+        "step": 243,
+        "tenant": "tenant_3",
+        "service": "auth",
+        "sensitivity_class": 3,
+        "posture": 1,
+        "floor": 2,
+        "served_tier": 2
+      },
+      "attribution": "scripted",
+      "attribution_note": "Real, attributable: the last observed decision before the event (t=121) showed floor=SERVE_PQC at S2+ELEVATED; the first decision observed after the event that actually reflects the new class S3 (t=243) showed floor=SERVE_HYBRID at S3+ELEVATED -- the SAME posture (ELEVATED) throughout, so this floor increase is attributable to the scripted migration, not a posture shift."
+    },
+    {
+      "step": 190,
+      "tenant_id": "tenant_4",
+      "old_sensitivity_class": "S0",
+      "new_sensitivity_class": "S2",
+      "before": {
+        "step": 179,
+        "tenant": "tenant_4",
+        "service": "ingest",
+        "sensitivity_class": 0,
+        "posture": 1,
+        "floor": 0,
+        "served_tier": 1
+      },
+      "after": {
+        "step": 199,
+        "tenant": "tenant_4",
+        "service": "ingest",
+        "sensitivity_class": 2,
+        "posture": 1,
+        "floor": 1,
+        "served_tier": 1
+      },
+      "attribution": "scripted",
+      "attribution_note": "Real, attributable: the last observed decision before the event (t=179) showed floor=SERVE_CLASSICAL at S0+ELEVATED; the first decision observed after the event that actually reflects the new class S2 (t=199) showed floor=SERVE_PQC at S2+ELEVATED -- the SAME posture (ELEVATED) throughout, so this floor increase is attributable to the scripted migration, not a posture shift."
+    }
+  ]
+}

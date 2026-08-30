@@ -11,6 +11,56 @@
 
 ## Next task
 
+**Migration Wave panel rendered from real held-out S6 episode — DONE
+2026-08-30. The demo-able dashboard panel set is now COMPLETE (6 of 7
+panels rendered from real data).** The sixth and final buildable panel:
+S6's scripted, exogenous floor-ratchet schedule (`configs/scenarios/
+s6_migration.yaml::migration_schedule` — three real events: step
+60/tenant_0/S1→S3, step 130/tenant_3/S2→S3, step 190/tenant_4/S0→S2)
+and the agent holding up under it. **Demo-asset location — pull these
+up during the review, alongside the five above**:
+`dashboard/samples/migration_wave.html` (the rendered panel: three
+stacked phase cards, real before/after floor per event, honest
+per-event attribution; a real pool_fill trajectory chart),
+`dashboard/samples/migration_data.json` (the saved raw episode data
+both were rendered from). `dashboard/render_migration_wave.py` (pure
+renderer, includes `attribute_floor_change()` — the honesty gate) +
+`dashboard/render_migration_wave_demo.py` (driver: real held-out S6
+episode, seed=900, `checkpoints/dqn_s1.pt` — a masked DQN trained on S1
+steady-state, NEVER on S6, Hard Rule 8 — reloaded and evaluated fresh,
+no training performed). **Central Hard Rule 7 finding, investigated
+before any renderer code was written, per the session's own explicit
+framing**: two prior sessions found the placeholder threat-feature
+formula's `load` term ratchets posture up almost immediately, which
+could have pre-empted this panel's whole "migration raises the floor"
+story. Checked directly on the real data, not assumed: on S6 (which
+has no scripted threat schedule of its own — unlike S2), posture
+reaches ELEVATED almost immediately across a 30-seed sweep but **never
+reaches HIGH** — and at ELEVATED, all three real scripted (old_class →
+new_class) pairs genuinely still raise the floor per the real
+`_PLACEHOLDER_FLOOR_TABLE`, so this real episode's posture ceiling does
+NOT pre-empt the schedule's effect. `attribute_floor_change()` still
+checks this per-event on live observations rather than trusting that
+finding globally: of the three real scripted events on the seed=900
+held-out episode, 2 are cleanly attributable ("scripted" — posture
+held constant across the real before/after observation bracket); the
+third (tenant_0, step 60) has no real pre-event decision for that
+tenant at all, honestly reported as `"no_before_observation"` rather
+than forced into a comparison. A second real, honest finding: a
+scripted event's effect on a tenant lags the schedule step by a real,
+measured number of ticks (9 for tenant_4, 113 for tenant_3) — requests
+already in flight when the mutation fires keep their old
+`sensitivity_class`, only new arrivals pick up the change. 19 new
+tests, including six direct `attribute_floor_change` unit tests
+covering all five honesty outcomes (never claiming "scripted" when the
+floor was already at the post-migration level, when posture itself
+moved too, or when there's no data to compare). Full suite: **649
+passed, 1 xfailed** (630 prior + 19 new). Zero changes to any protected
+file. **Remaining panel, now just one**: Threat Input, blocked on the
+not-yet-built real forecaster/feature-extraction pipeline — no other
+panel work remains. See SESSION_LOG.md's newest entry for the full
+design-decision writeup and investigation.
+
 **Budgeting Brain panel rendered from real S3 pool-trajectory data —
 DONE 2026-08-30.** The fifth of seven dashboard panels: a real,
 same-seed (seed=900) S3 (QKD degradation) episode compared side by
@@ -1010,9 +1060,16 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       tenant graph + tier-colored recent decisions) also now renders
       from real data** (`dashboard/render_living_system.py`, static
       snapshots in `dashboard/samples/living_system_*.html`).
-      `dashboard/app.py` itself (the live, wired 4-beat demo shell) is
-      still not started; the other three panels (Budgeting Brain,
-      Migration Wave, Threat Input) are still mockup-only.
+      **2026-08-30: Budgeting Brain (real S3 pool-trajectory comparison)
+      and Migration Wave (real S6 scripted-schedule attribution) also
+      now render from real data** (`dashboard/render_budgeting_brain.py`,
+      `dashboard/render_migration_wave.py`, samples in `dashboard/
+      samples/budgeting_*`/`migration_*`). **The demo-able dashboard
+      panel set is now COMPLETE — 6 of 7 panels rendered from real
+      data.** `dashboard/app.py` itself (the live, wired 4-beat demo
+      shell) is still not started; the only remaining panel (Threat
+      Input) is blocked on the not-yet-built real forecaster/feature-
+      extraction pipeline, not a rendering-effort gap.
 - [ ] AWS-KMS-style API facade (`api/main.py`)
 - [ ] Report (`docs/report.md`) — currently a section-header skeleton with TODOs only
 

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartKeyNet -- Migration Wave</title>
+<style>
+:root{
+  --bg:#0A0E13; --panel:#111820; --panel-2:#151D27; --line:#212C39; --line-soft:#171F29;
+  --text:#E9EEF4; --text-dim:#8FA0B3; --text-faint:#4C5A6B;
+  --classical:#8B95A5; --pqc:#E8A33D; --hybrid:#33D687; --quantum:#6E7EFF; --danger:#FF5C6C;
+  --radius:12px; --radius-sm:7px;
+  --mono:ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;
+  --disp:-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:var(--disp);padding:28px 20px 60px;}
+.wrap{max-width:960px;margin:0 auto;}
+.beat-head{margin-bottom:22px;}
+.beat-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--quantum);}
+.beat-title{font-family:var(--disp);font-weight:700;font-size:22px;margin-top:4px;}
+.beat-desc{color:var(--text-dim);font-size:13px;margin-top:6px;line-height:1.5;}
+
+.scenario-strip{display:flex;align-items:center;gap:10px;margin-bottom:16px;font-family:var(--mono);font-size:11.5px;color:var(--text-dim);}
+.scenario-strip .s-chip{padding:4px 10px;border:1px solid var(--line);border-radius:999px;color:var(--text-faint);}
+.scenario-strip .s-chip.on{color:var(--quantum);border-color:var(--quantum);}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;}
+
+.phase-list{display:flex;flex-direction:column;gap:14px;}
+.phase-card{}
+.phase-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;}
+.phase-title{font-family:var(--disp);font-weight:600;font-size:15px;}
+.phase-tag{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);}
+
+.badge{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--text-dim);}
+.badge.good{color:var(--hybrid);border-color:rgba(51,214,135,.35);}
+.badge.bad{color:var(--danger);border-color:rgba(255,92,108,.35);}
+.badge.neutral{color:var(--pqc);border-color:rgba(232,163,61,.35);}
+
+.mig-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px;}
+@media (max-width:760px){.mig-grid{grid-template-columns:1fr;}}
+
+.subgraph-tags{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+.sg-tag{font-family:var(--mono);font-size:11px;color:var(--text-dim);background:var(--panel-2);border:1px solid var(--line-soft);border-radius:999px;padding:5px 10px;}
+.sg-tag .arrow{color:var(--text-faint);margin:0 4px;}
+.sg-tag .to{color:var(--text);font-weight:600;}
+
+.floor-stat-row{display:flex;align-items:center;gap:10px;margin-top:10px;}
+.floor-stat{flex:1;background:var(--panel-2);border:1px solid var(--line-soft);border-radius:var(--radius-sm);padding:9px 11px;}
+.floor-stat .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint);}
+.floor-stat .v{font-family:var(--mono);font-weight:700;font-size:15px;margin-top:3px;}
+.floor-stat .meta{font-family:var(--mono);font-size:9.5px;color:var(--text-faint);margin-top:2px;}
+.floor-arrow{font-family:var(--mono);color:var(--text-faint);font-size:16px;}
+
+.note{margin-top:10px;font-size:11.5px;color:var(--text-dim);border-left:2px solid var(--quantum);padding:8px 11px;background:var(--panel-2);border-radius:var(--radius-sm);line-height:1.55;}
+.note.good{border-left-color:var(--hybrid);}
+.note.bad{border-left-color:var(--danger);}
+.note.neutral{border-left-color:var(--pqc);}
+.note b{color:var(--text);}
+
+.area-chart{width:100%;height:120px;display:block;margin-top:10px;}
+.chart-axis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9.5px;color:var(--text-faint);margin-top:4px;}
+
+.provenance{margin-top:16px;font-family:var(--mono);font-size:10px;color:var(--text-faint);line-height:1.6;}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="beat-head">
+    <div class="beat-eyebrow">Demo Beat 4 &middot; Scenario S6</div>
+    <div class="beat-title">The migration wave</div>
+    <div class="beat-desc">A scripted, exogenous compliance timeline -- never chosen by the agent -- ratchets three real tenants' sensitivity classes at three fixed steps in one real, held-out episode. Masked DQN (checkpoints/dqn_s1.pt, trained on S1 (steady state), held-out eval on S6) was never trained on this schedule (Hard Rule 8).</div>
+  </div>
+  <div class="scenario-strip">
+    <span>Scenario</span>
+    <span class="s-chip on">S6 &middot; migration wave &middot; seed=900</span>
+  </div>
+  <div class="phase-list">
+    <div class="card phase-card">
+  <div class="phase-head">
+    <div><div class="phase-title">Phase 1 &middot; step 60</div>
+    <div class="phase-tag">tenant_0: S1 &rarr; S3</div></div>
+    <span class="badge neutral">no before data</span>
+  </div>
+  <div class="subgraph-tags"><span class="sg-tag">tenant_0 &middot; notify <span class="arrow">&rarr;</span> <span class="to">SERVE_HYBRID</span></span></div>
+  <div class="mig-grid">
+    <div class="floor-stat"><div class="k">Floor before</div><div class="v" style="color:var(--text-faint)">not observed</div><div class="meta">no real decision found</div></div>
+    <div class="floor-stat"><div class="k">Floor after</div><div class="v" style="color:#33D687">SERVE_HYBRID</div><div class="meta">t=79 &middot; S3+ELEVATED &middot; served HYBRID</div></div>
+  </div>
+  <div class="note neutral"><b>attribution:</b> No real decision for tenant tenant_0 was observed before step 60 in this episode -- there is nothing to compare the post-event floor against, so no floor-change claim is made for this event. The only real fact available: the first decision observed after the event that actually reflects the new class S3 (t=79) showed floor=SERVE_HYBRID at posture ELEVATED.</div>
+</div><div class="card phase-card">
+  <div class="phase-head">
+    <div><div class="phase-title">Phase 2 &middot; step 130</div>
+    <div class="phase-tag">tenant_3: S2 &rarr; S3</div></div>
+    <span class="badge good">scripted</span>
+  </div>
+  <div class="subgraph-tags"><span class="sg-tag">tenant_3 &middot; auth <span class="arrow">&rarr;</span> <span class="to">SERVE_HYBRID</span></span></div>
+  <div class="mig-grid">
+    <div class="floor-stat"><div class="k">Floor before</div><div class="v" style="color:#E8A33D">SERVE_PQC</div><div class="meta">t=121 &middot; S2+ELEVATED &middot; served PQC</div></div>
+    <div class="floor-stat"><div class="k">Floor after</div><div class="v" style="color:#33D687">SERVE_HYBRID</div><div class="meta">t=243 &middot; S3+ELEVATED &middot; served HYBRID</div></div>
+  </div>
+  <div class="note good"><b>attribution:</b> Real, attributable: the last observed decision before the event (t=121) showed floor=SERVE_PQC at S2+ELEVATED; the first decision observed after the event that actually reflects the new class S3 (t=243) showed floor=SERVE_HYBRID at S3+ELEVATED -- the SAME posture (ELEVATED) throughout, so this floor increase is attributable to the scripted migration, not a posture shift.</div>
+</div><div class="card phase-card">
+  <div class="phase-head">
+    <div><div class="phase-title">Phase 3 &middot; step 190</div>
+    <div class="phase-tag">tenant_4: S0 &rarr; S2</div></div>
+    <span class="badge good">scripted</span>
+  </div>
+  <div class="subgraph-tags"><span class="sg-tag">tenant_4 &middot; ingest <span class="arrow">&rarr;</span> <span class="to">SERVE_PQC</span></span></div>
+  <div class="mig-grid">
+    <div class="floor-stat"><div class="k">Floor before</div><div class="v" style="color:#8B95A5">SERVE_CLASSICAL</div><div class="meta">t=179 &middot; S0+ELEVATED &middot; served PQC</div></div>
+    <div class="floor-stat"><div class="k">Floor after</div><div class="v" style="color:#E8A33D">SERVE_PQC</div><div class="meta">t=199 &middot; S2+ELEVATED &middot; served PQC</div></div>
+  </div>
+  <div class="note good"><b>attribution:</b> Real, attributable: the last observed decision before the event (t=179) showed floor=SERVE_CLASSICAL at S0+ELEVATED; the first decision observed after the event that actually reflects the new class S2 (t=199) showed floor=SERVE_PQC at S2+ELEVATED -- the SAME posture (ELEVATED) throughout, so this floor increase is attributable to the scripted migration, not a posture shift.</div>
+</div>
+  </div>
+  <div class="card" style="margin-top:16px;">
+    <div class="phase-head"><div class="phase-title">Pool response</div><div class="phase-tag">real pool_fill trajectory, 250 decisions</div></div>
+    <svg class="area-chart" viewBox="0 0 900 120" preserveAspectRatio="none"><polyline points="0.0,0.0 6.4,0.0 12.8,0.0 16.0,0.0 19.2,0.0 22.4,0.0 38.4,0.0 44.8,0.0 48.0,0.0 51.2,0.0 54.4,0.0 57.7,0.0 60.9,0.0 64.1,0.0 67.3,0.0 70.5,0.0 73.7,0.0 76.9,0.0 80.1,0.0 83.3,0.0 89.7,0.0 92.9,0.0 96.1,0.0 99.3,0.0 112.1,0.0 115.3,0.0 118.5,0.0 121.7,0.0 124.9,0.0 131.3,0.0 134.5,0.0 137.7,0.0 140.9,0.0 144.1,0.0 147.3,0.0 150.5,0.0 153.7,0.0 156.9,0.0 160.1,0.0 163.3,0.0 166.5,0.0 169.8,0.0 173.0,0.0 176.2,0.0 179.4,0.0 182.6,0.0 192.2,0.0 195.4,0.0 198.6,0.0 201.8,0.0 205.0,0.0 208.2,0.0 211.4,0.0 214.6,0.0 217.8,0.0 224.2,0.0 227.4,0.0 230.6,0.0 233.8,0.0 237.0,0.0 240.2,0.0 243.4,0.0 246.6,0.0 249.8,0.0 253.0,0.0 256.2,0.0 259.4,0.0 262.6,0.0 265.8,0.0 269.0,0.0 272.2,0.0 275.4,0.0 278.6,0.0 281.9,0.0 285.1,0.0 288.3,0.0 291.5,0.0 294.7,0.0 297.9,0.0 301.1,0.0 304.3,0.0 307.5,0.0 310.7,0.0 313.9,0.0 317.1,0.0 320.3,0.0 323.5,0.0 326.7,0.0 329.9,0.0 333.1,0.0 336.3,0.0 339.5,0.0 342.7,0.0 345.9,0.0 349.1,0.0 352.3,0.0 355.5,0.0 358.7,0.0 361.9,0.0 365.1,0.0 368.3,0.0 371.5,0.0 374.7,0.0 377.9,0.0 381.1,0.0 384.3,0.0 387.5,0.0 390.7,0.0 394.0,0.0 397.2,0.0 400.4,0.0 403.6,0.0 406.8,0.0 410.0,0.0 413.2,0.0 416.4,0.0 419.6,0.0 422.8,0.0 426.0,0.0 429.2,0.0 432.4,0.0 435.6,0.0 438.8,0.0 442.0,0.0 445.2,0.0 448.4,0.0 451.6,0.0 454.8,0.0 458.0,0.0 461.2,0.0 464.4,0.0 467.6,0.0 470.8,0.0 474.0,0.0 477.2,0.0 480.4,0.0 483.6,0.0 486.8,0.0 490.0,0.0 493.2,0.0 496.4,0.0 499.6,0.0 502.8,0.0 506.0,0.0 509.3,0.0 512.5,0.0 515.7,0.0 518.9,0.0 522.1,0.0 525.3,0.0 528.5,0.0 531.7,0.0 534.9,0.0 541.3,0.0 544.5,0.0 547.7,0.0 550.9,0.0 557.3,0.0 566.9,0.0 570.1,0.0 573.3,0.0 576.5,0.0 579.7,0.0 582.9,0.0 586.1,0.0 589.3,0.0 592.5,0.0 605.3,0.0 611.7,0.0 614.9,0.0 618.1,0.0 621.4,0.0 624.6,0.0 627.8,0.0 631.0,0.0 634.2,0.0 637.4,0.0 640.6,0.0 643.8,0.0 647.0,0.0 650.2,0.0 653.4,0.0 656.6,0.0 659.8,0.0 663.0,0.0 666.2,0.0 669.4,0.0 672.6,0.0 675.8,0.0 679.0,0.0 688.6,0.0 691.8,0.0 695.0,0.0 698.2,0.0 701.4,0.0 704.6,0.0 711.0,0.0 714.2,0.0 717.4,0.0 720.6,0.0 723.8,0.0 733.5,0.0 739.9,0.0 743.1,0.0 749.5,0.0 752.7,0.0 759.1,0.0 765.5,0.0 768.7,0.0 771.9,0.0 775.1,0.0 778.3,0.0 781.5,0.0 784.7,0.0 787.9,0.0 791.1,0.0 794.3,0.0 797.5,0.0 800.7,0.0 803.9,0.0 807.1,0.0 810.3,0.0 813.5,0.0 816.7,0.0 819.9,0.0 823.1,0.0 826.3,0.0 829.5,0.0 832.7,0.0 835.9,0.0 839.1,0.0 842.3,0.0 845.6,0.0 848.8,0.0 852.0,0.0 855.2,0.0 858.4,0.0 861.6,0.0 864.8,0.0 868.0,0.0 871.2,0.0 874.4,0.0 877.6,0.0 880.8,0.0 884.0,0.0 887.2,0.0 890.4,0.0 893.6,0.0 896.8,0.0 900.0,0.0" fill="none" stroke="#6E7EFF" stroke-width="2" data-trajectory="2:1;4:1;6:1;7:1;8:1;9:1;14:1;16:1;17:1;18:1;19:1;20:1;21:1;22:1;23:1;24:1;25:1;26:1;27:1;28:1;30:1;31:1;32:1;33:1;37:1;38:1;39:1;40:1;41:1;43:1;44:1;45:1;46:1;47:1;48:1;49:1;50:1;51:1;52:1;53:1;54:1;55:1;56:1;57:1;58:1;59:1;62:1;63:1;64:1;65:1;66:1;67:1;68:1;69:1;70:1;72:1;73:1;74:1;75:1;76:1;77:1;78:1;79:1;80:1;81:1;82:1;83:1;84:1;85:1;86:1;87:1;88:1;89:1;90:1;91:1;92:1;93:1;94:1;95:1;96:1;97:1;98:1;99:1;100:1;101:1;102:1;103:1;104:1;105:1;106:1;107:1;108:1;109:1;110:1;111:1;112:1;113:1;114:1;115:1;116:1;117:1;118:1;119:1;120:1;121:1;122:1;123:1;124:1;125:1;126:1;127:1;128:1;129:1;130:1;131:1;132:1;133:1;134:1;135:1;136:1;137:1;138:1;139:1;140:1;141:1;142:1;143:1;144:1;145:1;146:1;147:1;148:1;149:1;150:1;151:1;152:1;153:1;154:1;155:1;156:1;157:1;158:1;159:1;160:1;161:1;162:1;163:1;164:1;165:1;166:1;167:1;168:1;169:1;171:1;172:1;173:1;174:1;176:1;179:1;180:1;181:1;182:1;183:1;184:1;185:1;186:1;187:1;191:1;193:1;194:1;195:1;196:1;197:1;198:1;199:1;200:1;201:1;202:1;203:1;204:1;205:1;206:1;207:1;208:1;209:1;210:1;211:1;212:1;213:1;214:1;217:1;218:1;219:1;220:1;221:1;222:1;224:1;225:1;226:1;227:1;228:1;231:1;233:1;234:1;236:1;237:1;239:1;241:1;242:1;243:1;244:1;245:1;246:1;247:1;248:1;249:1;250:1;251:1;252:1;253:1;254:1;255:1;256:1;257:1;258:1;259:1;260:1;261:1;262:1;263:1;264:1;265:1;266:1;267:1;268:1;269:1;270:1;271:1;272:1;273:1;274:1;275:1;276:1;277:1;278:1;279:1;280:1;281:1;282:1;283:1"/><line x1="185.8" y1="0" x2="185.8" y2="120" stroke="#212C39" stroke-dasharray="3 4" data-event-step="60"/><line x1="410.0" y1="0" x2="410.0" y2="120" stroke="#212C39" stroke-dasharray="3 4" data-event-step="130"/><line x1="602.1" y1="0" x2="602.1" y2="120" stroke="#212C39" stroke-dasharray="3 4" data-event-step="190"/></svg>
+    <div class="chart-axis"><span>tick 2</span><span>tick 283</span></div>
+    <div class="note neutral">Real pool_fill stayed effectively flat (1.0000&ndash;1.0000) across this entire episode -- S6 has no QKD-degradation mechanism (unlike S3), so this migration wave produces no observable pool-scarcity response on its own; the interesting real signal here is the per-tenant floor change, not pool pressure.</div>
+  </div>
+  <div class="provenance">Every floor/posture/tier value shown is a real field from one real held-out S6 episode; attribution labels are computed by attribute_floor_change() directly from the real before/after observations bracketing each scripted event -- never assumed to be "scripted" by default.</div>
+</main>
+</body>
+</html>
