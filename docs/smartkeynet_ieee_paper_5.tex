@@ -55,11 +55,14 @@ claim we test: designs placing a threat score inside the reward
 can be steered toward weaker key material by an adversary who
 shapes that score, whereas masking leaves the same manipulation
 able only to raise floors. On a QKD-degradation scenario the
-masked agent records zero below-floor decisions against 27,301
-for a reward-shaped agent trained on the same environment,
-and reaches zero pool-exhaustion events where a tuned threshold
-reaches 42. It pays for both in rekey churn, which we report
-alongside.
+masked agent records zero below-floor decisions against 1,012
+(a 16.9\% below-floor rate) for a reward-shaped agent trained
+on the same environment, and reaches zero pool-exhaustion
+events against that same baseline's 3.54. Against that baseline
+the masked agent's rekey churn is lower, not higher --- an
+inversion of the trade we expected, reported rather than
+smoothed over; a tuned threshold's own comparable figures
+have not yet been re-measured under the same configuration.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -130,11 +133,14 @@ a decision-trace interface exposing the six computed values
 behind every action, which the masked design makes possible
 and a soft-reward design structurally does not. We are also
 explicit about what is built (Section~\ref{sec:impl}): the environment,
-the masked agent, the reward-shaped baseline and the four
-non-RL baselines run, and the results below come from them.
-The learned forecaster and the adversarial trace generator do
-not exist yet, so the dose-response sweep of Section~\ref{sec:steering}
-remains protocol and not measurement.
+the masked agent, the reward-shaped baseline, the four
+non-RL baselines, and the adversarial trace generator of~(\ref{eq:steering})
+are all implemented and run, and the results below and in
+Section~\ref{sec:results}'s Limitations come from them. The learned
+forecaster is the one exception: it remains a non-learned
+placeholder, so those results exercise the masking and
+budgeting machinery under a stub threat signal rather than a
+trained one.
 
 \section{Related Work}
 
@@ -724,25 +730,35 @@ in the mask, not a limit of the argument.
 
 We report p99 latency, pool-exhaustion count, regret events,
 forced-rekey ratio, and below-floor service rate per policy per
-scenario, over ten seeds, as medians with interquartile ranges
-instead of means, since the exhaustion distribution is skewed
-by construction.
+scenario. Table~\ref{tab:results}'s masked, soft-reward, and always-hybrid
+rows are measured under the current S3 configuration described
+below: means and standard deviations over 3 independently
+trained checkpoints $\times$ 8 evaluation seeds each (24 evaluations)
+for the first two, one held-out evaluation seed for the third.
+Its remaining three rows (static threshold, always-PQC, uniform
+random) are retained from an earlier run, predating a pool-capacity
+recalibration described below, as ten-seed medians with
+interquartile ranges; they have not yet been re-measured under
+the current configuration, and a cross-row comparison involving
+them should be read with that in mind.
 
 The rest of the paper depends on stating the following
 plainly. Implemented and tested: the pool simulator, the deferral queue and regret accounting, the masking logic and
 floor lookup, the environment wiring these together with~(\ref{eq:reward}),
-the masked DQN, the reward-shaped baseline, the four non-RL baselines, and the scenario comparison runner. This spine
-runs end to end on S1 and S3, and Section~\ref{sec:results} reports S3.
-Partial: the forecaster has only a non-learned exponentially-weighted-moving-average fallback over a placeholder signal,
-so the dual-head model of Section~III-D does not exist yet, and
-the S3 numbers therefore exercise the masking and budgeting
-machinery under a stub threat signal; the request stream is
-synthetic and not yet a graph sample; scenario dispatch for
-S2, S4 and S6 is configured but not acted on. Not started:
-the trace generator of~(\ref{eq:steering}) and the dose-response sweep, and
-the operator interface, which exists only as a hand-authored
-mockup with fabricated values that we neither reproduce nor
-cite.
+the masked DQN, the reward-shaped baseline, the four non-RL baselines, the adversarial trace generator of~(\ref{eq:steering}), and the
+scenario comparison runner. This spine runs end to end on
+S1 through S6, and Section~\ref{sec:results} reports S3; the S5 dose-response
+sweep this generator drives is reported in Section~\ref{sec:results}'s
+Limitations. The request stream samples a tenant graph rather
+than an unstructured process. Partial: the forecaster has only
+a non-learned exponentially-weighted-moving-average fallback
+over a placeholder signal, so the dual-head model of Section~III-D
+does not exist yet, and the numbers below therefore exercise
+the masking and budgeting machinery under a stub threat
+signal. Partial: the operator interface's decision-trace panel
+(Fig.~\ref{fig:trace}) is implemented and rendered from real traces; the
+remaining dashboard panels exist only as a hand-authored mockup
+with fabricated values that we neither reproduce nor cite.
 
 \section{Results and Discussion}
 \label{sec:results}
@@ -760,80 +776,103 @@ below is measured, and carries the caveats it has earned.
 \subsection{S3: budgeting under a collapsing key rate}
 
 Table~\ref{tab:results} gives the S3 grid: QBER climbs, the secret-key rate
-falls, and pool refill stops covering demand. Six policies, ten
-seeds, medians.
+falls, and pool refill stops covering demand. Six policies, under
+the mixed methodology Section~\ref{sec:impl} describes.
 
 \begin{table*}[t]
-\caption{Scenario S3 (QKD degradation), ten seeds, median. Exhaustion and regret are event counts; below-floor is the count of decisions served under the floor, the numerator of~(\ref{eq:belowfloor})}
+\caption{Scenario S3 (QKD degradation). Exhaustion and regret are event counts; below-floor is the count of decisions served under the floor, the numerator of~(\ref{eq:belowfloor}). Rows marked \textdagger\ are a single held-out seed under the current configuration; rows marked \textdaggerdbl\ are retained from an earlier, pre-recalibration configuration and not yet re-measured (see Section~\ref{sec:impl})}
 \label{tab:results}
 \centering
 \begin{tabular}{@{}lccccc@{}}
 \toprule
 Policy & p99 lat.\footnotemark[1] & Exhaust. & Regret & Rekey \% & Below-floor \\
 \midrule
-Masked DQN (ours) & 150.0 & 0.0 & 0.0 & 12.1 & 0 \\
-Soft-reward DQN & 120.0 & 19.5 & 19.5 & 9.5 & 27,301 \\
-Static threshold & 150.0 & 42.0 & 42.0 & 6.9 & 0 \\
-Always-hybrid & 150.0 & 676.0 & 676.0 & 93.5 & 0 \\
-Always-PQC & 150.0 & 531.0 & 531.0 & 95.5 & 0 \\
-Random (safe set) & 150.0 & 510.5 & 510.5 & 66.0 & 0 \\
+Masked DQN (ours) & 1.5000 & 0.00 & 0.00 & 15.6 & 0 \\
+Soft-reward DQN & 1.4064 & 3.54 & 3.54 & 70.3 & 1,012\footnotemark[2] \\
+Static threshold\textdaggerdbl & 150.0 & 42.0 & 42.0 & 6.9 & 0 \\
+Always-hybrid\textdagger & 1.5000 & 18.0 & 18.0 & 8.1 & 0 \\
+Always-PQC\textdaggerdbl & 150.0 & 531.0 & 531.0 & 95.5 & 0 \\
+Random (safe set)\textdaggerdbl & 150.0 & 510.5 & 510.5 & 66.0 & 0 \\
 \bottomrule
 \end{tabular}
 
 \footnotetext[1]{Simulator time units. See Section~\ref{sec:instrumentation} on the saturation visible in this column.}
+\footnotetext[2]{A 16.9\% below-floor rate (1,012 of 6,000 tier-establishing decisions across the 24 evaluations).}
 \end{table*}
 
 The separation the paper argues for shows up in the last column. The masked agent serves nothing below its floor, which
 is what~(\ref{eq:safeset}) guarantees. The reward-shaped agent, trained on the
 same environment with the same forecaster and differing only
-in where the threat signal enters, serves 27,301 decisions below
-floor. Being precise about what that does and does not show:
-it is not the steering attack, since no adversary was present. It
-shows that a security term weighted against latency and energy
-is traded away under ordinary scarcity, before anyone tries to
-manipulate it. The attack of~(\ref{eq:steering}) makes that trade worse on
-purpose, and it remains unrun.
+in where the threat signal enters, serves 1,012 decisions below
+floor, a 16.9\% below-floor rate. Being precise about what that
+does and does not show: it is not the steering attack, since no
+adversary was present. It shows that a security term weighted
+against latency and energy is traded away under ordinary
+scarcity, before anyone tries to manipulate it. The attack of~(\ref{eq:steering})
+makes that trade worse on purpose, and Section~\ref{sec:results}'s
+Limitations reports it.
 
-What the reward-shaped agent buys with those decisions
-sits two columns over: the lowest p99 in the grid and a rekey
-ratio below the masked agent's. It is the only policy that beats
-the masked agent on a performance metric, and it does so by
-serving weaker keys. That is the finding, and burying it would
-be the wrong instinct: on the metrics an operator watches, the
-unsafe design looks better.
+What the reward-shaped agent buys with those decisions is
+smaller than we expected and not what the disqualification
+framing in Section~\ref{sec:scenarios} anticipated: a marginally lower p99
+(1.4064 against 1.5000) but a rekey ratio of 70.3\%, the highest
+in the grid, not the lowest --- floor violations do not exempt it
+from the same rekey costs every other policy pays. Under this
+configuration the reward-shaped agent does not beat the masked
+agent on any performance metric; its only edge is a small
+latency gain, purchased with both below-floor service and the
+grid's worst rekey churn. That the trade looks worse for the
+unsafe design here, not better, is itself worth stating plainly
+rather than smoothing over.
 
 \subsection{The threshold comparison, which we committed to reporting either way}
 
 Section~\ref{sec:scenarios} committed us in advance to reporting a tie
-with the tuned threshold if one occurred. There is no tie, and
-no clean win either. The threshold matches the masked agent
-on p99 and beats it on rekey churn, 6.9\% against 12.1\%, but
-reaches 42 pool-exhaustion events where the masked agent
-reaches zero. The agent is buying availability with churn,
-rekeying roughly twice as often on cheaper tiers to hold pool
-material in reserve for requests whose floor will demand it.
-Whether that is worth 5.2 points of rekey ratio is an operator's
-judgement, but the direction is the one the design intends.
+with the tuned threshold if one occurred. The threshold's own
+figures in Table~\ref{tab:results} (marked \textdaggerdbl) come from the pool
+configuration in place before Section~\ref{sec:impl}'s recalibration, and
+have not yet been re-measured under the masked agent's current
+configuration, so we cannot yet state a controlled tie-or-no-tie
+result the way we can for the reward-shaped comparison above;
+we flag the gap rather than compute a same-configuration
+comparison the data do not support. What the threshold's own
+past run showed, on its own terms, is that it reaches 42
+pool-exhaustion events at a 6.9\% rekey ratio --- a real tradeoff
+shape (buying availability with churn) worth re-confirming under
+the current configuration before it is compared to the masked
+agent again.
 
-The static baselines behave as the scarcity argument predicts. Always-hybrid drains the pool and exhausts 676 times.
-Always-PQC is the more interesting case: it never prefers
-pool material, yet still exhausts 531 times, because masking
-forces it to hybrid whenever a floor demands T2 and it has
-done nothing beforehand to conserve. Non-anticipation, not
-appetite, is what exhausts it.
+The static baselines behave as the scarcity argument predicts,
+though only always-hybrid has been re-measured under the
+current configuration: on a single held-out seed it drains the
+pool and exhausts 18 times, against the masked agent's zero,
+over the same 250-step episode (Table~\ref{tab:results}, marked \textdagger). Always-PQC's own past run is the more interesting case: it
+never prefers pool material, yet still exhausted 531 times under
+the earlier configuration, because masking forces it to hybrid
+whenever a floor demands T2 and it has done nothing beforehand
+to conserve. Non-anticipation, not appetite, is what exhausts
+it; whether the magnitude holds under the current configuration
+is, like the threshold's, not yet re-measured.
 
 \subsection{Failure modes: one materialized, one did not}
 
 Section~\ref{sec:scenarios} named over-conservation as a risk, on the
-grounds that a large $R_{\text{starve}}$ pushes toward hoarding. It materialized: the masked agent's rekey ratio is 1.8 times the
-threshold's, and its zero-exhaustion record is partly bought
-that way. We flagged this in advance and report both columns
-for exactly this reason, since a table carrying only regret and
-exhaustion would have shown a perfect score and hidden the
-cost. The threshold tie did not materialize, so the premise
-survives its own disqualification rule. The third named risk,
-the attack's sensitivity to the baseline's security weight, cannot
-be assessed until the sweep runs.
+grounds that a large $R_{\text{starve}}$ pushes toward hoarding. Relative
+to the reward-shaped baseline it did not materialize: the
+masked agent's 15.6\% rekey ratio is well below that baseline's
+70.3\%, so its zero-below-floor, zero-exhaustion record is not
+bought with more rekey churn than the design it is compared
+against in Table~\ref{tab:results}. Whether it materializes relative to a
+tuned threshold is the comparison Section~\ref{sec:scenarios}'s
+disqualification rule is really about, and that comparison remains
+open until the threshold is re-measured under the current
+configuration, per the previous subsection. We report the rekey
+column regardless of which comparison it ultimately supports,
+since a table carrying only regret and exhaustion would hide
+the cost either way. The third named risk, the attack's
+sensitivity to the baseline's security weight specifically (as
+opposed to attack strength $\alpha$, which the dose-response sweep
+in this section's Limitations does cover), remains unrun.
 
 \subsection{Instrumentation issues we have not resolved}
 \label{sec:instrumentation}
@@ -841,23 +880,34 @@ be assessed until the sweep runs.
 Two features of Table~\ref{tab:results} we do not yet trust, and flagging
 them is better than interpreting them.
 
-Five of six policies report a p99 latency of exactly 150.0.
-Policies whose exhaustion counts differ by two orders of
-magnitude should not agree to one decimal place on a tail
-statistic. The likely explanation is a ceiling in the latency
-model or the deferral timeout, in which case the column
-reports saturation and not behavior, and only the reward-shaped agent's 120.0 reflects anything. We draw no conclusion
-from it until the cap is located.
+Under the current configuration, the masked agent and
+always-hybrid coincide exactly at a p99 of 1.5000 despite an
+exhaustion count that differs from zero to 18; the soft-reward
+agent's own p99, 1.4064, is close but distinct. The same pattern
+that motivated this caveat under the earlier configuration ---
+where five of six policies agreed to one decimal place at 150.0,
+and only the reward-shaped agent's 120.0 differed --- persists in
+weaker form here: policies whose exhaustion counts differ
+substantially should not agree this closely on a tail statistic.
+The likely explanation is still a ceiling in the latency model or
+the deferral timeout, in which case the column reports partial
+saturation and not behavior. We draw no conclusion from it
+until the cap is located; the three rows not yet re-measured
+under the current configuration (Table~\ref{tab:results}, marked \textdaggerdbl)
+still show the original 150.0 figure and have not been re-examined
+for this artifact under the new configuration.
 
 Exhaustion and regret coincide exactly in all six rows,
 though Section~III-G treats them as distinct: one counts
 moments the pool cannot cover a draw, the other the onset of
 a deferral caused by earlier discretionary spending. An exact
-identity across six policies and ten seeds means either that
-the counters are wired to the same event, or that every S3
-exhaustion happens to produce exactly one deferral onset. We
-have not established which, so for now the two columns should
-be read as one measurement reported twice.
+identity across six policies, holding under both the current
+configuration's evaluation methodology and the earlier
+configuration's ten-seed medians, means either that the counters
+are wired to the same event, or that every S3 exhaustion happens
+to produce exactly one deferral onset. We have not established
+which, so for now the two columns should be read as one
+measurement reported twice.
 
 \subsection{Limitations}
 
@@ -958,14 +1008,17 @@ each decision auditable, because every value behind an action
 is a lookup or a comparison that already exists.
 
 S3 shows the separation holding under ordinary scarcity:
-zero below-floor decisions against 27,301, bought with rekey
-churn we report rather than hide. What remains, in order:
-locate the latency ceiling and separate the exhaustion and
-regret counters, so Table~\ref{tab:results} can be read at face value; train the
-dual-head forecaster on RT-IoT2022 and retire the moving-average fallback; implement the trace generator of~(\ref{eq:steering}) and
-run the dose-response sweep, which is the result the design
-was built to produce; and enable scenario dispatch for S2, S4
-and S6. Longer term, deriving the floor table from compliance
+zero below-floor decisions against 1,012 for the reward-shaped
+baseline, and lower rekey churn rather than higher against
+that same baseline --- not the trade we expected, reported rather
+than hidden. What remains, in order: locate the latency ceiling
+and separate the exhaustion and regret counters, so Table~\ref{tab:results}
+can be read at face value; re-measure the static threshold,
+always-PQC, and random baselines under the current, recalibrated
+configuration so the threshold comparison can be stated with
+the same rigor as the reward-shaped one; and train the
+dual-head forecaster on RT-IoT2022 to retire the moving-average
+fallback. Longer term, deriving the floor table from compliance
 documents in a checkable way is harder than it first appears,
 and extending the pool model to a multi-node QKD network
 with relayed keys would change the problem qualitatively,

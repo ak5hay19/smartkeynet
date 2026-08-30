@@ -11,6 +11,42 @@
 
 ## Next task
 
+**Paper Table V placeholder numbers replaced with real measured values,
+stale status text reconciled — DONE 2026-08-30.** `docs/smartkeynet_ieee_paper_5.tex`
+now cites real numbers for the masked-DQN, soft-reward-DQN, and
+always-hybrid rows of Table V (previously stale: `27,301`/`42`/`676`-style
+figures from a pre-recalibration S3 config), reconciled a units mismatch
+(the paper's below-floor column is a raw count per its own caption; the
+real replacement is `floor_violations_total: 1012`, not the `0.1687` rate
+— both are now shown, count in the table, rate in a footnote), and fixed
+two demonstrably stale "not started"/"remains protocol not measurement"
+claims about the trace generator and S5 dose-response sweep (both real
+since 2026-08-25/26) in the Introduction and §IV-D. **Central finding,
+reported not smoothed over (Hard Rule 7)**: under the real numbers, the
+soft-reward baseline's rekey ratio (`70.3%`) is now the *worst* in the
+whole grid, not the best — it no longer "beats the masked agent on a
+performance metric" the way the paper's old §V-B claimed; the masked
+agent's own rekey ratio (`15.6%`) is now *lower* than the reward-shaped
+baseline's, not higher, inverting the abstract's original framing.
+**Genuinely still open, flagged in the paper itself via a `\textdaggerdbl`
+footnote, not fixed this session (out of scope — no eval reruns allowed)**:
+Table V's static-threshold, always-PQC, and random rows have no real
+measured backing under the current, recalibrated S3 config anywhere in
+`dashboard/samples/*.json` or `SESSION_LOG.md` — they remain the old
+pre-recalibration numbers, explicitly labeled as such, with §V-C/§V-D's
+prose no longer asserting an apples-to-apples numeric comparison against
+them. Re-running those three baselines under the current config (via
+`experiments.harness.evaluate_multi_seed`, saved as a new
+`dashboard/samples/*.json` provenance file per the 2026-08-29 sessions'
+convention) is the concrete remaining step to make Table V fully real.
+Fig. 5's TikZ diagram node-text fix (flagged 2026-08-27, needs sign-off)
+also remains untouched — not this session's scope. See SESSION_LOG.md's
+newest entry for the full before/after number reconciliation and
+reasoning. **The demo dashboard is complete (6 of 7 panels real) and the
+paper's headline masked-vs-soft-reward numbers are now real too — the two
+items above (three baselines, Fig. 5 diagram) are what's left before the
+paper can be called fully reconciled.**
+
 **Migration Wave panel rendered from real held-out S6 episode — DONE
 2026-08-30. The demo-able dashboard panel set is now COMPLETE (6 of 7
 panels rendered from real data).** The sixth and final buildable panel:
