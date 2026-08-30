@@ -61,8 +61,11 @@ on the same environment, and reaches zero pool-exhaustion
 events against that same baseline's 3.54. Against that baseline
 the masked agent's rekey churn is lower, not higher --- an
 inversion of the trade we expected, reported rather than
-smoothed over; a tuned threshold's own comparable figures
-have not yet been re-measured under the same configuration.
+smoothed over. A freshly tuned static threshold ties the masked
+agent on every safety and availability column we measure, but
+trails it by $\sim$3.8$\times$ on total episode reward, the objective
+either is actually scored against, because it rekeys on almost
+every decision rather than reusing a still-valid key.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -730,17 +733,21 @@ in the mask, not a limit of the argument.
 
 We report p99 latency, pool-exhaustion count, regret events,
 forced-rekey ratio, and below-floor service rate per policy per
-scenario. Table~\ref{tab:results}'s masked, soft-reward, and always-hybrid
-rows are measured under the current S3 configuration described
-below: means and standard deviations over 3 independently
-trained checkpoints $\times$ 8 evaluation seeds each (24 evaluations)
-for the first two, one held-out evaluation seed for the third.
-Its remaining three rows (static threshold, always-PQC, uniform
-random) are retained from an earlier run, predating a pool-capacity
-recalibration described below, as ten-seed medians with
-interquartile ranges; they have not yet been re-measured under
-the current configuration, and a cross-row comparison involving
-them should be read with that in mind.
+scenario. Every row of Table~\ref{tab:results} is now measured under
+the current S3 configuration described below. The masked and
+soft-reward rows report means and standard deviations over 3
+independently trained checkpoints $\times$ 8 evaluation seeds each
+(24 evaluations); always-hybrid is one held-out evaluation seed;
+the remaining three (static threshold, always-PQC, uniform random)
+have no training-seed dimension, being non-RL, so each is an
+8-evaluation-seed mean under the same seeds (900--907) the masked
+and soft-reward rows use. The static threshold is re-tuned on this
+same configuration, not reused from before the recalibration: a
+grid search over the same nine candidate thresholds, maximizing
+mean total episode reward across the 8 eval seeds (not p99 latency,
+which an earlier tuning pass found to be non-discriminating on this
+grid), selects $t=0.9$, matching an earlier tuning run's own result
+on this configuration exactly.
 
 The rest of the paper depends on stating the following
 plainly. Implemented and tested: the pool simulator, the deferral queue and regret accounting, the masking logic and
@@ -780,7 +787,7 @@ falls, and pool refill stops covering demand. Six policies, under
 the mixed methodology Section~\ref{sec:impl} describes.
 
 \begin{table*}[t]
-\caption{Scenario S3 (QKD degradation). Exhaustion and regret are event counts; below-floor is the count of decisions served under the floor, the numerator of~(\ref{eq:belowfloor}). Rows marked \textdagger\ are a single held-out seed under the current configuration; rows marked \textdaggerdbl\ are retained from an earlier, pre-recalibration configuration and not yet re-measured (see Section~\ref{sec:impl})}
+\caption{Scenario S3 (QKD degradation). Exhaustion and regret are event counts; below-floor is the count of decisions served under the floor, the numerator of~(\ref{eq:belowfloor}). Rows marked \textdagger\ are a single held-out seed under the current configuration; rows marked \textsection\ are 8-evaluation-seed means under the current configuration (seeds 900--907, the same eval seeds the masked/soft-reward rows use), with no training-seed dimension, since these three are non-RL baselines with nothing to train}
 \label{tab:results}
 \centering
 \begin{tabular}{@{}lccccc@{}}
@@ -789,15 +796,16 @@ Policy & p99 lat.\footnotemark[1] & Exhaust. & Regret & Rekey \% & Below-floor \
 \midrule
 Masked DQN (ours) & 1.5000 & 0.00 & 0.00 & 15.6 & 0 \\
 Soft-reward DQN & 1.4064 & 3.54 & 3.54 & 70.3 & 1,012\footnotemark[2] \\
-Static threshold\textdaggerdbl & 150.0 & 42.0 & 42.0 & 6.9 & 0 \\
+Static threshold (t=0.9)\textsection & 1.5000 & 0.00 & 0.00 & 8.0 & 0\footnotemark[3] \\
 Always-hybrid\textdagger & 1.5000 & 18.0 & 18.0 & 8.1 & 0 \\
-Always-PQC\textdaggerdbl & 150.0 & 531.0 & 531.0 & 95.5 & 0 \\
-Random (safe set)\textdaggerdbl & 150.0 & 510.5 & 510.5 & 66.0 & 0 \\
+Always-PQC\textsection & 1.5000 & 0.00 & 0.00 & 8.0 & 0 \\
+Random (safe set)\textsection & 1.5000 & 0.38 & 0.38 & 10.0 & 0 \\
 \bottomrule
 \end{tabular}
 
 \footnotetext[1]{Simulator time units. See Section~\ref{sec:instrumentation} on the saturation visible in this column.}
 \footnotetext[2]{A 16.9\% below-floor rate (1,012 of 6,000 tier-establishing decisions across the 24 evaluations).}
+\footnotetext[3]{Ties the masked agent on every column shown here, but trails it by $\sim$3.8$\times$ on total episode reward (the scalar training itself optimizes, summed over the episode, not shown as a column): $-38{,}566.87$ against $-10{,}214.82$, reproducing an earlier tuning run's figure on this same configuration to two decimal places. See Section~\ref{sec:results}'s threshold-comparison discussion.}
 \end{table*}
 
 The separation the paper argues for shows up in the last column. The masked agent serves nothing below its floor, which
@@ -828,31 +836,69 @@ rather than smoothing over.
 \subsection{The threshold comparison, which we committed to reporting either way}
 
 Section~\ref{sec:scenarios} committed us in advance to reporting a tie
-with the tuned threshold if one occurred. The threshold's own
-figures in Table~\ref{tab:results} (marked \textdaggerdbl) come from the pool
-configuration in place before Section~\ref{sec:impl}'s recalibration, and
-have not yet been re-measured under the masked agent's current
-configuration, so we cannot yet state a controlled tie-or-no-tie
-result the way we can for the reward-shaped comparison above;
-we flag the gap rather than compute a same-configuration
-comparison the data do not support. What the threshold's own
-past run showed, on its own terms, is that it reaches 42
-pool-exhaustion events at a 6.9\% rekey ratio --- a real tradeoff
-shape (buying availability with churn) worth re-confirming under
-the current configuration before it is compared to the masked
-agent again.
+with the tuned threshold if one occurred, and under the current
+configuration one does occur, on the columns Table~\ref{tab:results}
+shows: re-tuned on this configuration by the same grid search used
+before ($t=0.9$, Section~\ref{sec:impl}), the threshold ties the masked
+agent on p99 latency, pool-exhaustion, regret, and below-floor
+service, and edges it on forced-rekey ratio (8.0\% against
+15.6\%). Taken at face value, that reads as a tuned threshold
+matching or beating a trained agent on every metric the table
+carries --- exactly the outcome the disqualification framing in
+Section~\ref{sec:scenarios} names as a failure of the project's premise.
+It is not the full picture, and we report the rest rather than let
+the table's own column choice imply otherwise. Total episode reward,
+the scalar actually being optimized, separates the two by
+$\sim$3.8$\times$: $-10{,}214.82$ for the masked agent against
+$-38{,}566.87$ for the tuned threshold (Table~\ref{tab:results},
+footnote 3) --- the same margin, to two decimal places, an earlier
+tuning run found on this identical configuration, which we take as
+confirmation this is a stable measurement and not a seed artifact.
+The mechanism is visible directly in the policy's own decision
+rule: \texttt{StaticThresholdPolicy} never chooses to reuse an
+existing session key, only to serve fresh SERVE\_HYBRID or SERVE\_PQC
+(or the lowest legal tier) every single decision. Its low
+forced-rekey ratio reflects that almost none of its many rekeys are
+the \emph{forced} kind, not that it rekeys rarely --- a distinction
+Table~\ref{tab:results}'s rekey column cannot show, since it counts
+forced rekeys as a fraction of rekeys issued, not rekeys as a
+fraction of decisions. The masked agent, which reuses a
+still-valid, still-floor-clearing key whenever one is available,
+pays that fresh-key cost far less often. So the threshold does not
+match the agent on the objective either is actually evaluated
+against; it matches it only on the subset of outcomes Table~\ref{tab:results}
+happens to display, which is a narrower and more brittle claim than
+the disqualification rule was written to guard against, and we say
+so plainly rather than let the table stand for the whole comparison.
 
-The static baselines behave as the scarcity argument predicts,
-though only always-hybrid has been re-measured under the
-current configuration: on a single held-out seed it drains the
-pool and exhausts 18 times, against the masked agent's zero,
-over the same 250-step episode (Table~\ref{tab:results}, marked \textdagger). Always-PQC's own past run is the more interesting case: it
-never prefers pool material, yet still exhausted 531 times under
-the earlier configuration, because masking forces it to hybrid
-whenever a floor demands T2 and it has done nothing beforehand
-to conserve. Non-anticipation, not appetite, is what exhausts
-it; whether the magnitude holds under the current configuration
-is, like the threshold's, not yet re-measured.
+The static baselines mostly behave as the scarcity argument
+predicts, though not uniformly, and the surprise is reported rather
+than smoothed into the expected shape. On a single held-out seed,
+always-hybrid drains the pool and exhausts 18 times against the
+masked agent's zero, over the same 250-step episode
+(Table~\ref{tab:results}, marked \textdagger) --- the clean case the
+argument anticipates. Always-PQC and uniform random, both re-measured
+under the current configuration for the first time this round, do
+not show the large exhaustion counts an earlier, pre-recalibration
+run reported (531 and 510.5 respectively): under the current pool,
+always-PQC exhausts 0.00 times and random exhausts 0.38 times,
+averaged over the same 8 eval seeds as the threshold. Non-anticipation
+was the mechanism we expected to punish always-PQC --- it never
+prefers pool material, but masking still forces it to hybrid
+whenever a floor demands it, with nothing conserved beforehand --- and
+that mechanism is real: its p99 latency still saturates at 1.5000
+(Section~\ref{sec:instrumentation}), meaning it reaches SERVE\_HYBRID
+often enough to hit that ceiling, the same way every other row does.
+But under the current, smaller pool that forced draw is apparently
+not sustained or concentrated enough within one 250-step eval episode
+to exhaust it, unlike always-hybrid's policy of maximizing that same
+draw on every single decision. We read this as a property of episode
+length and draw concentration, not a reason to doubt the
+recalibration: the always-hybrid row directly above, on the same
+configuration, already shows that the current pool can be exhausted
+under sufficient sustained demand --- 18 times on one seed --- so the
+recalibration itself is not in question, only how much forced,
+occasional hybrid draw it takes to reach that point.
 
 \subsection{Failure modes: one materialized, one did not}
 
@@ -864,12 +910,20 @@ masked agent's 15.6\% rekey ratio is well below that baseline's
 bought with more rekey churn than the design it is compared
 against in Table~\ref{tab:results}. Whether it materializes relative to a
 tuned threshold is the comparison Section~\ref{sec:scenarios}'s
-disqualification rule is really about, and that comparison remains
-open until the threshold is re-measured under the current
-configuration, per the previous subsection. We report the rekey
-column regardless of which comparison it ultimately supports,
+disqualification rule is really about, and the previous subsection
+now measures it under the current configuration. Read off the rekey
+column alone, it looks like it does: the threshold's 8.0\% is lower
+than the masked agent's 15.6\%. But that column is the fraction of
+rekeys that were forced, not how often a rekey happens at all, and
+the previous subsection's total-reward comparison is the more direct
+test of hoarding: the masked agent's $-10{,}214.82$ against the
+threshold's $-38{,}566.87$ says the opposite, since the threshold's
+own decision rule pays a fresh-key cost on essentially every
+decision and the masked agent's occasional REUSE does not. We report
+the rekey column regardless of which reading it ultimately supports,
 since a table carrying only regret and exhaustion would hide
-the cost either way. The third named risk, the attack's
+the cost either way, and its answer here is why we look past it
+rather than stop there. The third named risk, the attack's
 sensitivity to the baseline's security weight specifically (as
 opposed to attack strength $\alpha$, which the dose-response sweep
 in this section's Limitations does cover), remains unrun.
@@ -880,33 +934,32 @@ in this section's Limitations does cover), remains unrun.
 Two features of Table~\ref{tab:results} we do not yet trust, and flagging
 them is better than interpreting them.
 
-Under the current configuration, the masked agent and
-always-hybrid coincide exactly at a p99 of 1.5000 despite an
-exhaustion count that differs from zero to 18; the soft-reward
-agent's own p99, 1.4064, is close but distinct. The same pattern
-that motivated this caveat under the earlier configuration ---
-where five of six policies agreed to one decimal place at 150.0,
-and only the reward-shaped agent's 120.0 differed --- persists in
-weaker form here: policies whose exhaustion counts differ
-substantially should not agree this closely on a tail statistic.
-The likely explanation is still a ceiling in the latency model or
-the deferral timeout, in which case the column reports partial
-saturation and not behavior. We draw no conclusion from it
-until the cap is located; the three rows not yet re-measured
-under the current configuration (Table~\ref{tab:results}, marked \textdaggerdbl)
-still show the original 150.0 figure and have not been re-examined
-for this artifact under the new configuration.
+Under the current configuration, five of the six rows now coincide
+exactly at a p99 of 1.5000 --- masked, always-hybrid, the tuned
+threshold, always-PQC, and random --- despite exhaustion counts
+ranging from zero (masked, threshold, always-PQC) to 18
+(always-hybrid); only the soft-reward agent's own p99, 1.4064, is
+close but distinct. Every row is measured under the same
+configuration now, which sharpens rather than weakens the caveat
+first raised under the earlier configuration, where the same
+five-of-six pattern held at a different absolute value (150.0):
+policies whose exhaustion counts differ this substantially, from
+zero to 18, should not agree this closely on a tail statistic, and
+now every row that could confirm or break that pattern has, and
+confirms it. The likely explanation is still a ceiling in the
+latency model or the deferral timeout, in which case the column
+reports partial saturation and not behavior. We draw no conclusion
+from it until the cap is located.
 
 Exhaustion and regret coincide exactly in all six rows,
 though Section~III-G treats them as distinct: one counts
 moments the pool cannot cover a draw, the other the onset of
 a deferral caused by earlier discretionary spending. An exact
-identity across six policies, holding under both the current
-configuration's evaluation methodology and the earlier
-configuration's ten-seed medians, means either that the counters
-are wired to the same event, or that every S3 exhaustion happens
-to produce exactly one deferral onset. We have not established
-which, so for now the two columns should be read as one
+identity across six policies, all now measured under the current
+configuration's evaluation methodology, means either that the
+counters are wired to the same event, or that every S3 exhaustion
+happens to produce exactly one deferral onset. We have not
+established which, so for now the two columns should be read as one
 measurement reported twice.
 
 \subsection{Limitations}
@@ -1011,12 +1064,17 @@ S3 shows the separation holding under ordinary scarcity:
 zero below-floor decisions against 1,012 for the reward-shaped
 baseline, and lower rekey churn rather than higher against
 that same baseline --- not the trade we expected, reported rather
-than hidden. What remains, in order: locate the latency ceiling
-and separate the exhaustion and regret counters, so Table~\ref{tab:results}
-can be read at face value; re-measure the static threshold,
-always-PQC, and random baselines under the current, recalibrated
-configuration so the threshold comparison can be stated with
-the same rigor as the reward-shaped one; and train the
+than hidden. The threshold comparison Section~\ref{sec:scenarios}
+committed us to is now stated with that same rigor: a freshly
+tuned threshold ties the masked agent on every column
+Table~\ref{tab:results} shows, but loses by $\sim$3.8$\times$ on
+total episode reward, because it rekeys on nearly every decision
+rather than reusing a still-valid key --- the disqualification
+rule's premise survives, but only once the objective actually
+being optimized, not just the table's own column choice, is
+consulted. What remains, in order: locate the latency ceiling and
+separate the exhaustion and regret counters, so Table~\ref{tab:results}
+can be read at face value; and train the
 dual-head forecaster on RT-IoT2022 to retire the moving-average
 fallback. Longer term, deriving the floor table from compliance
 documents in a checkable way is harder than it first appears,

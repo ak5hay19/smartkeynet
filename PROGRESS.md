@@ -11,6 +11,56 @@
 
 ## Next task
 
+**Table V is now fully real and current across all six policies —
+DONE 2026-08-30 (recovery session, completing the previous entry's
+flagged gap).** The three remaining baselines (static threshold,
+always-PQC, random safe-set) are now measured on the CURRENT,
+recalibrated S3 config (`configs/scenarios/s3_degradation.yaml`),
+using the exact same methodology as the masked-DQN/soft-reward-DQN
+rows already in the table (`experiments.harness.evaluate_multi_seed`,
+the same 8 eval seeds 900–907). The static threshold was re-tuned
+fresh on this config (grid search over the same 9 candidates,
+`total_reward`-scored, not the non-discriminating `p99_latency`
+objective a 2026-08-19 session already flagged and fixed) — tuned
+value `t=0.9`, reproducing the 2026-08-24 Gate W3 S3 session's own
+grid-search scores on this identical config to two decimal places
+(independent confirmation this is a stable, deterministic
+measurement). Real numbers saved to the new
+`dashboard/samples/baselines_s3_data.json` (provenance file,
+matching the existing `dashboard/samples/*.json` convention).
+`docs/smartkeynet_ieee_paper_5.tex`'s Table V, abstract, §IV, §V-C,
+§V-D, §V-F, and the conclusion were all updated to match — the
+`\textdaggerdbl` "not yet re-measured" footnote is gone. **Central
+finding, reported not smoothed over (Hard Rule 7)**: read off Table
+V's own shown columns alone, the freshly tuned static threshold now
+ties or beats the masked agent on every one of them (p99,
+exhaustion, regret, below-floor all tie; forced-rekey ratio `8.0%`
+vs. the masked agent's `15.6%`, in the threshold's favor) — exactly
+the outcome the paper's own disqualification framing (Section II)
+calls a failure of the project's premise. It is not the full
+picture: total episode reward, the scalar actually being optimized,
+separates the two by `~3.8x` (masked `-10,214.82` vs. threshold
+`-38,566.87`) — the threshold's own decision rule never reuses a key
+(pays a fresh-key rekey cost on almost every decision), which is
+what its "better" forced-rekey ratio was actually hiding, not
+efficiency. Table V's new footnote 3 and the §V-C/§V-D prose both
+say this explicitly now, not just the table's tied columns. A second
+finding, also reported plainly: always-PQC's and random's real
+exhaustion counts under the current config (`0.00`/`0.375`) are far
+below the old pre-recalibration figures (`531.0`/`510.5`) —
+consistent with, not contradicting, the already-documented finding
+that only `AlwaysHybridPolicy`'s maximal every-decision draw (the
+always-hybrid row, `18` exhaustion events, still real and unchanged)
+is concentrated enough to exhaust the recalibrated pool within one
+250-step eval episode. **This closes the last flagged gap from the
+entry below — the paper's Table V is now fully reconciled: all six
+policies real, current-config, and internally consistent with the
+prose.** The remaining open items are Fig. 5's TikZ diagram node-text
+fix (flagged 2026-08-27, still needs sign-off) and the two
+not-started larger pieces (real LSTM forecaster, API facade). See
+SESSION_LOG.md's newest entry for the full numbers, before/after
+table diff, and validation.
+
 **Paper Table V placeholder numbers replaced with real measured values,
 stale status text reconciled — DONE 2026-08-30.** `docs/smartkeynet_ieee_paper_5.tex`
 now cites real numbers for the masked-DQN, soft-reward-DQN, and

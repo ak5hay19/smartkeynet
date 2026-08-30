@@ -1,0 +1,68 @@
+{
+  "provenance": "Measured via experiments.harness.evaluate_multi_seed on the CURRENT, recalibrated configs/scenarios/s3_degradation.yaml (the same config the masked-DQN/soft-reward-DQN rows in results_data.json were measured on), eval_seeds=900-907 (the same 8 eval seeds those rows use), no training (all three are non-RL baselines, agents/baselines.py). static_threshold's threshold is freshly grid-searched on this config via StaticThresholdPolicy.grid_search with a total_reward-averaged eval_fn across those same 8 eval seeds (NOT p99_latency -- the non-discriminating objective a 2026-08-19 session found and fixed; see SESSION_LOG.md), never reusing the pre-recalibration tuned value. Reproduces the 2026-08-24 Gate W3 S3 session's own grid-search scores on this identical configuration to two decimal places (0.1: -54624.69 ... 0.9: -38566.87), confirming this is a stable, deterministic measurement, not a seed artifact. Below-floor is reported the same way results_data.json reports it: floor_violations_total is the raw count (matches Table V's own column definition), below_floor_rate_mean/_std is the same quantity as a per-episode rate.",
+  "scenario": "S3",
+  "config_path": "configs/scenarios/s3_degradation.yaml",
+  "eval_seeds": [900, 901, 902, 903, 904, 905, 906, 907],
+  "always_pqc": {
+    "label": "Always-PQC",
+    "below_floor_rate_mean": 0.0,
+    "below_floor_rate_std": 0.0,
+    "total_reward_mean": -16906.98499999997,
+    "total_reward_std": 1503.106877221299,
+    "forced_rekey_ratio_mean": 0.08,
+    "forced_rekey_ratio_std": 0.0,
+    "regret_events_mean": 0.0,
+    "pool_exhaustion_events_mean": 0.0,
+    "p99_latency_mean": 1.5,
+    "p99_latency_std": 0.0,
+    "floor_violations_total": 0,
+    "n_eval_seeds": 8
+  },
+  "static_threshold_grid_search": {
+    "grid": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+    "scores_total_reward_mean": {
+      "0.1": -54624.69307499994,
+      "0.2": -49989.70534999996,
+      "0.3": -47363.52084999997,
+      "0.4": -45840.233749999985,
+      "0.5": -44558.58375,
+      "0.6": -43052.645000000004,
+      "0.7": -41578.74750000001,
+      "0.8": -40008.72625000002,
+      "0.9": -38566.87000000001
+    },
+    "tuned_threshold": 0.9
+  },
+  "static_threshold": {
+    "label": "Static threshold (tuned t=0.9)",
+    "below_floor_rate_mean": 0.0,
+    "below_floor_rate_std": 0.0,
+    "total_reward_mean": -38566.87000000001,
+    "total_reward_std": 1636.1217612543514,
+    "forced_rekey_ratio_mean": 0.08,
+    "forced_rekey_ratio_std": 0.0,
+    "regret_events_mean": 0.0,
+    "pool_exhaustion_events_mean": 0.0,
+    "p99_latency_mean": 1.5,
+    "p99_latency_std": 0.0,
+    "floor_violations_total": 0,
+    "n_eval_seeds": 8
+  },
+  "random": {
+    "label": "Random (safe set)",
+    "below_floor_rate_mean": 0.0,
+    "below_floor_rate_std": 0.0,
+    "total_reward_mean": -31904.804125000024,
+    "total_reward_std": 1751.648830961927,
+    "forced_rekey_ratio_mean": 0.10043264770416084,
+    "forced_rekey_ratio_std": 0.0023931630376660237,
+    "regret_events_mean": 0.375,
+    "pool_exhaustion_events_mean": 0.375,
+    "p99_latency_mean": 1.5,
+    "p99_latency_std": 0.0,
+    "floor_violations_total": 0,
+    "n_eval_seeds": 8,
+    "policy_rng_seed": 0
+  },
+  "masked_dqn_and_soft_reward_for_reference": "See dashboard/samples/results_data.json's s3_comparison block for the masked-DQN (total_reward_mean -10214.82025833332) and soft-reward-DQN rows this file's baselines are compared against in the paper -- not duplicated here to avoid two sources of truth for the same numbers."
+}
