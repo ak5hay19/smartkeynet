@@ -11,6 +11,53 @@
 
 ## Next task
 
+**Presentation-only dashboard restyle to match the design mockup — DONE
+2026-08-31.** The six real dashboard panels (`dashboard/render_*.py`)
+and the server's index page (`dashboard/app.py::render_index_html`) now
+consistently match `dashboard/mockups/smartkeynet_dashboard_mockup_v2.html`'s
+dark visual language — real data and every honesty guard untouched, only
+presentation changed. **Real finding before doing any work**: the six
+panel renderers were already built directly against the mockup's design
+tokens in prior sessions (same `--bg`/`--panel`/tier-color/`--quantum`
+palette, same card/badge/callout/floor-cell patterns) — so the actual
+restyle surface was two small cross-panel consistency fixes
+(`.beat-eyebrow` color unified to `var(--quantum)` in
+`render_explain.py`/`render_living_system.py`; the mockup's dot-grid
+`body` background added additively to all six) plus the index page,
+which was still a plain unstyled grid and is now a proper landing page:
+a static brand header (no fabricated live-status pills), a one-line
+thesis statement pulled from README's own real project framing
+("Security is enforced as a hard, structural constraint — action
+masking, never a term in the reward"), a tier-color legend, and
+mockup-style card treatment. All six panels' sample HTML regenerated via
+their existing, unmodified demo drivers; `git diff --stat` on every
+regenerated sample shows only 7-9 added CSS lines, and the three
+`*_data.json` provenance files came back byte-identical (real
+measurements untouched/deterministic). Every honesty guard was
+re-verified directly in the regenerated output, not assumed: the masked
+dose-response curve's real alpha>=0.9 boundary, the `p99_latency`
+discrete-cost-artifact caveat, the `regret==pool_exhaustion`-by-
+construction note, and Migration Wave's three real attribution outcomes
+(`no_before_observation`/`scripted`/`scripted`) all came through
+unchanged. Zero changes to any protected path (`env/`, `agents/`,
+`experiments/`, `reward.*`, `dashboard/explain.py`, `dashboard/mockups/`)
+— verified via an empty `git diff --stat`. Full suite: **657 passed, 1
+xfailed**, identical to the pre-session baseline (re-confirmed fresh
+before and after, not copied) — no test removed, skipped, or weakened.
+Server re-verified live over real HTTP after the restyle (index +
+two spot-checked panels all real `200`s with well-formed HTML; unknown
+path still `404`s). See SESSION_LOG.md's newest entry for the full
+verification trail.
+
+**Next task:** a possible future step is merging the six panels into one
+unified tabbed single-page app (mirroring the mockup's tab-switcher UX,
+"Option 3" territory) and/or live-episode streaming, both still
+deliberately deferred and not started this session. The LSTM forecaster,
+the pcap/live-capture chain, the API facade (`api/main.py`), and Fig.
+5's TikZ diagram node-text fix (flagged 2026-08-27, still needs
+sign-off) all remain the other open items — pick up whichever of those
+next.
+
 **Minimal local dashboard server (`dashboard/app.py`) — DONE 2026-08-31.**
 `dashboard/app.py` was a `NotImplementedError` stub (Person D's original
 Plotly-Dash design brief for a live, wired 4-beat demo shell); it is now

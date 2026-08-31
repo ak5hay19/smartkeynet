@@ -201,10 +201,15 @@ _CSS = """
 }
 *{box-sizing:border-box;}
 html,body{margin:0;padding:0;}
-body{background:var(--bg);color:var(--text);font-family:var(--disp);padding:28px 20px 60px;}
+body{
+  background:
+    radial-gradient(circle at 1px 1px, #16202C 1px, transparent 0) 0 0/28px 28px,
+    var(--bg);
+  color:var(--text);font-family:var(--disp);padding:28px 20px 60px;
+}
 .wrap{max-width:760px;margin:0 auto;}
 .beat-head{margin-bottom:22px;}
-.beat-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--text-faint);}
+.beat-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--quantum);}
 .beat-title{font-family:var(--disp);font-weight:700;font-size:22px;margin-top:4px;}
 .beat-desc{color:var(--text-dim);font-size:13px;margin-top:6px;line-height:1.5;}
 

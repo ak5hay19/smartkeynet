@@ -99,23 +99,37 @@ _ROUTES: dict[str, Path] = {
 }
 
 
+_TIER_LEGEND: tuple[tuple[str, str], ...] = (
+    ("Classical", "#8B95A5"),
+    ("PQC (ML-KEM-768)", "#E8A33D"),
+    ("Hybrid (+ QKD)", "#33D687"),
+)
+
+
 def render_index_html() -> str:
     """Pure function: build the index page linking all six panels.
     No file I/O, no server -- safe to call directly in tests."""
     cards = []
-    for panel in PANELS:
+    for i, panel in enumerate(PANELS, start=1):
         links = "\n".join(
-            f'<a class="panel-link" href="/samples/{html.escape(pf.filename)}">{html.escape(pf.label)}</a>'
+            f'<a class="panel-link" href="/samples/{html.escape(pf.filename)}">{html.escape(pf.label)}'
+            '<span class="arrow">&rarr;</span></a>'
             for pf in panel.files
         )
         cards.append(
             f"""<div class="card">
+<div class="card-label"><span>{i:02d}</span><span>{len(panel.files)} file{"s" if len(panel.files) != 1 else ""}</span></div>
 <div class="card-title">{html.escape(panel.title)}</div>
 <div class="card-desc">{html.escape(panel.description)}</div>
 <div class="card-links">{links}</div>
 </div>"""
         )
     cards_html = "\n".join(cards)
+
+    legend_html = "\n".join(
+        f'<div class="legend-item"><span class="legend-swatch" style="background:{color}"></span>{html.escape(label)}</div>'
+        for label, color in _TIER_LEGEND
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -125,35 +139,81 @@ def render_index_html() -> str:
 <title>SmartKeyNet -- Dashboard</title>
 <style>
 :root{{
-  --bg:#0A0E13; --panel:#111820; --panel-2:#151D27; --line:#212C39;
+  --bg:#0A0E13; --panel:#111820; --panel-2:#151D27; --line:#212C39; --line-soft:#171F29;
   --text:#E9EEF4; --text-dim:#8FA0B3; --text-faint:#4C5A6B; --quantum:#6E7EFF;
-  --radius:12px;
+  --classical:#8B95A5; --pqc:#E8A33D; --hybrid:#33D687;
+  --radius:12px; --radius-sm:7px;
   --mono:ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;
   --disp:-apple-system,'Segoe UI',Roboto,sans-serif;
 }}
 *{{box-sizing:border-box;}}
 html,body{{margin:0;padding:0;}}
-body{{background:var(--bg);color:var(--text);font-family:var(--disp);padding:32px 20px 60px;}}
-.wrap{{max-width:900px;margin:0 auto;}}
-h1{{font-size:22px;margin:0 0 6px;}}
-.subtitle{{color:var(--text-dim);font-size:13px;margin-bottom:28px;}}
-.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;}}
-.card{{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px;}}
-.card-title{{font-weight:700;font-size:15px;margin-bottom:8px;}}
+body{{
+  background:
+    radial-gradient(circle at 1px 1px, #16202C 1px, transparent 0) 0 0/28px 28px,
+    var(--bg);
+  color:var(--text);font-family:var(--disp);min-height:100vh;
+}}
+a{{color:inherit;}}
+
+.topbar{{
+  display:flex;align-items:center;gap:12px;padding:18px 24px;
+  border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg, rgba(17,24,32,.9), rgba(17,24,32,.55));
+}}
+.brand-name{{font-weight:700;font-size:16px;letter-spacing:.05em;}}
+.brand-sub{{font-family:var(--mono);font-size:10px;color:var(--text-faint);letter-spacing:.12em;text-transform:uppercase;margin-top:1px;}}
+
+main{{max-width:1080px;margin:0 auto;padding:36px 22px 60px;}}
+.thesis{{
+  font-size:16px;line-height:1.55;max-width:680px;margin:0 0 6px;color:var(--text);
+}}
+.thesis b{{color:var(--quantum);}}
+.subtitle{{color:var(--text-dim);font-size:13px;margin-bottom:22px;}}
+
+.legend-row{{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:28px;}}
+.legend-item{{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-dim);}}
+.legend-swatch{{width:10px;height:10px;border-radius:3px;display:inline-block;}}
+
+.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;}}
+.card{{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 17px;transition:border-color .15s ease;}}
+.card:hover{{border-color:#2C3B4C;}}
+.card-label{{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint);margin-bottom:10px;}}
+.card-title{{font-weight:700;font-size:15px;margin-bottom:6px;}}
 .card-desc{{color:var(--text-dim);font-size:12.5px;line-height:1.5;margin-bottom:14px;}}
-.card-links{{display:flex;flex-direction:column;gap:6px;}}
-.panel-link{{color:var(--quantum);font-family:var(--mono);font-size:11.5px;text-decoration:none;}}
-.panel-link:hover{{text-decoration:underline;}}
+.card-links{{display:flex;flex-direction:column;gap:2px;border-top:1px solid var(--line-soft);padding-top:10px;}}
+.panel-link{{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  color:var(--quantum);font-family:var(--mono);font-size:11.5px;text-decoration:none;
+  padding:6px 2px;border-radius:var(--radius-sm);
+}}
+.panel-link:hover{{background:var(--panel-2);}}
+.panel-link .arrow{{color:var(--text-faint);}}
+
+footer{{max-width:1080px;margin:8px auto 0;padding:16px 22px 0;font-family:var(--mono);font-size:10.5px;color:var(--text-faint);border-top:1px solid var(--line);}}
 </style>
 </head>
 <body>
-<div class="wrap">
-<h1>SmartKeyNet Dashboard</h1>
-<div class="subtitle">Six real, pre-rendered panels from dashboard/samples/ -- served as-is, nothing computed live.</div>
+<header class="topbar">
+  <svg width="26" height="26" viewBox="0 0 30 30" fill="none">
+    <polygon points="15,1.5 27,8.25 27,21.75 15,28.5 3,21.75 3,8.25" stroke="#6E7EFF" stroke-width="1.6"/>
+    <path d="M11 15a4 4 0 1 1 4 4v4.2M11 15a4 4 0 0 1 4-4M15 19v-1.4" stroke="#6E7EFF" stroke-width="1.6" stroke-linecap="round"/>
+    <circle cx="19.3" cy="10.7" r="1.4" fill="#6E7EFF"/>
+  </svg>
+  <div>
+    <div class="brand-name">SMARTKEYNET</div>
+    <div class="brand-sub">Hybrid KMS &middot; Decision Layer</div>
+  </div>
+</header>
+<main>
+<p class="thesis">Security is enforced as a <b>hard, structural constraint</b> &mdash; action masking, never a term in the reward.</p>
+<div class="subtitle">Six real, pre-rendered panels from dashboard/samples/, served as-is &mdash; nothing computed live, nothing in these pages is a placeholder.</div>
+<div class="legend-row">{legend_html}</div>
 <div class="grid">
 {cards_html}
 </div>
-</div>
+</main>
+<footer>SmartKeyNet &mdash; decision layer for a multi-tenant hybrid-crypto KMS</footer>
 </body>
 </html>"""
 
