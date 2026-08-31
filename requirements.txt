@@ -9,6 +9,12 @@ networkx>=3.2
 # --- agents / forecaster ---
 torch>=2.2
 
+# --- data ingestion (RT-IoT2022 feature-extraction pipeline,
+#     forecaster/rt_iot_features.py + data/get_data.py) ---
+pandas>=2.0
+requests>=2.31
+ucimlrepo>=0.0.7  # official UCI ML Repository client
+
 # --- API facade ---
 fastapi>=0.110
 pydantic>=2.6

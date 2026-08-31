@@ -11,6 +11,77 @@
 
 ## Next task
 
+**Full RT-IoT2022 feature-extraction pipeline — REAL, TESTED, run
+against the FULL dataset (not a sample) — DONE 2026-08-31. Explicitly
+NOT YET WIRED IN.** `forecaster/rt_iot_features.py` (new module,
+standalone from `forecaster/dataset.py`'s separate rollout-log-based
+windowing): real CSV loading + validation, degeneracy screening (real
+result: NOT degenerate, dominant label `DOS_SYN_Hping` at 76.89% of
+123,117 rows), a 39-feature extraction function grounded in real
+network-IDS engineering practice (packet/byte rates, volume, timing,
+header overhead, TCP window size, TCP flag counts, protocol/service
+one-hot — reasoning documented in the module itself), a persisted
+z-score scaler, and window=64/stride=32 majority-vote windowing. The
+extraction function (`extract_flow_features`) is deterministic and
+stateless, verified to produce identical output whether called on one
+row alone or embedded in a batch — the "one implementation, two
+callers" design PLAN2.md's Addition D calls for (offline training
+caller now; a future single-window live-inference caller later). Ran
+for real against the COMPLETE dataset: 123,117 raw rows -> **3,846
+windows**, saved to `data/processed/rt_iot2022/rt_iot2022_windows.npz`
++ a JSON report, both committed. `data/get_data.py::_download_rt_iot2022()`
+also implemented for real (was a stub) using the official `ucimlrepo`
+client against UCI ML Repository dataset id 942 (CC BY 4.0) — verified
+by actually running it: a real fetch returned exactly 123,117 rows,
+independently confirming the vendored local CSV is the genuine,
+complete dataset. **Central finding, reported plainly (Hard Rule 7):
+the resulting label distribution is heavily imbalanced** — binary
+benign/attack windows split 390/3,456 (10.1%/89.9%), and the 12-class
+majority-vote label all but erases the thinnest raw classes
+(`NMAP_FIN_SCAN`: 0/3,846 windows despite 28 real raw rows) — a real
+constraint the next phase's LSTM training must design around
+(class-weighted training, per-class F1, never accuracy). 25 new tests,
+all real behavioral tests including a hand-calculated single-row
+extraction check and a full end-to-end run against the real, complete
+dataset. Full suite: **688 passed, 1 xfailed** (663 prior + 25 new).
+**Scope boundary held, verified via `git diff --stat`**: zero changes
+to `env/forecast_provider.py` or `env/environment.py` — the placeholder
+`MovingAverageForecaster` remains the system's active forecaster, and
+every existing experimental result (Gate W3, the S3 masked-vs-soft-
+reward comparison, the S5 dose-response sweep, all six dashboard
+panels, the paper's Table V) is unaffected. See SESSION_LOG.md's
+newest entry and PLAN2.md's new "Addition E" section for the full
+design writeup, real numbers, and four-phase plan.
+
+**Next task — TOP PRIORITY for the next several sessions, in this
+exact order (PLAN2.md Addition E):**
+1. **[DONE this session]** the full RT-IoT2022 feature-extraction
+   pipeline (above).
+2. **Build and train the dual-head LSTM model**
+   (`forecaster/model.py::SmartKeyForecaster`, `forecaster/train.py`)
+   on this session's windowed output — currently real `NotImplementedError`
+   stubs. Will need to decide how this module's RT-IoT2022-direct
+   windowing relates to `forecaster/dataset.py`'s separate rollout-
+   log-based `RolloutWindowDataset` design.
+3. **Validate the trained model** — per-class F1 (never accuracy,
+   given this session's real measured class imbalance), confirm it
+   isn't a degenerate always-predict-majority shortcut.
+4. **Wire it in via `LSTMForecastProvider` and re-run the FULL
+   experimental campaign** — Gate W3 on S1+S3, the masked-vs-soft-
+   reward S3 comparison, the full 11-point dose-response sweep, all
+   six dashboard panels, and the paper's Table V — since every
+   existing result was measured against the placeholder forecaster and
+   does not transfer automatically to a real one. This is a later,
+   separate, deliberate session (per the project owner's own
+   instruction), never bundled into the same session as steps 2-3.
+
+**Dashboard polish, the API facade (`api/main.py`), live-episode
+streaming, and any other stretch work are now explicitly LOWER
+priority than the four-step sequence above** — pick up steps 2-4 next,
+not dashboard/API work, unless explicitly redirected.
+
+---
+
 **Living System panel now shows a real S1 (steady/calm) snapshot
 alongside the existing S2 (elevated HNDL) one — DONE 2026-08-31.**
 `dashboard/render_living_system_demo.py` runs the exact same real

@@ -1,0 +1,62 @@
+{
+  "csv_path": "data\\raw\\rt_iot2022\\RT_IOT2022.csv",
+  "out_path": "data\\processed\\rt_iot2022\\rt_iot2022_windows.npz",
+  "n_rows_raw": 123117,
+  "n_unique_raw_labels": 12,
+  "raw_label_counts": {
+    "DOS_SYN_Hping": 94659,
+    "Thing_Speak": 8108,
+    "ARP_poisioning": 7750,
+    "MQTT_Publish": 4146,
+    "NMAP_UDP_SCAN": 2590,
+    "NMAP_XMAS_TREE_SCAN": 2010,
+    "NMAP_OS_DETECTION": 2000,
+    "NMAP_TCP_scan": 1002,
+    "DDOS_Slowloris": 534,
+    "Wipro_bulb": 253,
+    "Metasploit_Brute_Force_SSH": 37,
+    "NMAP_FIN_SCAN": 28
+  },
+  "degeneracy": {
+    "is_degenerate": false,
+    "dominant_label": "DOS_SYN_Hping",
+    "dominant_fraction": 0.7688540169107434,
+    "threshold": 0.98
+  },
+  "n_windows": 3846,
+  "window": 64,
+  "stride": 32,
+  "feature_dim": 39,
+  "binary_class_balance": {
+    "benign": 390,
+    "attack": 3456
+  },
+  "multiclass_class_names": [
+    "ARP_poisioning",
+    "DDOS_Slowloris",
+    "DOS_SYN_Hping",
+    "MQTT_Publish",
+    "Metasploit_Brute_Force_SSH",
+    "NMAP_FIN_SCAN",
+    "NMAP_OS_DETECTION",
+    "NMAP_TCP_scan",
+    "NMAP_UDP_SCAN",
+    "NMAP_XMAS_TREE_SCAN",
+    "Thing_Speak",
+    "Wipro_bulb"
+  ],
+  "multiclass_class_counts": {
+    "ARP_poisioning": 243,
+    "DDOS_Slowloris": 16,
+    "DOS_SYN_Hping": 2958,
+    "MQTT_Publish": 129,
+    "Metasploit_Brute_Force_SSH": 2,
+    "NMAP_FIN_SCAN": 0,
+    "NMAP_OS_DETECTION": 63,
+    "NMAP_TCP_scan": 31,
+    "NMAP_UDP_SCAN": 81,
+    "NMAP_XMAS_TREE_SCAN": 62,
+    "Thing_Speak": 253,
+    "Wipro_bulb": 8
+  }
+}

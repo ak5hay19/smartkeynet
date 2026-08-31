@@ -32,8 +32,38 @@ SUPPORTED_DATASETS = (
 
 
 def _download_rt_iot2022(out_dir: Path) -> None:
-    """Download RT-IoT2022 (real IoT intrusion flows) into `out_dir`."""
-    raise NotImplementedError
+    """Download RT-IoT2022 (real IoT intrusion flows, UCI ML Repository
+    dataset id 942, CC BY 4.0 -- freely redistributable, unlike
+    Q-OPSEC) into `out_dir` as `RT_IOT2022.csv`.
+
+    Uses the official `ucimlrepo` client
+    (https://github.com/uci-ml-repo/ucimlrepo), per UCI's own
+    documented recommendation, rather than hand-rolling the static-zip
+    URL -- it returns already-parsed feature/target DataFrames.
+    Verified this session: `fetch_ucirepo(id=942)` returns 123,117 rows
+    x 83 feature columns + 1 target column (`Attack_type`), matching
+    the dataset's published size exactly and matching the row count of
+    the copy already vendored at
+    `data/raw/rt_iot2022/RT_IOT2022.csv` (this pipeline's real input --
+    see `forecaster/rt_iot_features.py`).
+    """
+    try:
+        from ucimlrepo import fetch_ucirepo
+    except ImportError as exc:
+        raise ImportError(
+            "ucimlrepo is required to download RT-IoT2022 -- "
+            "install it with `pip install ucimlrepo` (see requirements.txt)."
+        ) from exc
+
+    dataset = fetch_ucirepo(id=942)
+    features = dataset.data.features
+    targets = dataset.data.targets
+    combined = features.copy()
+    combined[targets.columns[0]] = targets.iloc[:, 0]
+
+    out_path = out_dir / "RT_IOT2022.csv"
+    combined.to_csv(out_path, index=True)
+    print(f"Wrote {len(combined)} rows x {combined.shape[1]} columns to {out_path}")
 
 
 def _download_qopsec_confidentiality(out_dir: Path) -> None:

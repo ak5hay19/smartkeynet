@@ -269,6 +269,77 @@ Alongside the project's existing required additions (a dual-head forecaster for 
 
 ---
 
+## 8A. Addition E — Real Threat Forecaster Build-Out (RT-IoT2022)
+
+Formalized 2026-08-31, following a session that built and ran the full
+RT-IoT2022 feature-extraction pipeline (Phase 1 below) — see
+SESSION_LOG.md's 2026-08-31 "full RT-IoT2022 feature-extraction
+pipeline" entry for the complete real numbers and design writeup. This
+is now the project's **top named priority for the next several
+sessions**, ahead of dashboard polish, the API facade, and any other
+stretch work (see §11's updated note below).
+
+**Goal:** replace the placeholder `MovingAverageForecaster` with a
+real, trained, dual-head LSTM forecaster (PLAN.md Addition A), in four
+phases, each a separate session:
+
+1. **Full RT-IoT2022 feature-extraction pipeline — DONE 2026-08-31.**
+   A real download/loading mechanism (`data/get_data.py::_download_rt_iot2022()`,
+   via the official `ucimlrepo` client against UCI ML Repository
+   dataset id 942), label-degeneracy screening (real result: the full
+   file is NOT degenerate — dominant label `DOS_SYN_Hping` at 76.89%
+   of 123,117 rows, well under the 98% discard threshold), and a real
+   feature-extraction function (`forecaster/rt_iot_features.py::extract_flow_features()`
+   — 39 features, packet/byte rates, flow statistics, TCP flags,
+   protocol/service distribution, reasoning documented in the module
+   itself) windowing raw flow-level data into an LSTM-consumable
+   representation (window=64, stride=32). Implemented as ONE shared
+   extraction function usable by two future callers (PLAN2.md
+   Addition D's "one implementation, two callers": the offline
+   training path, run this session against the full dataset; a future
+   single-window live-inference path, not yet built). Run against the
+   FULL dataset (not a sample): 123,117 rows -> 3,846 windows, saved
+   to `data/processed/rt_iot2022/rt_iot2022_windows.npz`. Real,
+   honestly-reported finding: the resulting label distribution is
+   heavily imbalanced (binary benign/attack windows split
+   390/3,456 — 10.1%/89.9%; the 12-class majority-vote label all but
+   erases the thinnest raw classes, e.g. `NMAP_FIN_SCAN`'s 28 raw rows
+   win 0/3,846 window-level majority votes) — a real constraint Phase
+   2's training must design around per Hard Rule 4 (class-weighted
+   training, per-class F1, never accuracy). 25 new real behavioral
+   tests, full suite 688 passed/1 xfailed. Zero changes to
+   `env/forecast_provider.py`/`env/environment.py` (verified via
+   `git diff --stat`).
+2. **Build and train the dual-head LSTM model** — not started.
+   `forecaster/model.py::SmartKeyForecaster` (threat head + pool head)
+   and `forecaster/train.py` remain real `NotImplementedError` stubs.
+   Will need to decide how Phase 1's RT-IoT2022-direct windowed output
+   relates to `forecaster/dataset.py`'s separate rollout-log-based
+   `RolloutWindowDataset` design (PLAN.md Addition A's original spec:
+   the pool head trains on logged environment rollouts; the threat
+   head's real-data source is Phase 1's output).
+3. **Validate the trained model** — not started. Per-class F1 (never
+   accuracy, given Phase 1's real measured class imbalance); confirm
+   it isn't a degenerate always-predict-majority shortcut.
+4. **Wire it in via `LSTMForecastProvider` and re-run the FULL
+   experimental campaign** — not started. Gate W3 on S1+S3, the
+   masked-vs-soft-reward S3 comparison, the full 11-point dose-response
+   sweep, all six dashboard panels, and the paper's Table V — since
+   every existing result was measured against the placeholder
+   forecaster and does not transfer automatically to a real one. This
+   is a later, separate, deliberate session per the project owner's
+   own instruction — never bundled into the same session as Phases 2-3.
+
+**Until Phase 4 (wire-in + full re-validation) is complete, the
+`MovingAverageForecaster` placeholder remains the system's active,
+authoritative forecaster, and every existing experimental result in
+this document and the paper remains a valid, current measurement of
+the system as it stands. Phase 4 will require re-running the full
+experimental campaign, since results measured under the placeholder do
+not transfer to results under a real forecaster.**
+
+---
+
 ## 9. Scenarios (the experiment grid)
 
 | # | Scenario | What changes | What it tests | Train/Eval | Dashboard panel |
@@ -289,7 +360,7 @@ This section exists so a paper drafted from this document doesn't accidentally c
 
 **Solid / implemented and tested:** the QKD pool simulator (refill/drain/exhaustion), the deferral queue and regret accounting, the action-masking logic and its policy-table floor lookup, the full Gymnasium-style environment wiring these together with the reward formula, the masked DQN agent itself, all four tuned non-RL baselines, and the scenario comparison harness. This is the project's spine and it works end-to-end on the benign (S1) scenario.
 
-**Partial / stubbed:** the threat forecaster currently only has a simple, non-learned fallback (an exponentially-weighted moving average over a placeholder signal) — the real trained forecaster (offline-trained on RT-IoT2022, with the dual threat/pool heads) does not exist yet. The request stream is currently a random synthetic generator, not yet sampled from a real tenant graph. Scenario dispatch beyond S1 (S2 through S6) is defined in configuration but not yet acted on by the environment.
+**Partial / stubbed:** the threat forecaster currently only has a simple, non-learned fallback (an exponentially-weighted moving average over a placeholder signal) — the real trained forecaster (offline-trained on RT-IoT2022, with the dual threat/pool heads) does not exist yet. **Updated 2026-08-31 (§8A, Addition E, Phase 1 DONE): the RT-IoT2022 feature-extraction pipeline that will feed that real forecaster's training is now real, tested, and run against the full 123,117-row dataset (3,846 windowed feature examples saved to `data/processed/rt_iot2022/`) — but the LSTM model itself (`forecaster/model.py::SmartKeyForecaster`), its training loop (`forecaster/train.py`), and its integration via `LSTMForecastProvider` remain real `NotImplementedError` stubs / not started, and `env/forecast_provider.py`'s `MovingAverageForecaster` remains the system's active forecaster.** The request stream is currently a random synthetic generator, not yet sampled from a real tenant graph. Scenario dispatch beyond S1 (S2 through S6) is defined in configuration but not yet acted on by the environment.
 
 **Not started:** the soft-reward baseline agent (the steering attack's target), the adversarial threat-trace generator and the steering attack itself, the live dashboard in any form (all 7 panels in §7 are currently only realized as the illustrative HTML mockup, not a working system), the AWS-KMS-style API facade, and the written report/paper content itself.
 
@@ -302,6 +373,8 @@ This section exists so a paper drafted from this document doesn't accidentally c
 ## 11. Timeline & Cut Lines
 
 The three non-negotiable deliverables remain: a working masked-DQN pool-budgeting agent, the steering-attack result, and a report. This document's additions (Panels 1 and 3, and the replay-pcap pathway) are scoped as **low-cost, high-narrative-value dashboard work** — they surface values the rest of the system already computes, and should not be allowed to compete for time against the steering attack or the four mandatory baselines.
+
+**Priority note, added 2026-08-31:** §8A's Addition E (the real LSTM threat-forecaster build-out — RT-IoT2022 feature-extraction pipeline DONE, LSTM build/train/validate/wire-in remaining) is now the **top named priority for the next several sessions**, ahead of dashboard polish, the API facade, and any other stretch work described elsewhere in this document. Pick up Addition E's Phase 2 (build + train the LSTM) next unless explicitly redirected.
 
 **Cut order the instant a gate slips (in order, first cut first):**
 1. True live network capture (was never a guaranteed deliverable — §5.5, Hard Rule 11).
