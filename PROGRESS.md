@@ -11,6 +11,39 @@
 
 ## Next task
 
+**Root README.md authored (real run/onboard reference) — DONE
+2026-08-31.** The repo's root `README.md` (previously a stale
+week-1-kickoff scaffold referencing a `split.md` that no longer exists
+— deleted the prior commit, `aefc7a1`) is now a genuinely useful,
+verified onboarding doc: what the project is, real install steps, the
+real test command + real pass count (**649 passed, 1 xfailed**, run
+fresh this session, matching PROGRESS.md's own last-recorded figure
+exactly), how to open the six real dashboard panels in a browser
+(`dashboard/samples/*.html`, no server needed), the real commands to
+regenerate each panel and to train/evaluate via
+`experiments/train.py`/`experiments/harness.py`'s real function
+signatures (verified by reading the actual code, not assumed — e.g.
+`train()`'s CLI (`python -m experiments.train`) always runs S1 only;
+scenario selection needs the Python API, `train(config,
+scenario="S3")`), a concept-to-file repository map, the S1–S6 scenario
+table, and an honest implemented-vs-stub-vs-not-started split plus the
+known caveats (placeholder-forecaster posture saturation, the
+`p99_latency` discrete-cost artifact, the `regret == pool_exhaustion`
+identity, and the threshold-ties-on-displayed-columns-but-loses-3.8x-
+on-total-reward nuance) pulled directly from PROGRESS.md/SESSION_LOG.md
+rather than smoothed over. No code, config, or test file touched — see
+SESSION_LOG.md's newest entry for the full verification trail
+(including one real, minor finding along the way: `dashboard/samples/
+01_first_decision.html`/`02_floor_driven_only_hybrid_clears.html`/
+`03_real_cost_tradeoff.html` are stale relative to the current
+`dashboard/render_explain.py` — regenerating them now adds a
+`data-cell="{class}-{posture}"` attribute to every floor-grid cell that
+the committed HTML doesn't have yet; spotted via a spot-check demo run,
+reverted rather than fixed since this was a docs-only session — a
+real, small, easy follow-up for whoever next touches that panel:
+re-run `python -m dashboard.render_explain_demo` and commit the
+refreshed samples).
+
 **Table V is now fully real and current across all six policies —
 DONE 2026-08-30 (recovery session, completing the previous entry's
 flagged gap).** The three remaining baselines (static threshold,
@@ -1268,6 +1301,15 @@ behavioral tests, part of the green `pytest` run).
 ---
 
 ## Last verified
+
+- **Date:** 2026-08-31 (root README session)
+- **Commit:** `aefc7a1` ("Delete split.md") — the commit this session started from (`main`); see SESSION_LOG.md for this session's own commit and the final ff-merged `dev21` hash.
+- **`pytest` pass count:** 649 passed, 1 xfailed — run fresh this session, matches PROGRESS.md's own last-recorded figure exactly.
+- **Branch:** `main` (aefc7a1) was one commit ahead of `dev21` (e64ef68) at session start — a clean fast-forward (`dev21..main` = the single "Delete split.md" commit, `main..dev21` empty), not a divergence; this session worked on `main` and ff-merged into `dev21` at the end, per the standing workflow — see SESSION_LOG.md for the final shared hash. Not pushed to origin this session, per instruction.
+
+---
+
+## Prior "Last verified" (superseded, kept for history)
 
 - **Date:** 2026-08-25 (adversarial trace generator session)
 - **Commit:** `36f3b20` ("docs: explain p99_latency saturation as discrete-cost-model artifact, recommend total_reward/below_floor_rate instead -- 2026-08-25") — the commit this session started from; see SESSION_LOG.md for this session's own commit
