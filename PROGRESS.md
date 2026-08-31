@@ -53,8 +53,11 @@ panels, the paper's Table V) is unaffected. See SESSION_LOG.md's
 newest entry and PLAN2.md's new "Addition E" section for the full
 design writeup, real numbers, and four-phase plan.
 
-**Next task — TOP PRIORITY for the next several sessions, in this
-exact order (PLAN2.md Addition E):**
+**Next task — formalized post-review roadmap, TOP PRIORITY for the
+next several sessions, strict dependency order E -> F -> G (PLAN2.md
+§8A/§8B/§8C — formalized 2026-08-31):**
+
+**Addition E — Real Threat Forecaster Build-Out (RT-IoT2022):**
 1. **[DONE this session]** the full RT-IoT2022 feature-extraction
    pipeline (above).
 2. **Build and train the dual-head LSTM model**
@@ -75,10 +78,34 @@ exact order (PLAN2.md Addition E):**
    separate, deliberate session (per the project owner's own
    instruction), never bundled into the same session as steps 2-3.
 
-**Dashboard polish, the API facade (`api/main.py`), live-episode
-streaming, and any other stretch work are now explicitly LOWER
-priority than the four-step sequence above** — pick up steps 2-4 next,
-not dashboard/API work, unless explicitly redirected.
+**Addition F — Live/Replayed PCAP Input (PLAN2.md §8B) — depends on
+Addition E step 4 being complete first; do not start meaningfully
+before then.** Once the LSTM forecaster is real and wired in: a
+`.pcap`/`.pcapng` file replayed at real-time pace through the SAME
+shared `extract_flow_features()` Addition E built (offline-training
+path and pcap-inference path are the two callers of one
+implementation), driving a live episode whose panels update as
+decisions happen. Hard Rule 11 (PLAN2.md §5.5) stays in force
+unchanged: replay-of-a-captured-file only — TRUE live capture off a
+real network interface remains explicitly out of scope (safer for a
+demo, avoids a large separate systems-engineering subsystem, zero
+incremental research value over replay).
+
+**Addition G — API Facade, AWS-KMS-style (PLAN2.md §8C) — depends on
+Addition F being complete first; do not start before then.** A FastAPI
+REST facade (per PLAN.md's original framing) wrapping the now-real
+system (LSTM + pcap chain) in clean endpoints (`GenerateDataKey`,
+`Encrypt`, key-policy endpoints). Explicitly framed as demo/real-world
+presentation value ("does this look like a deployable service"),
+**explicitly LOW/ZERO research contribution value** (PLAN.md's own
+"no research value... deployment story, not a research contribution"
+framing) — sequenced last because it should wrap something real, not
+the placeholder.
+
+**Dashboard polish, live-episode streaming, and any other stretch work
+are now explicitly LOWER priority than the E -> F -> G sequence
+above** — pick up Addition E step 2 next, not dashboard/API/pcap work,
+unless explicitly redirected.
 
 ---
 
@@ -1377,9 +1404,14 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       the full mechanism. The 2026-08-10 `load_spike` diagnostic remains a
       request-rate-only stand-in, unrelated to this real dispatch. (S5/S6
       are separate milestone items, tracked below, not part of "S2-S4.")
-- [ ] Real LSTM dual-head forecaster (Addition A) — `forecaster/model.py`,
-      `forecaster/dataset.py`, `forecaster/train.py`, `LSTMForecastProvider`
-      in `env/forecast_provider.py`
+- [~] Real LSTM dual-head forecaster (Addition A / PLAN2.md §8A Addition E)
+      — **Phase 1 (RT-IoT2022 feature-extraction pipeline) DONE 2026-08-31**:
+      `forecaster/rt_iot_features.py` implemented+tested (see that file's
+      new per-file row below). Phases 2-4 (build/train the LSTM in
+      `forecaster/model.py`/`forecaster/dataset.py`/`forecaster/train.py`,
+      validate it, wire it in via `LSTMForecastProvider` in
+      `env/forecast_provider.py`) remain not started — marked `[~]`
+      (partial), not `[x]`, until Phase 4 completes.
 - [ ] E-A foresight ablation (off / ewma / lstm on S3 + S6)
 - [x] Steering attack — adversarial threat-trace generator (`attack/trace_generator.py`,
       real and tested since 2026-08-25 — implements paper draft equation 7,
@@ -1436,7 +1468,12 @@ Pulled from PLAN.md §10 (kickoff order) and §7 / split.md §2 (weekly gates).
       shell) is still not started; the only remaining panel (Threat
       Input) is blocked on the not-yet-built real forecaster/feature-
       extraction pipeline, not a rendering-effort gap.
-- [ ] AWS-KMS-style API facade (`api/main.py`)
+- [ ] Live/replayed pcap input (PLAN2.md §8B, Addition F) — depends on
+      the LSTM forecaster item above completing Phase 4 first; not
+      started.
+- [ ] AWS-KMS-style API facade (`api/main.py`, PLAN2.md §8C, Addition G)
+      — depends on the pcap-input item above completing first; not
+      started.
 - [ ] Report (`docs/report.md`) — currently a section-header skeleton with TODOs only
 
 ---
@@ -1472,8 +1509,9 @@ behavioral tests, part of the green `pytest` run).
 
 | File | Status | Notes |
 |---|---|---|
-| `forecaster/model.py` | not started | Stub, `test_forecaster_model.py` is 1 import-smoke test. |
-| `forecaster/dataset.py` | not started | Stub, `test_forecaster_dataset.py` is 1 import-smoke test. |
+| `forecaster/rt_iot_features.py` | implemented+tested | **New 2026-08-31 (PLAN2.md §8A Addition E, Phase 1).** Standalone from `forecaster/dataset.py`'s rollout-log-based windowing — real RT-IoT2022 CSV loading + validation (`load_rt_iot2022`), degeneracy screening (`screen_label_degeneracy`, real result: NOT degenerate, dominant label `DOS_SYN_Hping` at 76.89% of 123,117 rows), a 39-feature deterministic/stateless extraction function (`extract_flow_features`, verified identical whether called on one row alone or embedded in a batch — the "one implementation, two callers" property PLAN2.md Addition D/§8B Addition F need), a persisted z-score scaler (`fit_scaler`/`ContinuousScaler`), and window=64/stride=32 majority-vote windowing (`build_windows`). `run_pipeline()` ran against the FULL dataset: 123,117 raw rows -> 3,846 windows, saved to `data/processed/rt_iot2022/rt_iot2022_windows.npz`. Real, honestly-reported finding: binary benign/attack windows split 390/3,456 (10.1%/89.9%); the 12-class majority-vote label erases `NMAP_FIN_SCAN` entirely (0/3,846 despite 28 real raw rows) — a real constraint Phase 2's LSTM training must design around (class-weighted training, per-class F1, never accuracy). 25 tests (`tests/test_rt_iot_features.py`), incl. a hand-calculated single-row extraction check and a full end-to-end run against the real, complete dataset. Zero changes to `env/forecast_provider.py`/`env/environment.py` (verified via `git diff --stat`) — `MovingAverageForecaster` remains the system's active forecaster; the LSTM model itself (next row) is not yet built. |
+| `forecaster/model.py` | not started | Stub, `test_forecaster_model.py` is 1 import-smoke test. `SmartKeyForecaster` (threat + pool dual head) and the future `LSTMForecastProvider` remain to be built here (PLAN2.md §8A Addition E, Phase 2) — next task. |
+| `forecaster/dataset.py` | not started | Stub, `test_forecaster_dataset.py` is 1 import-smoke test. `RolloutWindowDataset` (separate, rollout-log-based windowing for the pool head) remains to be built; its relation to `forecaster/rt_iot_features.py`'s RT-IoT2022-direct windowing (above) is an open Phase 2 design decision. |
 | `forecaster/train.py` | not started | Stub, `test_forecaster_train.py` is 1 import-smoke test. |
 
 ### metrics/
@@ -1516,7 +1554,7 @@ behavioral tests, part of the green `pytest` run).
 
 | File | Status | Notes |
 |---|---|---|
-| `api/main.py` | not started | Stub, `test_api_main.py` is 1 import-smoke test. |
+| `api/main.py` | not started | Stub, `test_api_main.py` is 1 import-smoke test. Formalized as PLAN2.md §8C Addition G — sequenced last, after Addition E (LSTM) and Addition F (pcap replay) both complete; not to be started before then. |
 
 ### data/
 

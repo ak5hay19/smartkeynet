@@ -340,6 +340,118 @@ not transfer to results under a real forecaster.**
 
 ---
 
+## 8B. Addition F — Live/Replayed PCAP Input
+
+Formalized 2026-08-31, as post-review roadmap item 2 of 3 (in strict
+dependency order after §8A's Addition E). **Explicitly dependent on
+Addition E being complete first** — this addition is built ON TOP OF
+the real LSTM forecaster, not before it or in parallel with it. There
+is no standalone value in wiring pcap replay into a still-placeholder
+forecaster: the whole point is that the SAME real, trained model that
+Addition E produces is what a replayed capture drives, so a viewer
+watching the Threat Input panel (§7.1) update live is watching the
+real pipeline, not a demo of plumbing around a stub.
+
+**Goal:** stream a previously captured `.pcap`/`.pcapng` file at real-time
+pace (or a configurable multiple) through the exact same
+feature-extraction function Addition E built
+(`forecaster/rt_iot_features.py::extract_flow_features()`), driving a
+live episode whose panels (Threat Input, Living System, Explain
+Decision, and any others reading the same decision stream) update as
+decisions happen — per PLAN2.md's existing "one implementation, two
+callers" design principle (§8, Addition D): Addition E's offline
+training path and this addition's pcap-inference path are the two
+callers of the ONE shared `extract_flow_features()` implementation,
+never a second, ad hoc feature pipeline built for "live" data.
+
+**Concretely, once Addition E's Phase 4 is done:**
+- A pcap replay controller (§8's "pcap replay controller" module,
+  already named there) reads packets from a captured file and re-groups
+  them into the same flow-level rows `extract_flow_features()` expects,
+  paced at (or faster than) the capture's original inter-packet timing.
+- Each completed window is scored by the now-real, now-wired-in
+  `LSTMForecastProvider` — the identical trained model Addition E
+  validated, not a separate copy or a re-trained variant.
+- The resulting `ThreatForecast` feeds `env/masking.py`'s floor
+  computation exactly as any other forecast source does (Hard Rule 2:
+  raise-only), driving a live `SmartKeyNetEnv` episode whose decisions
+  populate the Living System and Explain Decision panels in real time.
+
+**Hard Rule 11, reaffirmed here, not softened:** live threat input
+remains scoped as **replay-only**. The guaranteed deliverable is a
+previously captured file streamed at (or faster than) its original
+packet pace through the exact same feature-extraction path used for
+offline training data — never a second, ad hoc pipeline for "live"
+data. **True live capture from a real network interface stays
+explicitly out of scope**, for the reasons already on record in this
+document: it is safer for a graded demo (no dependency on live traffic
+actually occurring, or behaving a particular way, during the review),
+it avoids standing up a large separate systems-engineering subsystem
+(interface capture permissions, packet-loss/reordering handling,
+sustained-runtime operational risk) that competes for time against the
+steering attack and the four mandatory baselines, and it carries zero
+incremental research value over replay — the research contribution is
+the masked-agent-vs-forecaster-manipulation story (§7.5, §12), not the
+packet-acquisition mechanism. This addition does not reopen or weaken
+Hard Rule 11 (§5.5) or §8's "Explicit non-goals" line — it is the
+concrete build-out of the replay path that rule already scoped as the
+guaranteed deliverable.
+
+**Until this addition is built, the Threat Input panel (§7.1)'s
+"Replayed pcap (real-time pace)" mode remains design intent, not a
+working feature** — see §10's Current Implementation Status.
+
+---
+
+## 8C. Addition G — API Facade (AWS-KMS-Style)
+
+Formalized 2026-08-31, as post-review roadmap item 3 of 3, sequenced
+explicitly LAST — built only after §8A (Addition E) and §8B
+(Addition F) are both complete. This ordering is deliberate, not
+incidental: the API facade should wrap something real (the trained
+LSTM forecaster plus the pcap-replay chain driving live decisions),
+not the placeholder `MovingAverageForecaster`. An API fronting a stub
+is not worth building — it would demo the shape of a deployable
+service without the service underneath actually doing anything the
+project claims as its contribution.
+
+**Goal:** a FastAPI REST facade, per PLAN.md's original tech-stack
+framing (`FastAPI for the KMS API facade`, §"Tech stack"), wrapping the
+now-real system in clean, AWS-KMS-flavored endpoints — `GenerateDataKey`,
+`Encrypt`, key-policy endpoints — conceptually backed by ETSI GS QKD 014
+key delivery (PLAN.md §0's original framing), fronting the real
+`SmartKeyNetEnv` decision loop (driven live via Addition F, or
+batch/offline via Addition E) rather than any mocked response.
+
+**Framing, explicit and consistent with this project's own established
+voice — not a new opinion invented this session:**
+- **Real value:** demo/real-world presentation — "does this look like a
+  deployable service" polish. A REST facade is what turns "a Gymnasium
+  environment and a checkpoint file" into something a reviewer can
+  imagine issuing real `GenerateDataKey` calls against.
+- **Explicitly LOW/ZERO research contribution value.** PLAN.md's own
+  reviewer Q&A already frames this precisely: *"Why not deploy on real
+  AWS? → No research value; every result runs identically locally;
+  cloud framing is about the deployment story..."* (PLAN.md §12,
+  reproduced in this document's own §12 as *"...the API facade is about
+  the deployment story, not a research contribution"*). PLAN.md's tech
+  stack note makes the same point about the adjacent containerized-
+  tenants idea: **"no real AWS deployment — zero research value, high
+  time risk."** Addition G inherits this framing exactly: it is set
+  dressing over a real system, not a research result, and must never be
+  allowed to compete for time against the steering attack, the masked
+  agent, or the four mandatory baselines (§11's standing rule).
+- **Sequenced last, deliberately.** Per the post-review roadmap's
+  strict dependency order E → F → G: build the real forecaster first,
+  wire in the real live-input path second, and only then wrap the
+  now-real chain in a presentation-layer API — never the other order.
+
+**Until this addition is built, `api/main.py` remains a real
+`NotImplementedError` stub** — see §10's Current Implementation Status,
+unchanged by this section.
+
+---
+
 ## 9. Scenarios (the experiment grid)
 
 | # | Scenario | What changes | What it tests | Train/Eval | Dashboard panel |
@@ -362,7 +474,7 @@ This section exists so a paper drafted from this document doesn't accidentally c
 
 **Partial / stubbed:** the threat forecaster currently only has a simple, non-learned fallback (an exponentially-weighted moving average over a placeholder signal) — the real trained forecaster (offline-trained on RT-IoT2022, with the dual threat/pool heads) does not exist yet. **Updated 2026-08-31 (§8A, Addition E, Phase 1 DONE): the RT-IoT2022 feature-extraction pipeline that will feed that real forecaster's training is now real, tested, and run against the full 123,117-row dataset (3,846 windowed feature examples saved to `data/processed/rt_iot2022/`) — but the LSTM model itself (`forecaster/model.py::SmartKeyForecaster`), its training loop (`forecaster/train.py`), and its integration via `LSTMForecastProvider` remain real `NotImplementedError` stubs / not started, and `env/forecast_provider.py`'s `MovingAverageForecaster` remains the system's active forecaster.** The request stream is currently a random synthetic generator, not yet sampled from a real tenant graph. Scenario dispatch beyond S1 (S2 through S6) is defined in configuration but not yet acted on by the environment.
 
-**Not started:** the soft-reward baseline agent (the steering attack's target), the adversarial threat-trace generator and the steering attack itself, the live dashboard in any form (all 7 panels in §7 are currently only realized as the illustrative HTML mockup, not a working system), the AWS-KMS-style API facade, and the written report/paper content itself.
+**Not started:** the soft-reward baseline agent (the steering attack's target), the adversarial threat-trace generator and the steering attack itself, the live dashboard in any form (all 7 panels in §7 are currently only realized as the illustrative HTML mockup, not a working system), the pcap replay controller (§8B, Addition F — depends on Addition E's Phase 4 completing first), the AWS-KMS-style API facade (§8C, Addition G — depends on Addition F completing first), and the written report/paper content itself.
 
 **Dashboard-specific:** every panel described in §7, including both new ones (Threat Input, Explain Decision), exists today only as a static, hand-authored HTML/CSS/JS mockup with fabricated example data — it demonstrates the intended interface, not working software. None of its numbers, thresholds, or example decisions were computed by the real pipeline.
 
@@ -374,7 +486,7 @@ This section exists so a paper drafted from this document doesn't accidentally c
 
 The three non-negotiable deliverables remain: a working masked-DQN pool-budgeting agent, the steering-attack result, and a report. This document's additions (Panels 1 and 3, and the replay-pcap pathway) are scoped as **low-cost, high-narrative-value dashboard work** — they surface values the rest of the system already computes, and should not be allowed to compete for time against the steering attack or the four mandatory baselines.
 
-**Priority note, added 2026-08-31:** §8A's Addition E (the real LSTM threat-forecaster build-out — RT-IoT2022 feature-extraction pipeline DONE, LSTM build/train/validate/wire-in remaining) is now the **top named priority for the next several sessions**, ahead of dashboard polish, the API facade, and any other stretch work described elsewhere in this document. Pick up Addition E's Phase 2 (build + train the LSTM) next unless explicitly redirected.
+**Priority note, added 2026-08-31, formalizing the post-review roadmap:** §8A's Addition E (the real LSTM threat-forecaster build-out — RT-IoT2022 feature-extraction pipeline DONE, LSTM build/train/validate/wire-in remaining), §8B's Addition F (live/replayed pcap input, built on top of Addition E), and §8C's Addition G (the AWS-KMS-style API facade, built on top of Addition F) form a strict, dependency-ordered priority sequence — **E → F → G** — that is now the **top named priority for the next several sessions**, ahead of dashboard polish and any other stretch work described elsewhere in this document. Each phase's real dependency on the prior one is stated plainly: Addition F cannot start meaningfully before Addition E's Phase 4 (wire-in + re-validation) is complete, since pcap replay driving a still-placeholder forecaster has no demo value beyond what already exists; Addition G cannot start before Addition F is complete, since an API facade should wrap the real live-input chain, not a stub. Pick up Addition E's Phase 2 (build + train the LSTM) next unless explicitly redirected. Dashboard polish and other stretch items remain open but are explicitly lower priority than this E → F → G sequence — not removed, just deferred behind it.
 
 **Cut order the instant a gate slips (in order, first cut first):**
 1. True live network capture (was never a guaranteed deliverable — §5.5, Hard Rule 11).
