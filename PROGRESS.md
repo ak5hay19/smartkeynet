@@ -11,6 +11,78 @@
 
 ## Next task
 
+**Minimal local dashboard server (`dashboard/app.py`) — DONE 2026-08-31.**
+`dashboard/app.py` was a `NotImplementedError` stub (Person D's original
+Plotly-Dash design brief for a live, wired 4-beat demo shell); it is now
+a real, minimal, standard-library-only (`http.server`, zero new
+dependencies) local server that serves the six already-rendered static
+panels in `dashboard/samples/` plus an index page linking all of them —
+turning "double-click six separate HTML files" into "run one command,
+open localhost." Run with `python -m dashboard.app`; it prints
+`http://127.0.0.1:8000/` on startup — **verified by actually running it
+this session**: index and two spot-checked panel routes (one Living
+System file, one Explain Decision file) all returned real `200`s over a
+real HTTP request, and an unknown path correctly `404`s. Route surface
+is a small explicit whitelist (the `PANELS` registry in `dashboard/app.py`,
+mirroring README's own six-panel table) rather than general directory
+serving, so there's no path-traversal surface. Scope was deliberately
+narrow per instruction: no pcap/live capture, no live `SmartKeyNetEnv`
+streaming, no LSTM work, no regenerate-panel buttons — a presentation
+wrapper over already-rendered real artifacts only; `env/`, `agents/`,
+`experiments/`, `reward.*`, and the render_*.py panel modules themselves
+were not touched.
+
+**Stale-sample-file handling (path (b) chosen):** PROGRESS.md's prior
+entry (below) flagged that `dashboard/samples/01_first_decision.html`,
+`02_floor_driven_only_hybrid_clears.html`, and
+`03_real_cost_tradeoff.html` were stale — missing the `data-cell`
+attribute the current `dashboard/render_explain.py` now writes into
+every floor-grid cell — and named the fix as "re-run
+`python -m dashboard.render_explain_demo` and commit the refreshed
+samples." That fix was low-risk (a prior session had already spot-
+checked the driver runs cleanly) and trivial, so it was done this
+session rather than left flagged again: ran
+`python -m dashboard.render_explain_demo` unchanged (no renderer/driver
+code touched), confirmed via `grep`/`git diff --stat` that exactly those
+three files changed, by exactly one line each (the floor-grid markup
+gaining `data-cell`), nothing else. All three now carry the attribute;
+the served/committed panels are current, not stale.
+
+**Tests:** 9 new tests in `tests/test_dashboard_app.py` — registry shape
+(6 panels), index route content (200, references all 10 real underlying
+filenames across the 6 panels), pure-function/route-body parity, all 10
+real panel files individually resolve 200, an unregistered filename and
+an unknown path both 404, a path-traversal attempt 404s, and one real
+end-to-end test that binds an OS-assigned ephemeral port
+(`build_server(port=0)`), makes a real `urllib` HTTP request, and tears
+the server down within the test (no long-lived port in CI). Full suite:
+**657 passed, 1 xfailed** (658 total collected). Re-verified the prior
+baseline fresh rather than trusting the last-logged figure: running the
+suite with the new test file excluded gives **648 passed, 1 xfailed**
+(649 total) — one lower than the "649 passed" this file's prior entry
+recorded, a small pre-existing discrepancy in that entry's own count
+(not something this session's changes caused; flagging rather than
+silently propagating). 648 prior + 9 new = 657, reconciling exactly.
+Zero changes to any protected
+file (`env/`, `agents/`, `experiments/`, `reward.*`, the six
+`render_*.py` render modules, `dashboard/explain.py`) — verified via
+`git status --short`.
+
+**Docs:** README.md's "How to see the results" section gained an
+"Option 1 — run the local server" (the real command + URL) ahead of the
+existing "open the files directly" instructions (now "Option 2"); its
+"Not started" list no longer calls `dashboard/app.py` a stub (the
+still-not-started piece is specifically the live 4-beat streaming demo
+shell); the real test count was refreshed to `657 passed, 1 xfailed`
+(re-run fresh this session, not copied).
+
+**Next task:** live-episode streaming (a wired 4-beat demo shell over a
+running `SmartKeyNetEnv`, Option 3-style), the pcap/LSTM forecaster
+chain, and the API facade (`api/main.py`) all remain deliberately out of
+scope for this session and not started — pick up whichever of those, or
+Fig. 5's TikZ diagram node-text fix (flagged 2026-08-27, still needs
+sign-off), next.
+
 **Root README.md authored (real run/onboard reference) — DONE
 2026-08-31.** The repo's root `README.md` (previously a stale
 week-1-kickoff scaffold referencing a `split.md` that no longer exists

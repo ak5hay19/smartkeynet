@@ -72,7 +72,7 @@ This is the real command (`pytest.ini` pins `testpaths = tests`,
 `pythonpath = .`) — no extra flags needed. Running it now:
 
 ```
-649 passed, 1 xfailed
+657 passed, 1 xfailed
 ```
 
 The green suite is the project's proof its machinery is correct, not
@@ -90,10 +90,23 @@ nicer-than-real number.
 
 ## How to see the results (the dashboard)
 
-The simplest path: open any of these six files directly in a browser.
-They're **fully static, self-contained HTML** (inline CSS/SVG, no JS
-framework, no build step, no server) — just double-click or
-`file://` them, already committed at:
+**Option 1 — run the local server** (the easiest way to see all six in
+one place):
+
+```bash
+python -m dashboard.app
+```
+
+This prints `http://127.0.0.1:8000/` — open it in a browser for an
+index page linking all six panels. It's a minimal, standard-library-only
+(`http.server`) static file server (`dashboard/app.py`) over the exact
+same committed files listed below; it computes nothing and doesn't run
+`SmartKeyNetEnv` live.
+
+**Option 2 — open the files directly.** Every panel is **fully static,
+self-contained HTML** (inline CSS/SVG, no JS framework, no build step,
+no server) — just double-click or `file://` them, already committed
+at:
 
 | File | What it shows |
 |---|---|
@@ -111,9 +124,11 @@ check a rendered value against source data yourself.
 
 **Not yet buildable:** a seventh panel (Threat Input, live
 pcap-style feature visualization) is blocked on the real forecaster —
-see below. `dashboard/app.py` (a single live, wired 4-beat demo shell
-tying all panels together) is a stub, not started — the static panels
-above are the real demo-able artifact today.
+see below. `dashboard/app.py` (Option 1 above) is a minimal
+presentation-layer convenience over these same static files, not a
+live, wired 4-beat demo shell streaming a running `SmartKeyNetEnv` —
+that larger piece remains not started; the static panels above are
+still the real demo-able artifact either way.
 
 ## How to reproduce / regenerate results
 
@@ -265,9 +280,13 @@ fullest example of this pattern).
   (the real LSTM dual-head forecaster) — all three are stubs behind
   1-test import-smoke checks only.
 - `api/main.py` (an AWS-KMS-flavored REST facade) — stub only.
-- `dashboard/app.py` (a live, wired 4-beat demo shell tying the six
-  panels together into one running app) — stub only; the static panels
-  in `dashboard/samples/` are the real, working demo artifact today.
+- A live, wired 4-beat demo shell streaming a running `SmartKeyNetEnv`
+  in real time (the original `dashboard/app.py` design brief) — not
+  started. `dashboard/app.py` itself is no longer a stub: it's now a
+  real minimal local server (`python -m dashboard.app`, see
+  [How to see the results](#how-to-see-the-results-the-dashboard))
+  serving the six existing static panels through one command — a
+  presentation convenience, not the live-streaming piece above.
 - The seventh dashboard panel (Threat Input / live feature
   visualization) — blocked on the real forecaster above, not a
   rendering gap.
