@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartKeyNet -- Living System -- living_system_s1_03_final_decision</title>
+<style>
+:root{
+  --bg:#0A0E13; --panel:#111820; --panel-2:#151D27; --line:#212C39; --line-soft:#171F29;
+  --text:#E9EEF4; --text-dim:#8FA0B3; --text-faint:#4C5A6B;
+  --classical:#8B95A5; --pqc:#E8A33D; --hybrid:#33D687; --quantum:#6E7EFF;
+  --calm:#4C5A6B; --elevated:#E8A33D; --high:#FF5C5C;
+  --radius:12px; --radius-sm:7px;
+  --mono:ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;
+  --disp:-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:
+    radial-gradient(circle at 1px 1px, #16202C 1px, transparent 0) 0 0/28px 28px,
+    var(--bg);
+  color:var(--text);font-family:var(--disp);padding:28px 20px 60px;
+}
+.wrap{max-width:960px;margin:0 auto;}
+.beat-head{margin-bottom:22px;}
+.beat-eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--quantum);}
+.beat-title{font-family:var(--disp);font-weight:700;font-size:22px;margin-top:4px;}
+.beat-desc{color:var(--text-dim);font-size:13px;margin-top:6px;line-height:1.5;}
+
+.grid-1{display:grid;grid-template-columns:1.6fr 1fr;gap:18px;align-items:start;}
+@media (max-width:820px){.grid-1{grid-template-columns:1fr;}}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px 17px;}
+.card-label{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint);margin-bottom:10px;}
+
+.graph-wrap svg{width:100%;height:auto;display:block;}
+.node-label{font-family:var(--mono);font-size:10px;fill:var(--text-dim);}
+.node-label.hub{fill:var(--quantum);font-weight:700;}
+
+.graph-legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:11px;color:var(--text-dim);}
+.legend-item{display:flex;align-items:center;gap:6px;}
+.legend-swatch{width:10px;height:10px;border-radius:3px;display:inline-block;}
+
+.req-list{display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto;}
+.req-row{
+  display:grid;grid-template-columns:8px 78px 1fr 34px 90px 66px 56px;align-items:center;gap:8px;
+  font-family:var(--mono);font-size:10.5px;color:var(--text-dim);
+  background:var(--panel-2);border:1px solid var(--line-soft);border-radius:6px;padding:7px 9px;
+}
+.req-dot{width:8px;height:8px;border-radius:50%;}
+.req-tenant{color:var(--text);font-weight:600;}
+.req-service{color:var(--text-faint);}
+.req-sens{color:var(--text-faint);}
+.req-tier{text-align:right;}
+.req-step{color:var(--text-faint);text-align:right;}
+
+.side-stack{display:flex;flex-direction:column;gap:14px;}
+.gauge-track{height:10px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line);overflow:hidden;}
+.gauge-fill{height:100%;border-radius:999px;background:var(--quantum);}
+.gauge-row{display:flex;justify-content:space-between;align-items:baseline;margin-top:8px;}
+.gauge-big{font-family:var(--mono);font-weight:700;font-size:20px;}
+.gauge-meta{font-size:11px;color:var(--text-faint);}
+
+.badge{font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:.05em;padding:3px 8px;border-radius:999px;}
+.badge.calm{background:rgba(76,90,107,.25);color:var(--text-dim);}
+.badge.elevated{background:rgba(232,163,61,.18);color:var(--pqc);}
+.badge.high{background:rgba(255,92,92,.18);color:var(--high);}
+</style>
+</head>
+<body>
+<main class="wrap">
+  <div class="beat-head">
+    <div class="beat-eyebrow">living_system_s1_03_final_decision &middot; t=249</div>
+    <div class="beat-title">The living system</div>
+    <div class="beat-desc">A real, static snapshot of the real tenant graph -- edge/node color is the key tier each tenant was most recently served at, as of this exact moment in one real episode. Not animated; not live.</div>
+  </div>
+  <div class="grid-1">
+    <div class="card graph-wrap">
+      <div class="card-label"><span>Tenant network (10 tenants)</span><span>t=249</span></div>
+      <svg viewBox="0 0 640 380" xmlns="http://www.w3.org/2000/svg"><line x1="320.0" y1="190.0" x2="320.0" y2="42.0" stroke="#33D687" stroke-width="2" data-tenant="tenant_0"></line><line x1="320.0" y1="190.0" x2="407.0" y2="70.3" stroke="#33D687" stroke-width="2" data-tenant="tenant_1"></line><line x1="320.0" y1="190.0" x2="460.8" y2="144.3" stroke="#33D687" stroke-width="2" data-tenant="tenant_2"></line><line x1="320.0" y1="190.0" x2="460.8" y2="235.7" stroke="#33D687" stroke-width="2" data-tenant="tenant_3"></line><line x1="320.0" y1="190.0" x2="407.0" y2="309.7" stroke="#33D687" stroke-width="2" data-tenant="tenant_4"></line><line x1="320.0" y1="190.0" x2="320.0" y2="338.0" stroke="#33D687" stroke-width="2" data-tenant="tenant_5"></line><line x1="320.0" y1="190.0" x2="233.0" y2="309.7" stroke="#33D687" stroke-width="2" data-tenant="tenant_6"></line><line x1="320.0" y1="190.0" x2="179.2" y2="235.7" stroke="#33D687" stroke-width="2" data-tenant="tenant_7"></line><line x1="320.0" y1="190.0" x2="179.2" y2="144.3" stroke="#33D687" stroke-width="2" data-tenant="tenant_8"></line><line x1="320.0" y1="190.0" x2="233.0" y2="70.3" stroke="#33D687" stroke-width="2" data-tenant="tenant_9"></line><circle cx="320.0" cy="190.0" r="15.0" fill="#151D27" stroke="#6E7EFF" stroke-width="2"></circle><text x="320.0" y="194.0" text-anchor="middle" class="node-label hub">kms_hub</text><circle cx="320.0" cy="42.0" r="11.0" fill="#151D27" stroke="#33D687" stroke-width="2" data-tenant="tenant_0" data-tier="HYBRID"></circle><text x="320.0" y="24.0" text-anchor="middle" class="node-label">tenant_0</text><circle cx="407.0" cy="70.3" r="11.0" fill="#151D27" stroke="#33D687" stroke-width="2" data-tenant="tenant_1" data-tier="HYBRID"></circle><text x="407.0" y="52.3" text-anchor="middle" class="node-label">tenant_1</text><circle cx="460.8" cy="144.3" r="11.0" fill="#151D27" stroke="#33D687" stroke-width="2" data-tenant="tenant_2" data-tier="HYBRID"></circle><text x="460.8" y="126.3" text-anchor="middle" class="node-label">tenant_2</text><circle cx="460.8" cy="235.7" r="11.0" fill="#151D27" stroke="#33D687" stroke-width="2" data-tenant="tenant_3" data-tier="HYBRID"></circle><text x="460.8" y="217.7" text-anchor="middle" class="node-label">tenant_3</text><circle cx="407.0" cy="309.7" r="11.0" fill="#151D27" stroke="#33D687" stroke-width="2" data-tenant="tenant_4" data-tier="HYBRID"></circle><text x="407.0" y="291.7" text-anchor="middle" class="node-label">tenant_4</text><circle cx="320.0" cy="338.0" r="11.0" fill="#151D27" stroke="#33D687" stroke-width="2" data-tenant="tenant_5" data-tier="HYBRID"></circle><text x="320.0" y="320.0" text-anchor="middle" class="node-label">tenant_5</text><circle cx="233.0" cy="309.7" r="11.0" fill="#151D27" stroke="#33D687" stroke-width="2" data-tenant="tenant_6" data-tier="HYBRID"></circle><text x="233.0" y="291.7" text-anchor="middle" class="node-label">tenant_6</text><circle cx="179.2" cy="235.7" r="11.0" fill="#151D27" stroke="#33D687" stroke-width="2" data-tenant="tenant_7" data-tier="HYBRID"></circle><text x="179.2" y="217.7" text-anchor="middle" class="node-label">tenant_7</text><circle cx="179.2" cy="144.3" r="11.0" fill="#151D27" stroke="#33D687" stroke-width="2" data-tenant="tenant_8" data-tier="HYBRID"></circle><text x="179.2" y="126.3" text-anchor="middle" class="node-label">tenant_8</text><circle cx="233.0" cy="70.3" r="11.0" fill="#151D27" stroke="#33D687" stroke-width="2" data-tenant="tenant_9" data-tier="HYBRID"></circle><text x="233.0" y="52.3" text-anchor="middle" class="node-label">tenant_9</text></svg>
+      <div class="graph-legend"><div class="legend-item"><span class="legend-swatch" style="background:#8B95A5"></span>Classical</div><div class="legend-item"><span class="legend-swatch" style="background:#E8A33D"></span>PQC (ML-KEM-768)</div><div class="legend-item"><span class="legend-swatch" style="background:#33D687"></span>Hybrid (+ QKD)</div><div class="legend-item"><span class="legend-swatch" style="background:#4C5A6B"></span>No traffic yet</div></div>
+      <div class="card-label" style="margin-top:22px;"><span>Recent decisions</span><span>most recent 8</span></div>
+      <div class="req-list">
+          <div class="req-row">
+            <span class="req-dot" style="background:#33D687"></span>
+            <span class="req-tenant">tenant_0</span>
+            <span class="req-service">export</span>
+            <span class="req-sens">S2</span>
+            <span class="req-action">SERVE_HYBRID</span>
+            <span class="req-tier">HYBRID</span>
+            <span class="req-step">t=249</span>
+          </div>
+          <div class="req-row">
+            <span class="req-dot" style="background:#33D687"></span>
+            <span class="req-tenant">tenant_3</span>
+            <span class="req-service">notify</span>
+            <span class="req-sens">S1</span>
+            <span class="req-action">SERVE_HYBRID</span>
+            <span class="req-tier">HYBRID</span>
+            <span class="req-step">t=248</span>
+          </div>
+          <div class="req-row">
+            <span class="req-dot" style="background:#33D687"></span>
+            <span class="req-tenant">tenant_5</span>
+            <span class="req-service">auth</span>
+            <span class="req-sens">S2</span>
+            <span class="req-action">SERVE_HYBRID</span>
+            <span class="req-tier">HYBRID</span>
+            <span class="req-step">t=247</span>
+          </div>
+          <div class="req-row">
+            <span class="req-dot" style="background:#33D687"></span>
+            <span class="req-tenant">tenant_1</span>
+            <span class="req-service">billing</span>
+            <span class="req-sens">S0</span>
+            <span class="req-action">SERVE_HYBRID</span>
+            <span class="req-tier">HYBRID</span>
+            <span class="req-step">t=246</span>
+          </div>
+          <div class="req-row">
+            <span class="req-dot" style="background:#33D687"></span>
+            <span class="req-tenant">tenant_4</span>
+            <span class="req-service">export</span>
+            <span class="req-sens">S2</span>
+            <span class="req-action">SERVE_HYBRID</span>
+            <span class="req-tier">HYBRID</span>
+            <span class="req-step">t=245</span>
+          </div>
+          <div class="req-row">
+            <span class="req-dot" style="background:#33D687"></span>
+            <span class="req-tenant">tenant_1</span>
+            <span class="req-service">notify</span>
+            <span class="req-sens">S0</span>
+            <span class="req-action">SERVE_HYBRID</span>
+            <span class="req-tier">HYBRID</span>
+            <span class="req-step">t=244</span>
+          </div>
+          <div class="req-row">
+            <span class="req-dot" style="background:#33D687"></span>
+            <span class="req-tenant">tenant_1</span>
+            <span class="req-service">billing</span>
+            <span class="req-sens">S0</span>
+            <span class="req-action">SERVE_HYBRID</span>
+            <span class="req-tier">HYBRID</span>
+            <span class="req-step">t=243</span>
+          </div>
+          <div class="req-row">
+            <span class="req-dot" style="background:#33D687"></span>
+            <span class="req-tenant">tenant_3</span>
+            <span class="req-service">notify</span>
+            <span class="req-sens">S1</span>
+            <span class="req-action">SERVE_HYBRID</span>
+            <span class="req-tier">HYBRID</span>
+            <span class="req-step">t=242</span>
+          </div></div>
+    </div>
+    
+      <div class="side-stack">
+        <div class="card">
+          <div class="card-label"><span>QKD pool</span><span>bits available</span></div>
+          <div class="gauge-track"><div class="gauge-fill" style="width:100.0%"></div></div>
+          <div class="gauge-row"><span class="gauge-big">100%</span><span class="gauge-meta">pool_fill (real, normalized)</span></div>
+        </div>
+        <div class="card">
+          <div class="card-label"><span>Threat posture</span><span class="badge elevated">elevated</span></div>
+          <div class="gauge-meta">resolved posture at t=249 (real, from the forecaster's argmax)</div>
+        </div>
+      </div>
+  </div>
+</main>
+</body>
+</html>

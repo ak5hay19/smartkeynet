@@ -1,12 +1,17 @@
 """
 dashboard/app.py
 
-Minimal local web server for the six already-rendered dashboard panels
-in `dashboard/samples/` (Living System, Explain Decision, dose-response,
-S3 comparison table, Budgeting Brain, Migration Wave -- see README.md's
-"How to see the results" table, the source this module's `PANELS`
-registry mirrors). Turns "open six separate HTML files by hand" into
-"run one command, open one URL."
+Minimal local web server for the already-rendered dashboard panels in
+`dashboard/samples/` (Living System -- S1 and S2, Explain Decision,
+dose-response, S3 comparison table, Budgeting Brain, Migration Wave --
+see README.md's "How to see the results" table, the source this
+module's `PANELS` registry mirrors). Turns "open a dozen separate HTML
+files by hand" into "run one command, open one URL." Living System is
+two panel cards, not one -- S1 (steady/calm traffic) and S2 (elevated
+HNDL posture) are two distinct real episodes through the same real
+pipeline, added alongside each other so the demo shows both (see
+`dashboard/render_living_system_demo.py`'s module docstring for why,
+and its honest finding on what each one actually shows).
 
 This is a presentation-layer convenience over already-rendered, real
 static artifacts -- it computes nothing and runs no episode. It does
@@ -54,7 +59,16 @@ class Panel(NamedTuple):
 # filenames confirmed against `dashboard/samples/` on disk, not assumed.
 PANELS: tuple[Panel, ...] = (
     Panel(
-        "Living System",
+        "Living System -- S1 (steady/calm)",
+        "The same real tenant graph and policy under S1 (steady, unscripted traffic) -- shown honestly: this run also saturates to hybrid on every real decision (see the panel for why -- pool_fill stays above the demo policy's threshold throughout, compounding the same placeholder-forecaster posture ratchet documented on S2).",
+        (
+            PanelFile("living_system_s1_01_first_decision.html", "1. First decision"),
+            PanelFile("living_system_s1_02_graph_fully_populated.html", "2. Graph fully populated"),
+            PanelFile("living_system_s1_03_final_decision.html", "3. Final decision"),
+        ),
+    ),
+    Panel(
+        "Living System -- S2 (elevated HNDL)",
         "A tenant service graph under S2 (HNDL posture); nodes/edges colored by the tier each tenant was most recently served.",
         (
             PanelFile("living_system_01_first_decision.html", "1. First decision"),
@@ -107,7 +121,7 @@ _TIER_LEGEND: tuple[tuple[str, str], ...] = (
 
 
 def render_index_html() -> str:
-    """Pure function: build the index page linking all six panels.
+    """Pure function: build the index page linking all panels.
     No file I/O, no server -- safe to call directly in tests."""
     cards = []
     for i, panel in enumerate(PANELS, start=1):
@@ -207,7 +221,7 @@ footer{{max-width:1080px;margin:8px auto 0;padding:16px 22px 0;font-family:var(-
 </header>
 <main>
 <p class="thesis">Security is enforced as a <b>hard, structural constraint</b> &mdash; action masking, never a term in the reward.</p>
-<div class="subtitle">Six real, pre-rendered panels from dashboard/samples/, served as-is &mdash; nothing computed live, nothing in these pages is a placeholder.</div>
+<div class="subtitle">Real, pre-rendered panels from dashboard/samples/, served as-is &mdash; nothing computed live, nothing in these pages is a placeholder.</div>
 <div class="legend-row">{legend_html}</div>
 <div class="grid">
 {cards_html}
