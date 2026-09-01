@@ -7,11 +7,15 @@ dose-response, S3 comparison table, Budgeting Brain, Migration Wave --
 see README.md's "How to see the results" table, the source this
 module's `PANELS` registry mirrors). Turns "open a dozen separate HTML
 files by hand" into "run one command, open one URL." Living System is
-two panel cards, not one -- S1 (steady/calm traffic) and S2 (elevated
-HNDL posture) are two distinct real episodes through the same real
-pipeline, added alongside each other so the demo shows both (see
-`dashboard/render_living_system_demo.py`'s module docstring for why,
-and its honest finding on what each one actually shows).
+four panel cards, not one -- S1 (steady/calm traffic) and S2 (elevated
+HNDL posture) under the demo's original `StaticThresholdPolicy`, plus a
+trained-masked-DQN-driven variant of each (`checkpoints/dqn_s1.pt` /
+`dqn_s2.pt`) -- four distinct real episodes through the same real
+pipeline, added alongside each other so the demo shows both the
+StaticThresholdPolicy saturation finding and the genuine tier variety a
+trained agent produces (see `dashboard/render_living_system_demo.py`'s
+module docstring for the full honest finding on what each one actually
+shows).
 
 This is a presentation-layer convenience over already-rendered, real
 static artifacts -- it computes nothing and runs no episode. It does
@@ -74,6 +78,24 @@ PANELS: tuple[Panel, ...] = (
             PanelFile("living_system_01_first_decision.html", "1. First decision"),
             PanelFile("living_system_02_graph_fully_populated.html", "2. Graph fully populated"),
             PanelFile("living_system_03_final_decision.html", "3. Final decision"),
+        ),
+    ),
+    Panel(
+        "Living System -- S1, trained DQN",
+        "Same real tenant graph/episode as the S1 card above, but driven by a trained masked-DQN checkpoint (checkpoints/dqn_s1.pt) instead of StaticThresholdPolicy -- genuine tier variety (250 real decisions: 83 hybrid, 167 PQC), unlike that card's 100% hybrid saturation.",
+        (
+            PanelFile("living_system_s1_dqn_01_first_decision.html", "1. First decision"),
+            PanelFile("living_system_s1_dqn_02_graph_fully_populated.html", "2. Graph fully populated"),
+            PanelFile("living_system_s1_dqn_03_final_decision.html", "3. Final decision"),
+        ),
+    ),
+    Panel(
+        "Living System -- S2, trained DQN",
+        "Same real tenant graph/episode as the S2 card above, but driven by a trained masked-DQN checkpoint (checkpoints/dqn_s2.pt) instead of StaticThresholdPolicy -- genuine tier variety (250 real decisions: 6 classical, 163 hybrid, 81 PQC), unlike that card's 100% hybrid saturation.",
+        (
+            PanelFile("living_system_s2_dqn_01_first_decision.html", "1. First decision"),
+            PanelFile("living_system_s2_dqn_02_graph_fully_populated.html", "2. Graph fully populated"),
+            PanelFile("living_system_s2_dqn_03_final_decision.html", "3. Final decision"),
         ),
     ),
     Panel(

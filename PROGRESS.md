@@ -11,6 +11,154 @@
 
 ## Next task
 
+**Addition E, Phases 2-4 — real LSTM threat forecaster: trained, validated
+non-degenerate, and wired in for a live sanity check — DONE 2026-09-01.**
+Builds on Phase 1 (below, unmodified this session — verified via
+`git diff --stat` showing zero changes to `forecaster/rt_iot_features.py`
+or `data/processed/rt_iot2022/`).
+
+**Step 1 — imbalance + leakage, characterized before any training ran:**
+Real windowed class balance, re-confirmed: **390 benign / 3,456 attack
+windows (10.14%/89.86%)** out of 3,846 total. Two real leakage risks
+found and handled, not assumed away:
+1. **Row-overlap risk**: `rt_iot_features.py::build_windows` slides
+   window=64/stride=32 with NO shuffling, so adjacent windows share 50%
+   of their raw rows — a random window-level split would leak.
+2. **Session/contiguity structure, verified directly**: RT-IoT2022's raw
+   123,117-row file has exactly **11 label transitions total** — every
+   one of its 12 `Attack_type` values occupies ONE uninterrupted block
+   of raw rows (confirmed independently in window-index space too: 11
+   contiguous runs across the 3,846 windows). All three benign labels
+   sit first in the file, so the 390 benign and 3,456 attack windows are
+   each themselves one contiguous block (indices 0-389 / 390-3845).
+
+**Split design**: `forecaster/train_threat_lstm.py::leakage_free_split()`
+splits each contiguous same-binary-label run temporally (earliest
+windows -> train, latest -> val, never shuffled), dropping a gap of
+`ceil(window/stride)=2` window-indices at each cut so no val window's
+raw rows can overlap a train window's. **A real bug was caught and
+fixed during development, not hypothetical**: the per-run gap alone
+left the run *boundary* unprotected — the benign run's last (val) window
+and the attack run's first (train) window are index-adjacent (distance
+1), so their raw rows overlapped; `assert_no_row_overlap()` (a direct,
+independent raw-row-space check, not a trust-the-logic assumption)
+caught this immediately, fixed with a second, global cleanup pass that
+drops any val window within the gap distance of ANY train window.
+Result: 3,073 train / 768 val / 5 windows dropped as unsplittable gap.
+**A third, milder leakage source, checked and reported rather than
+ignored**: Phase 1's persisted z-score scaler was fit on the FULL
+dataset (train+val combined), not train-only — real measured effect:
+train-subset standardized features deviate from the "fit on train only"
+ideal (mean 0, std 1) by a real but modest amount (mean abs deviation
+0.074 avg / 0.189 max across the 27 continuous columns; std abs
+deviation 0.116 avg / 1.0 max on one outlier column). Flagged honestly
+rather than silently reworking Phase 1's already-tested pipeline (out of
+this session's scope per instruction) — population-statistic leakage
+only, no per-window label information crosses the split.
+
+**Step 2/3 — training + the degenerate-collapse gate, passed on the
+first attempt:** class-weighted `BCEWithLogitsLoss` (balanced inverse-
+frequency weights computed from the TRAIN split only: benign weight
+4.96, attack weight 0.56 — upweights the minority class, the opposite
+direction from the textbook rare-positive framing since attack is the
+majority here) + macro-F1-maximizing decision-threshold selection each
+epoch (never raw accuracy — a constant "always attack" predictor scores
+~90% accuracy on this split while learning nothing, which is exactly
+why `detect_degenerate_collapse()` gates on benign recall and prediction
+variance instead). **Real, held-out val result** (best checkpoint by
+val macro-F1, threshold=0.20): benign precision 0.951 / recall **1.000**
+/ F1 0.975 (support 77); attack precision 1.000 / recall 0.994 / F1
+0.997 (support 691); macro-F1 0.986; **prediction std 0.296** (real
+variance, not a constant output). **`degenerate_collapse: False`** —
+confirmed via the actual held-out-diversity test
+(`test_real_checkpoint_prediction_variance_across_diverse_held_out_windows`),
+not just the training report's own self-check. No focal-loss fallback
+was needed. Honest observation, not swept under the rug: val macro-F1
+actually peaks at epoch 0-1 and *degrades* under continued training
+(down to ~0.86 by epoch 59) — this dataset's benign/attack separation is
+apparently close to linearly-obvious given the 39-feature representation
+(consistent with published RT-IoT2022 benchmarks), so most of the 60
+configured epochs mildly overfit; the checkpoint saved is the
+best-val-epoch state (genuine early stopping), not the final epoch's
+weights.
+
+**Step 4 — scope decision, reported explicitly, not silently narrowed**:
+PLAN.md's original Addition A design was a *dual*-head forecaster
+(threat + pool). This session trains and returns **threat-head only** —
+RT-IoT2022 carries no QKD pool telemetry (`qber`/`skr`/`pool_fill`) to
+supervise a pool head from; that needs logged `SmartKeyNetEnv` rollouts,
+a separate, not-yet-collected data source. `forecaster/dataset.py` and
+`forecaster/train.py` (the future rollout-based dual-head trainer) are
+left untouched, still real `NotImplementedError` stubs — not built
+around with a fabricated pool head. `forecaster/model.py::SmartKeyForecaster`
+is now real (LSTM encoder + single threat head); `LSTMForecastProvider`
+implements the full `ForecastProvider` interface by delegating
+`get_pool_forecast()` to a composed `MovingAverageForecaster` instance
+verbatim (reuse, not duplication or fabrication) — verified identical
+output via `test_pool_forecast_matches_moving_average_forecaster_reuse`.
+`threat_score = sigmoid(logit)` maps to `posture_probs` via the exact
+same RBF-softmax anchor scheme `MovingAverageForecaster` already uses,
+so posture semantics stay consistent across both providers. New,
+separate `forecaster/train_threat_lstm.py` (not folded into the
+rollout-based `forecaster/train.py` stub — PLAN2.md Addition D's "one
+implementation, two callers" precedent for a clean split).
+`checkpoints/lstm_threat_forecaster.pt` + `.train_report.json` saved
+locally (gitignored via the repo's existing `*.pt` rule, same as every
+other checkpoint in this repo — none of the DQN checkpoints are
+committed either, contrary to this file's own earlier phrasing).
+
+**Step 5 — live sanity-check wire-in, done WITHOUT editing
+`env/environment.py`** (explicit session boundary): `LSTMForecastProvider`
+was injected purely through the pre-existing `forecast_provider_factory`
+constructor parameter (design decision 17 — the same seam
+`attack/attacking_provider.py::AttackingForecastProvider` already uses
+for exactly this kind of external-provider injection), so
+`_build_forecaster()`'s existing `"lstm"` stub branch remains unwired —
+flagged as a small, explicitly out-of-scope follow-up for the Phase 4
+full-campaign session, not done here. Ran 3 full episodes (S1 config,
+seeds 0-2, `StaticThresholdPolicy`, 60 steps each) with zero crashes.
+**Real result: genuine variance, not stuck** — `threat_score` ranged
+0.730-0.946 (std 0.052) across the 180 real decisions; the resulting
+`policy_floor` took both SERVE_PQC and SERVE_HYBRID values, never
+frozen at one. **Load-bearing caveat, stated plainly (Hard Rule 7,
+not smoothed over)**: `env/environment.py::_threat_features_placeholder`
+still returns the 2-dimensional `[qber, load]` placeholder, not a real
+39-dim RT-IoT2022-shaped feature vector — that requires Addition F's
+pcap replay (sequenced after this addition, per PLAN2.md §8B). So this
+result demonstrates the WIRING works end-to-end and reacts to its
+input, not genuine live threat detection yet; `LSTMForecastProvider`'s
+own class docstring states this caveat explicitly for future sessions.
+
+**Tests**: 9 new in `tests/test_forecaster_model.py` (replacing the
+prior import-smoke test now that the module is real — forward-pass
+shape, `ForecastProvider` interface conformance, pool-head reuse,
+buffer-window capping, and the real-checkpoint diverse-held-out-sample
+degenerate-collapse check this session's instruction specifically
+asked for); 14 new in `tests/test_train_threat_lstm.py` (the
+leakage-free split's zero-overlap guarantee — including a regression
+test for the exact run-boundary bug caught during development — class
+weighting, evaluation metrics, and the degenerate-collapse detector on
+both synthetic collapsed/non-collapsed cases and the real committed
+checkpoint's report); 1 new in `tests/test_lstm_live_wire_in.py` (the
+Step 5 live sanity check, marked skip if the checkpoint isn't present).
+**Full suite: 718 passed, 1 xfailed** (695 prior + 23 new). Zero changes
+to `env/masking.py`, `env/environment.py`, `env/contracts.py`,
+`agents/dqn.py`, any `configs/scenarios/*.yaml` file, or any existing
+DQN checkpoint — verified via `git diff --stat`.
+
+**Next task — Addition E Phase 4's full campaign remains a separate,
+deliberate future session (per instruction, not started here)**: wire
+`use_foresight: lstm` into `env/environment.py::_build_forecaster()`
+(the one small env.py edit intentionally deferred this session), then
+re-run Gate W3 on S1+S3, the masked-vs-soft-reward S3 comparison, the
+full 11-point dose-response sweep, all six dashboard panels, and the
+paper's Table V against the real forecaster — every existing result in
+this file and the paper was measured against the placeholder EWMA
+forecaster and does not transfer automatically. Addition F (pcap
+replay) stays sequenced after that, per PLAN2.md §8B.
+
+---
+
 **Full RT-IoT2022 feature-extraction pipeline — REAL, TESTED, run
 against the FULL dataset (not a sample) — DONE 2026-08-31. Explicitly
 NOT YET WIRED IN.** `forecaster/rt_iot_features.py` (new module,
@@ -53,30 +201,71 @@ panels, the paper's Table V) is unaffected. See SESSION_LOG.md's
 newest entry and PLAN2.md's new "Addition E" section for the full
 design writeup, real numbers, and four-phase plan.
 
+**Side session, optional polish, does NOT change the roadmap below —
+2026-08-31: Living System panel gained trained-DQN-driven variants of
+its S1/S2 snapshots.** Investigated (read-only first, per instruction)
+whether swapping the demo's driving policy from `StaticThresholdPolicy`
+to a trained masked-DQN checkpoint would fix the standing 100%-HYBRID
+saturation finding (see the entry above this one). **Real result:
+genuine tier variety, confirmed across seeds 0-3** — S1
+(`checkpoints/dqn_s1.pt`, trained on S1): `{HYBRID: 83, PQC: 167}`
+(250 real decisions, seed 0); S2 (`checkpoints/dqn_s2.pt`, trained on
+S2): `{CLASSICAL: 6, HYBRID: 163, PQC: 81}` (250 real decisions, seed
+0) — versus `StaticThresholdPolicy`'s `{HYBRID: 250}` on both, unchanged.
+`dashboard/render_living_system_demo.py::collect_real_episode` gained
+an optional `policy` param (default `None` preserves the original
+`StaticThresholdPolicy(0.5)` behavior byte-for-byte) + `_load_masked_
+policy` (mirrors `render_migration_wave_demo.py`'s / `render_results_
+demo.py`'s existing checkpoint-reload pattern exactly, eval only).
+Additive only — the original `StaticThresholdPolicy`-driven S1/S2
+samples are untouched (regenerated byte-identical) and remain
+committed, honestly documenting their own real saturated finding.
+`dashboard/samples/living_system_{s1,s2}_dqn_0{1,2,3}_*.html` (6 new
+files) + two new `dashboard/app.py::PANELS` cards ("Living System — S1,
+trained DQN" / "— S2, trained DQN"), registry now 9 panels/19
+filenames (up from 7/13). 7 new tests (`tests/test_render_living_
+system_demo.py`, mirroring the existing S1-addition pattern: tenant-
+identity fidelity, exact tier-color correctness, no-fabrication, HTML
+well-formedness, plus the central "genuine variety, not saturated"
+check), `tests/test_dashboard_app.py`'s registry-shape counts updated.
+Full suite: **695 passed, 1 xfailed** (688 prior + 7 new). Scope held:
+zero changes to `forecaster/`, `env/forecast_provider.py`,
+`env/masking.py`, `env/environment.py`, or any `configs/scenarios/`
+file (verified via `git diff --stat`) — this session touched only
+`dashboard/render_living_system_demo.py`, `dashboard/app.py`, and their
+tests. See SESSION_LOG.md's newest entry for the full writeup.
+
 **Next task — formalized post-review roadmap, TOP PRIORITY for the
 next several sessions, strict dependency order E -> F -> G (PLAN2.md
 §8A/§8B/§8C — formalized 2026-08-31):**
 
 **Addition E — Real Threat Forecaster Build-Out (RT-IoT2022):**
-1. **[DONE this session]** the full RT-IoT2022 feature-extraction
+1. **[DONE 2026-08-31]** the full RT-IoT2022 feature-extraction
    pipeline (above).
-2. **Build and train the dual-head LSTM model**
-   (`forecaster/model.py::SmartKeyForecaster`, `forecaster/train.py`)
-   on this session's windowed output — currently real `NotImplementedError`
-   stubs. Will need to decide how this module's RT-IoT2022-direct
-   windowing relates to `forecaster/dataset.py`'s separate rollout-
-   log-based `RolloutWindowDataset` design.
-3. **Validate the trained model** — per-class F1 (never accuracy,
-   given this session's real measured class imbalance), confirm it
-   isn't a degenerate always-predict-majority shortcut.
-4. **Wire it in via `LSTMForecastProvider` and re-run the FULL
-   experimental campaign** — Gate W3 on S1+S3, the masked-vs-soft-
-   reward S3 comparison, the full 11-point dose-response sweep, all
-   six dashboard panels, and the paper's Table V — since every
-   existing result was measured against the placeholder forecaster and
-   does not transfer automatically to a real one. This is a later,
-   separate, deliberate session (per the project owner's own
-   instruction), never bundled into the same session as steps 2-3.
+2. **[DONE 2026-09-01]** Built and trained the real (threat-head-only,
+   scope decision explained above) LSTM
+   (`forecaster/model.py::SmartKeyForecaster`,
+   `forecaster/train_threat_lstm.py`) on Phase 1's windowed output —
+   real, leakage-checked, class-weighted training. See this file's
+   newest entry above.
+3. **[DONE 2026-09-01]** Validated: real per-class precision/recall/F1
+   on a leakage-free held-out split (benign recall 1.000, attack recall
+   0.994, macro-F1 0.986), confirmed non-degenerate via a diverse-
+   held-out-sample prediction-variance test. See above.
+4. **[Phase 4a, live sanity-check wire-in, DONE 2026-09-01]**
+   `LSTMForecastProvider` injected via the existing
+   `forecast_provider_factory` seam and run for 3 real episodes with
+   zero crashes and genuine threat_score/floor variance — see above.
+   **[Phase 4b, the FULL experimental campaign, NOT started — still the
+   next task]**: wire `use_foresight: lstm` into
+   `env/environment.py::_build_forecaster()` (intentionally deferred
+   this session, see above), then re-run Gate W3 on S1+S3, the
+   masked-vs-soft-reward S3 comparison, the full 11-point dose-response
+   sweep, all six dashboard panels, and the paper's Table V — since
+   every existing result was measured against the placeholder
+   forecaster and does not transfer automatically to a real one. This
+   is a later, separate, deliberate session (per the project owner's
+   own instruction), never bundled into the same session as steps 2-3.
 
 **Addition F — Live/Replayed PCAP Input (PLAN2.md §8B) — depends on
 Addition E step 4 being complete first; do not start meaningfully
@@ -104,8 +293,8 @@ the placeholder.
 
 **Dashboard polish, live-episode streaming, and any other stretch work
 are now explicitly LOWER priority than the E -> F -> G sequence
-above** — pick up Addition E step 2 next, not dashboard/API/pcap work,
-unless explicitly redirected.
+above** — pick up Addition E Phase 4b (the full experimental campaign)
+next, not dashboard/API/pcap work, unless explicitly redirected.
 
 ---
 
@@ -1538,14 +1727,14 @@ behavioral tests, part of the green `pytest` run).
 
 | File | Status | Notes |
 |---|---|---|
-| `dashboard/app.py` | not started | Stub, `test_dashboard_app.py` is 1 import-smoke test. |
+| `dashboard/app.py` | implemented+tested | **2026-08-31 (earlier session, this row was stale until now):** a real minimal local server (`python -m dashboard.app`, standard-library `http.server` only) serving the already-rendered panels in `dashboard/samples/` plus an index page -- `PANELS` registry (title/description/files) + pure `render_index_html()`/`resolve_route()` (route logic testable without a socket) + `DashboardRequestHandler`. Route surface is an explicit filename whitelist, not a general static file server -- no path-traversal surface. **2026-08-31 (this session, later): `PANELS` gained two more cards** -- "Living System -- S1, trained DQN" / "-- S2, trained DQN" (see `dashboard/render_living_system_demo.py`'s row) -- registry now 9 panels/19 filenames (up from 7/13). `tests/test_dashboard_app.py`'s registry-shape count assertions updated to match; all other tests (route resolution, 404s, path-traversal, real end-to-end HTTP round trip) unchanged and still passing. |
 | `dashboard/render_explain.py` | implemented+tested | **2026-08-29 (new file):** Explain Decision panel's view layer -- renders `dashboard/explain.py`'s real `DecisionTrace` objects as a self-contained static HTML page (inline CSS, zero JS, zero server, zero build step, zero new dependencies -- deliberately does not reach for `dash`/`plotly` despite both already being in `requirements.txt` for the eventual full live dashboard). `render_trace_html(trace, *, title=...)` (pure function, six private `_render_stepN_*` helpers, each reading only `DecisionTrace` fields) + `write_trace_html(trace, path, *, title=...)`. Styled to visually match `dashboard/mockups/smartkeynet_dashboard_mockup_v2.html`'s Explain Decision tab (dark theme, floor grid, mask chips, cost bars) but reads zero data from it -- that file's example numbers are 100% fabricated per its own header. Floor-grid cells carry a `data-cell="{SensClass}-{Posture}"` attribute so the fired cell is programmatically verifiable, not just visual. Every dynamic string passed through `html.escape`. 10 tests (`test_render_explain.py`), incl. two exact-match Hard Rule 10 tests stepping a real `SmartKeyNetEnv` for 15 decisions and asserting the rendered per-action reasons/final sentence/cost-row ordering are character-for-character identical to the real trace's own fields (never invented), a floor-grid `hit`-cell test parametrized across all 12 real `(SensitivityClass, ThreatPosture)` cells, and two HTML well-formedness tests via a small balanced-tag `HTMLParser` subclass (no new dependency). See SESSION_LOG.md's newest entry for the full design-decision writeup. |
 | `dashboard/render_dose_response.py` | implemented+tested | **2026-08-29 (new file, later session):** S5 dose-response chart renderer -- the second headline demo visual. `DoseResponsePoint(alpha, mean, std)`/`DoseResponseSeries(label, series_key, points)` (a thin, real-field-projecting input contract, populated 1:1 from `MultiSeedAttackEvalResult.alpha`/`.below_floor_rate_true_mean`/`_std`, never re-derived) + `render_dose_response_html(series, ...)` (pure function, inline SVG chart -- polyline + circles + per-point error bars, y-axis auto-scaled off the real data, zero charting library). Styled to the mockup's dose-chart look (masked=`--hybrid` green, soft-reward=`--danger` red) but reads zero numbers from it. **The one derived annotation (the "first nonzero alpha" boundary callout) is computed live from the input series itself** (never a hardcoded alpha), so a genuinely flat-zero series gets an honest "flat zero across the range shown" callout instead of a fabricated boundary. 9 tests (`test_render_dose_response.py`), incl. the central Hard Rule 7 guards `test_masked_agent_alpha_0_9_nonzero_value_is_faithfully_shown` and `test_masked_curve_is_not_flat_zero_everywhere` (asserts `max(means) == 0.3`, guarding specifically against the tempting flat-zero-everywhere render), a no-fabrication check, and HTML well-formedness. |
 | `dashboard/render_comparison_table.py` | implemented+tested | **2026-08-29 (new file, later session):** masked-vs-soft-reward S3 comparison table renderer -- the first headline demo visual. `AgentMetrics` (one agent's real, checkpoint-averaged S3 metrics)/`ComparisonTableData(scenario, masked, soft_reward, include_p99=True)` + `render_comparison_table_html(data, ...)`. `below_floor_rate` always leads the table (hero-styled row), per instruction. **Hard Rule 7 honesty, structural, not just a note**: if `include_p99=True` the `p99_latency` row is ALWAYS paired with a fixed caveat block quoting `experiments/harness.py::ScenarioResult.p99_latency`'s own documented discrete-cost-model-percentile-artifact mechanism (never rendered without it); `regret_events` always carries a `(== pool_exhaustion_events)` label plus a standing "same event by construction" note, quoting `run_scenario`'s own docstring. 10 tests (`test_render_comparison_table.py`), incl. `test_p99_latency_always_carries_its_caveat_when_shown` / a companion test proving `include_p99=False` omits the row, its caveat, AND its value together (no orphaned caveat either direction), a no-fabrication check parsing every `<tbody>` row's numeric leads against the real `AgentMetrics` fields, and HTML well-formedness with/without the p99 row. |
 | `dashboard/render_results_demo.py` | implemented+tested | **2026-08-29 (new file, later session):** the real driver for both renderers above. Data provenance decision (see SESSION_LOG.md's newest entry for the full reasoning): no saved raw-results file existed for either the 2026-08-25 S3 comparison or the 2026-08-26 S5 sweep, but the real checkpoints both sessions trained were still on disk (gitignored, not deleted) -- `collect_real_s3_comparison()` reloads `checkpoints/s3_{masked,soft_reward}_seed{1,4,7}.pt` (`_load_greedy_policy` reconstructs the `DQNAgent`/`GreedyDQNPolicy` the same way `experiments/train.py::train()` derives `state_dim`/`has_forecast`) and re-runs real `evaluate_multi_seed` calls (8 eval seeds, matching the original session), aggregating the 3 per-training-seed results into one `AgentMetrics` via the same "checkpoint-averaged, training-seed std" methodology Gate W3 established (verified to reproduce `-10214.82`/`1303.25` exactly). `collect_real_dose_response()` reloads `checkpoints/dqn_s2.pt`/`soft_reward_baseline_s2.pt` and re-runs real `evaluate_attack_multi_seed` across the real 11-alpha grid (5 eval seeds, matching the original sweep). `main()` saves the full fresh output to `dashboard/samples/results_data.json` (with an explicit `"provenance"` field) and renders both HTML files from the SAME live objects the JSON was built from. Reproducibility spot-checked before this driver was built (a reloaded checkpoint's fresh re-run matched SESSION_LOG.md's own per-seed numbers exactly); the full fresh run this session performed matched every prior figure to 4 decimal places. Run via `python -m dashboard.render_results_demo`. |
 | `dashboard/render_explain_demo.py` | implemented+tested | **2026-08-29 (new file):** the real driver for `render_explain.py`. `collect_real_traces()` runs a genuine S2 episode (`configs/scenarios/s2_hndl.yaml`, loaded via `experiments.train.load_full_config`) through the real `SmartKeyNetEnv` under the real `agents.baselines.StaticThresholdPolicy(0.5)` baseline -- not hand-authored inputs -- calling `explain_decision_from_env` once per decision, mirroring `experiments/harness.py::run_scenario`'s loop shape. `pick_demo_traces()` selects 3 genuinely different real decisions (first decision; a floor-driven decision, `floor is Action.SERVE_HYBRID`; a genuine multi-cost tradeoff). `main()` writes them to `dashboard/samples/*.html` -- the findable sample outputs for demo/review. **Real investigation documented in this module's own docstring**: searched (100+ real seeds, all four real baseline policies, both real elevated-threat scenario configs) for a genuine "floor-driven, only-one-legal-action" decision (the case `dashboard/explain.py`'s own `cost_note` field flags) and never found one occurring naturally under current calibration -- traced to a real structural cause (`env/masking.py::compute_mask`'s `REKEY_NOW` has no illegality rule once any tier clears the floor, so it stays legal almost everywhere a tier does) rather than assumed or silently worked around; the driver's floor-driven selector uses "only one SERVE tier clears the floor" instead, letting that decision's own real `cost_note` display honestly. Run via `python -m dashboard.render_explain_demo`. |
 | `dashboard/render_living_system.py` | implemented+tested | **2026-08-29 (new file, this session):** Living System panel renderer -- the fourth of seven dashboard panels. `TenantNodeView`/`RecentDecisionView`/`LivingSystemSnapshot` dataclasses + `build_snapshot()` (pure fold: real decision history up to a real ordinal cutoff -> one frozen snapshot; "most recently served tier per tenant," `None` for a tenant untouched so far, shown honestly as "no traffic yet," never defaulted) + `render_living_system_html()` (pure view: inline SVG, hub-and-spoke ring layout computed from however many real tenant nodes the graph actually has -- never a fixed count -- edges/nodes tier-colored via the same hex values `render_explain.py`'s CSS already established) + `write_living_system_html()`. 17 tests (`test_render_living_system.py`), all against the real `build_tenant_graph` (never a hand-built `nx.Graph`): real node-count/topology parametrized across `n_nodes` in {3,7,10}, tier-color-correctness parametrized across all three real tiers (this test caught a real bug -- `KeyType.CLASSICAL == 0` is falsy, so an early truthy check silently mislabeled CLASSICAL-served tenants as untouched; fixed to `is not None`), a no-fabrication check, and HTML/SVG well-formedness. See SESSION_LOG.md's newest entry for the full design-decision writeup and the real S2-ratchet-timing finding. |
-| `dashboard/render_living_system_demo.py` | implemented+tested | **2026-08-29 (new file, this session):** the real driver for `render_living_system.py`. Builds the real graph (`build_tenant_graph(n_nodes=10, seed=7)` -- a dedicated structural seed, same rationale as S4/S6's own `graph_seed`), runs a real 250-decision S2 episode via `request_stream_factory` injection (the same swap-test precedent `tests/test_environment.py` established), and for each decision resolves the real served tier via `SmartKeyNetEnv._resulting_key_type` (the exact ground-truth function `_apply_action` itself uses -- never re-derived from the action alone, since `REUSE`/`REKEY_NOW` don't map to a tier that way). `pick_snapshot_indices()` selects three real milestones (first decision / first decision by which every real tenant has been served / final decision) -- redesigned mid-session after finding the originally-planned "before/after S2's scripted `elevate_at_step`" predicate doesn't hold on this stream (see SESSION_LOG.md). Writes `dashboard/samples/living_system_0{1,2,3}_*.html`. Run via `python -m dashboard.render_living_system_demo`. |
+| `dashboard/render_living_system_demo.py` | implemented+tested | **2026-08-29 (new file, this session):** the real driver for `render_living_system.py`. Builds the real graph (`build_tenant_graph(n_nodes=10, seed=7)` -- a dedicated structural seed, same rationale as S4/S6's own `graph_seed`), runs a real 250-decision S2 episode via `request_stream_factory` injection (the same swap-test precedent `tests/test_environment.py` established), and for each decision resolves the real served tier via `SmartKeyNetEnv._resulting_key_type` (the exact ground-truth function `_apply_action` itself uses -- never re-derived from the action alone, since `REUSE`/`REKEY_NOW` don't map to a tier that way). `pick_snapshot_indices()` selects three real milestones (first decision / first decision by which every real tenant has been served / final decision) -- redesigned mid-session after finding the originally-planned "before/after S2's scripted `elevate_at_step`" predicate doesn't hold on this stream (see SESSION_LOG.md). Writes `dashboard/samples/living_system_0{1,2,3}_*.html`. **2026-08-31 (S1-addition session): `collect_real_episode` gained `scenario_config_path`, `pick_snapshot_indices` gained `prefix`** -- `main()` now runs the identical machinery a second time against `configs/default.yaml` (S1), writing `dashboard/samples/living_system_s1_0{1,2,3}_*.html`. Honest finding: S1 also saturates to 100% HYBRID (see PROGRESS.md's "Next task" preamble entry from that date). **2026-08-31 (this session, later, optional-polish investigation): read-only investigation into WHY both saturate, then an additive fix** -- root-caused to `StaticThresholdPolicy.act`'s own pool-fill-threshold rule (HYBRID whenever `pool_fill > 0.5` and legal; real `pool_fill` never drops below ~0.70 in either episode), not just the placeholder-forecaster ratchet. `collect_real_episode` gained an optional `policy` param (default `None` preserves the original `StaticThresholdPolicy(0.5)` behavior byte-for-byte, verified by a dedicated regression test) + new `_load_masked_policy(config, checkpoint_path)` (mirrors `render_migration_wave_demo.py`'s / `render_results_demo.py`'s existing checkpoint-reload pattern exactly -- reconstruct `DQNAgent` from the config's own `state_dim`/`has_forecast`, load the checkpoint, wrap in `GreedyDQNPolicy`, eval only). `main()` now also runs two additive DQN-driven episodes (`checkpoints/dqn_s1.pt` on S1, `checkpoints/dqn_s2.pt` on S2, both real, already-trained, held/reused from prior sessions -- no training performed). **Real result, verified across seeds 0-3, genuine tier variety**: S1 `{HYBRID: 83, PQC: 167}`; S2 `{CLASSICAL: 6, HYBRID: 163, PQC: 81}` (250 real decisions each, seed 0) -- vs. `StaticThresholdPolicy`'s `{HYBRID: 250}` on both. Writes `dashboard/samples/living_system_{s1,s2}_dqn_0{1,2,3}_*.html` (6 new files), additive alongside (never replacing) every pre-existing sample. A pre-existing latent bug in the S1 collision guard was fixed along the way (it treated a file's own prior committed output as a "collision," which would have made even a same-prefix re-run of this driver fail after the first commit -- `_write_snapshots_guarded` now excludes a run's own `{prefix}_`-named files from the pre-existing set before checking, matching the guard's own documented intent of catching cross-panel collisions only). 7 new tests in `tests/test_render_living_system_demo.py` (mirroring the S1-addition tests exactly: tenant-identity fidelity, exact tier-color correctness, no-fabrication, HTML well-formedness, a `policy=None` byte-identical-behavior regression check, and the central "genuine variety" check). Full suite: 695 passed, 1 xfailed (688 prior + 7 new). Run via `python -m dashboard.render_living_system_demo`. |
 | `dashboard/render_budgeting_brain.py` | implemented+tested | **2026-08-30 (new file):** Budgeting Brain panel renderer -- the fifth of seven dashboard panels. `PoolTrajectoryPoint`/`ExhaustionEvent`/`PolicyEpisode`/`BudgetingBrainData` dataclasses (thin, real-field-projecting, populated by the driver) + `render_budgeting_brain_html()` (pure view: two side-by-side inline-SVG area charts, one per policy, `data-trajectory` carrying the exact real `(step, pool_fill)` pairs, real `<circle>` exhaustion markers at their real `(step, pool_fill_at_onset)` positions) + `write_budgeting_brain_html()`. Styled to `dashboard/mockups/smartkeynet_dashboard_mockup_v2.html`'s Budgeting Brain tab (`.arena`/`.badge`/`.stat-grid`/`.exhaust-banner` CSS classes reused verbatim) but reads zero numbers from it. **Real, honest finding, not the design assumed going in**: `below_floor_rate` measured `0.0000` for both policies on the real episode (Hard Rule 9's deferral-not-downgrade guarantee holds even for the still-masked `AlwaysHybridPolicy` baseline) -- the stat grid leads with `pool_exhaustion_events` instead (the metric that actually diverges, 0 vs. 18) and carries an explicit `_BELOW_FLOOR_NOTE` explaining why, rather than reusing `render_comparison_table.py`'s below-floor-leads convention unexamined. 16 tests (`test_render_budgeting_brain.py`), incl. the central Hard Rule 7 contrast pair `test_conserving_agent_shows_zero_exhaustion_markers`/`test_exhausting_baseline_shows_real_exhaustion_markers_and_banner` (same real data, both sides, guards against a dramatized exhaustion that didn't happen or a hidden one that did), no-fabrication checks, p99-caveat pairing tests, and HTML well-formedness. See SESSION_LOG.md's newest entry for the full design-decision writeup. |
 | `dashboard/render_budgeting_brain_demo.py` | implemented+tested | **2026-08-30 (new file):** the real driver for `render_budgeting_brain.py`. Runs one real, same-seed (seed=900, held-out -- not the checkpoint's own training seed 1) S3 episode under two policies: the masked DQN (reloaded `checkpoints/s3_masked_seed1.pt`, mirroring `render_results_demo.py::_load_greedy_policy`'s reload pattern) and `agents.baselines.AlwaysHybridPolicy` (no checkpoint, deterministic rule). Both policies see identical exogenous conditions (`env/environment.py::reset()`'s `episode_seed` drives the QKD trace and request stream independently of policy choice) -- a same-seed, same-script, policy-driven-divergence-only comparison. `_run_episode_with_trajectory()` mirrors `experiments/harness.py::run_scenario`'s own step loop (importing its private `_delivered_tier`/`_resolved_cost_action` helpers directly rather than re-deriving that logic, so `floor_violations`/`p99_latency` can never drift from harness.py's real definitions) but adds the per-step `(env._step_count, state["pool_fill"])` capture and real `RegretEvent` collection `run_scenario`'s aggregate-only contract doesn't provide -- `env._step_count` (private, read-only) is used deliberately so trajectory points and event markers share the exact same real internal-tick numbering (multiple real regret events can occur inside one external `env.step()` call). Saves `dashboard/samples/budgeting_data.json`, renders `dashboard/samples/budgeting_brain.html`. Run via `python -m dashboard.render_budgeting_brain_demo`. |
 | `dashboard/explain.py` | implemented+tested | **2026-08-19 (new file):** Explain Decision panel backend (PLAN2.md §7.3, Addition D; Hard Rule 10) -- Person D's first real code this project. `explain_decision(...)` (pure function, all six inputs explicit) + `explain_decision_from_env(env, state, chosen_action)` (convenience wrapper pulling those inputs off a live `SmartKeyNetEnv`, mirroring `experiments/harness.py`'s established precedent for reaching into a few private env attributes the public Gym API doesn't yet surface). Returns a `DecisionTrace` dataclass covering all six PLAN2.md §7.3 steps: threat score + source, posture probs + resolved posture, floor lookup (+ the full real floor table, imported from `env.masking`, never re-typed), the action mask (calls `env.masking.compute_mask()` directly -- zero possible drift between this module's legal/reason fields and the masking layer's real behavior, by construction, not by convention), cost comparison (reads `env.environment`'s real `_LATENCY_UNITS`/`_ENERGY_UNITS`/`_KEY_TYPE_TO_SERVE_ACTION`, never re-derived), and a deterministically templated final sentence. Policy-agnostic by design (no dependency on `agents/dqn.py`) -- verified in a scratchpad sanity script against `StaticThresholdPolicy` on real S1 steps, which also caught and fixed one real bug: the final-sentence template originally said "a learned preference from the policy" for the cost-tradeoff case, which is wrong for a non-learning baseline; reworded to "the policy's own preference among legal options." 29 tests (`test_explain.py`, up from 26), incl. every (sensitivity_class, posture) floor-table cell checked against a fresh `PolicyTable`, 6 parametrized mask edge cases (pool empty, key age at/over cap, cold start, all-legal, HYBRID-floor-with-empty-pool) each checked against a real `compute_mask()` call, REKEY_NOW cost-resolution cases (existing-tier and cold-start-adopts-floor), and an end-to-end test stepping a real `SmartKeyNetEnv` and cross-checking every trace against a fresh `compute_mask()` call built from the same env state. **2026-08-19 (same day, later session): updated to track `env/masking.py`'s Hard Rule 2 fix** — `_mask_entries()` now passes `current_key_type` into `compute_mask()` and gained the matching stale-tier reason case (would otherwise crash on the new illegality reason), `_resolved_cost_action()` updated to the same `max(existing, floor)` REKEY_NOW resolution (would otherwise display a cost for a tier that was never actually served). Explicitly out of scope this session (per PLAN2.md's Hard Rule 11 and Hard Rule 10's scoping): pcap ingestion / Threat Input panel (§7.1) and any dashboard HTML/frontend -- this is a Python module returning structured data only. |
@@ -1587,14 +1776,19 @@ behavioral tests, part of the green `pytest` run).
 
 ## Last verified
 
-- **Date:** 2026-08-31 (root README session)
-- **Commit:** `aefc7a1` ("Delete split.md") — the commit this session started from (`main`); see SESSION_LOG.md for this session's own commit and the final ff-merged `dev21` hash.
-- **`pytest` pass count:** 649 passed, 1 xfailed — run fresh this session, matches PROGRESS.md's own last-recorded figure exactly.
-- **Branch:** `main` (aefc7a1) was one commit ahead of `dev21` (e64ef68) at session start — a clean fast-forward (`dev21..main` = the single "Delete split.md" commit, `main..dev21` empty), not a divergence; this session worked on `main` and ff-merged into `dev21` at the end, per the standing workflow — see SESSION_LOG.md for the final shared hash. Not pushed to origin this session, per instruction.
+- **Date:** 2026-08-31 (Living System trained-DQN-driver investigation session)
+- **Commit:** `f84fcd1` ("docs: formalize post-review roadmap...") — the commit this session started from (`main`/`dev21` confirmed identical, `git rev-parse main dev21` both `f84fcd1`).
+- **`pytest` pass count:** 695 passed, 1 xfailed — run fresh this session (688 prior + 7 new in `tests/test_render_living_system_demo.py`).
+- **Branch:** `main`/`dev21` in sync at session start. This was a small, optional side session (not the top-priority LSTM work) — scope held to `dashboard/render_living_system_demo.py`, `dashboard/app.py`, and their tests; zero changes to `forecaster/`, `env/forecast_provider.py`, `env/masking.py`, `env/environment.py`, or any `configs/scenarios/` file (verified via `git diff --stat`). Not pushed to origin this session, per instruction.
 
 ---
 
 ## Prior "Last verified" (superseded, kept for history)
+
+- **Date:** 2026-08-31 (root README session)
+- **Commit:** `aefc7a1` ("Delete split.md") — the commit this session started from (`main`); see SESSION_LOG.md for this session's own commit and the final ff-merged `dev21` hash.
+- **`pytest` pass count:** 649 passed, 1 xfailed — run fresh this session, matches PROGRESS.md's own last-recorded figure exactly.
+- **Branch:** `main` (aefc7a1) was one commit ahead of `dev21` (e64ef68) at session start — a clean fast-forward (`dev21..main` = the single "Delete split.md" commit, `main..dev21` empty), not a divergence; this session worked on `main` and ff-merged into `dev21` at the end, per the standing workflow — see SESSION_LOG.md for the final shared hash. Not pushed to origin this session, per instruction.
 
 - **Date:** 2026-08-25 (adversarial trace generator session)
 - **Commit:** `36f3b20` ("docs: explain p99_latency saturation as discrete-cost-model artifact, recommend total_reward/below_floor_rate instead -- 2026-08-25") — the commit this session started from; see SESSION_LOG.md for this session's own commit

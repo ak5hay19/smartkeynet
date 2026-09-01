@@ -1,5 +1,6 @@
-"""Tests for `dashboard.render_living_system_demo` -- specifically the
-S1 (steady/calm traffic) addition alongside the pre-existing S2 run.
+"""Tests for `dashboard.render_living_system_demo` -- the S1 (steady/
+calm traffic) addition alongside the pre-existing S2 run, plus the
+later trained-masked-DQN-driven addition alongside both.
 
 `pick_snapshot_indices`'s `prefix` param is tested as a pure function
 (fast). `collect_real_episode` against S1 is exercised with a real, but
@@ -8,6 +9,11 @@ deliberately short, episode (`max_steps` well below the demo's default
 + graph-driven request stream, just a shorter real run, so these stay
 fast without touching any protected file or faking any value (Hard Rule
 10 by analogy with `tests/test_render_living_system.py`).
+
+The DQN-driven tests below mirror that same pattern exactly, swapping
+`policy=` in for the default `StaticThresholdPolicy` via
+`_load_masked_policy` + a real checkpoint reload -- the same fast/short
+`max_steps=60` real-episode convention, not a fabricated trace.
 """
 
 from __future__ import annotations
@@ -21,14 +27,18 @@ from dashboard.render_living_system import (
     render_living_system_html,
 )
 from dashboard.render_living_system_demo import (
+    _DQN_S1_CHECKPOINT_PATH,
+    _DQN_S2_CHECKPOINT_PATH,
     _S1_CONFIG_PATH,
     _S2_CONFIG_PATH,
     _TENANT_GRAPH_SEED,
+    _load_masked_policy,
     collect_real_episode,
     pick_snapshot_indices,
 )
 from env.contracts import KeyType
 from env.request_generator import build_tenant_graph
+from experiments.train import load_full_config
 
 _MAX_STEPS = 60  # short but real -- enough for several real decisions per tenant
 
@@ -151,3 +161,124 @@ def test_s1_rendered_html_is_well_formed(s1_episode):
         assert out.count("<svg") == out.count("</svg>")
         assert out.count("<html") == out.count("</html>")
         assert out.count("<body") == out.count("</body>")
+
+
+# ---------------------------------------------------------------------------
+# Trained-masked-DQN-driven runs: same real machinery, `policy=` swapped in
+# via `_load_masked_policy` + a real checkpoint reload, mirroring the
+# StaticThresholdPolicy tests above exactly.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def s1_dqn_episode():
+    config = load_full_config(_S1_CONFIG_PATH)
+    config["max_steps"] = _MAX_STEPS
+    policy = _load_masked_policy(config, _DQN_S1_CHECKPOINT_PATH)
+    return collect_real_episode(
+        seed=0, max_steps=_MAX_STEPS, scenario_config_path=_S1_CONFIG_PATH, policy=policy
+    )
+
+
+@pytest.fixture(scope="module")
+def s2_dqn_episode():
+    config = load_full_config(_S2_CONFIG_PATH)
+    config["max_steps"] = _MAX_STEPS
+    policy = _load_masked_policy(config, _DQN_S2_CHECKPOINT_PATH)
+    return collect_real_episode(
+        seed=0, max_steps=_MAX_STEPS, scenario_config_path=_S2_CONFIG_PATH, policy=policy
+    )
+
+
+def test_dqn_checkpoint_paths_are_the_real_established_ones():
+    # checkpoints/dqn_s1.pt (trained on S1, Gate W3 session) and
+    # checkpoints/dqn_s2.pt (trained on S2, the S5 dose-response sweep
+    # session) -- the exact checkpoints render_migration_wave_demo.py /
+    # render_results_demo.py already reload, not new/invented ones.
+    assert _DQN_S1_CHECKPOINT_PATH.name == "dqn_s1.pt"
+    assert _DQN_S2_CHECKPOINT_PATH.name == "dqn_s2.pt"
+    assert _DQN_S1_CHECKPOINT_PATH.is_file()
+    assert _DQN_S2_CHECKPOINT_PATH.is_file()
+
+
+def test_default_policy_behavior_is_unchanged_when_policy_is_none():
+    # collect_real_episode's new `policy` param must not alter any
+    # pre-existing (StaticThresholdPolicy) call site's behavior.
+    episode_default = collect_real_episode(seed=0, max_steps=_MAX_STEPS, scenario_config_path=_S1_CONFIG_PATH)
+    episode_explicit_none = collect_real_episode(
+        seed=0, max_steps=_MAX_STEPS, scenario_config_path=_S1_CONFIG_PATH, policy=None
+    )
+    tiers_a = [d.served_tier for d in episode_default.decisions]
+    tiers_b = [d.served_tier for d in episode_explicit_none.decisions]
+    assert tiers_a == tiers_b
+
+
+def test_dqn_driven_episodes_use_the_real_tenant_graph_node_identities(s1_dqn_episode, s2_dqn_episode):
+    for episode in (s1_dqn_episode, s2_dqn_episode):
+        graph = build_tenant_graph(n_nodes=len(episode.tenant_attrs), seed=_TENANT_GRAPH_SEED)
+        real_tenant_ids = {node for node, attrs in graph.nodes(data=True) if attrs.get("kind") == "tenant"}
+        assert set(episode.tenant_attrs) == real_tenant_ids
+        for decision in episode.decisions:
+            assert decision.tenant in real_tenant_ids
+
+
+@pytest.mark.parametrize("prefix_fixture_name", ["s1_dqn_episode", "s2_dqn_episode"])
+def test_dqn_snapshot_tier_colors_match_the_real_served_tiers(prefix_fixture_name, request):
+    episode = request.getfixturevalue(prefix_fixture_name)
+    prefix = "living_system_s1_dqn" if prefix_fixture_name == "s1_dqn_episode" else "living_system_s2_dqn"
+    picks = pick_snapshot_indices(episode, prefix=prefix)
+    for name, idx in picks.items():
+        snapshot = build_snapshot(
+            label=name,
+            hub_id=episode.hub_id,
+            tenant_attrs=episode.tenant_attrs,
+            all_decisions=episode.decisions,
+            snapshot_index=idx,
+            pool_fill=episode.pool_fill_by_index[idx],
+            posture=episode.posture_by_index[idx],
+        )
+        out = render_living_system_html(snapshot)
+
+        expected_tier: dict[str, KeyType] = {}
+        for decision in episode.decisions[: idx + 1]:
+            expected_tier[decision.tenant] = decision.served_tier
+
+        for tenant_id, tier in expected_tier.items():
+            assert f'data-tenant="{tenant_id}" data-tier="{tier.name}"' in out
+
+        rendered_tenant_ids = set(re.findall(r'data-tenant="([^"]+)"', out))
+        real_tenant_ids = {t.tenant_id for t in snapshot.tenants} | {snapshot.hub_id}
+        assert rendered_tenant_ids <= real_tenant_ids
+        rendered_tiers = set(re.findall(r'data-tier="([^"]+)"', out))
+        assert rendered_tiers <= {t.name for t in KeyType} | {"NONE"}
+
+
+def test_dqn_driven_episode_produces_genuine_tier_variety_unlike_static_threshold(s1_dqn_episode):
+    # The central finding this addition exists to demonstrate: unlike
+    # StaticThresholdPolicy (which saturates to 100% HYBRID -- see this
+    # module's own docstring / SESSION_LOG.md), the trained masked DQN
+    # serves more than one real tier across a real short episode.
+    served_tiers = {d.served_tier.name for d in s1_dqn_episode.decisions}
+    assert len(served_tiers) >= 2
+
+
+def test_dqn_rendered_html_is_well_formed(s1_dqn_episode, s2_dqn_episode):
+    for episode, prefix in (
+        (s1_dqn_episode, "living_system_s1_dqn"),
+        (s2_dqn_episode, "living_system_s2_dqn"),
+    ):
+        picks = pick_snapshot_indices(episode, prefix=prefix)
+        for name, idx in picks.items():
+            snapshot = build_snapshot(
+                label=name,
+                hub_id=episode.hub_id,
+                tenant_attrs=episode.tenant_attrs,
+                all_decisions=episode.decisions,
+                snapshot_index=idx,
+                pool_fill=episode.pool_fill_by_index[idx],
+                posture=episode.posture_by_index[idx],
+            )
+            out = render_living_system_html(snapshot)
+            assert out.count("<svg") == out.count("</svg>")
+            assert out.count("<html") == out.count("</html>")
+            assert out.count("<body") == out.count("</body>")

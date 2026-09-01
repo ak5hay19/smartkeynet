@@ -18,9 +18,10 @@ from dashboard.app import PANELS, build_server, render_index_html, resolve_route
 _ALL_REAL_FILENAMES = [pf.filename for panel in PANELS for pf in panel.files]
 
 
-def test_panels_registry_has_seven_panels() -> None:
-    # Was 6; Living System split into two cards (S1 + S2) this session.
-    assert len(PANELS) == 7
+def test_panels_registry_has_nine_panels() -> None:
+    # Was 7; Living System gained two trained-DQN-driven cards (S1 + S2)
+    # this session, alongside the existing StaticThresholdPolicy-driven ones.
+    assert len(PANELS) == 9
 
 
 def test_index_route_returns_200_html() -> None:
@@ -34,7 +35,7 @@ def test_index_route_references_every_real_panel_filename() -> None:
     status, _content_type, body = resolve_route("/")
     assert status == 200
     text = body.decode("utf-8")
-    assert len(_ALL_REAL_FILENAMES) == 13  # 3 Living System S1 + 3 Living System S2 + 3 Explain Decision + 4 single-file panels
+    assert len(_ALL_REAL_FILENAMES) == 19  # 3 Living System S1 + 3 S2 + 3 S1-DQN + 3 S2-DQN + 3 Explain Decision + 4 single-file panels
     for filename in _ALL_REAL_FILENAMES:
         assert f"/samples/{filename}" in text, f"index page is missing a link to {filename}"
 

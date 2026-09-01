@@ -83,6 +83,36 @@ show the graph's real state evolving -- from mostly-untouched, to every
 real tenant node having been served at least once, to the final settled
 state -- without any JS/streaming machinery.
 
+**Trained-DQN-driven runs added (later session, additive, per instruction):**
+the S1/S2 `StaticThresholdPolicy` runs above both saturate to 100%
+HYBRID (`SESSION_LOG.md`'s dated entry) -- root-caused to the demo's own
+baseline policy (`StaticThresholdPolicy.act` serves HYBRID whenever
+`pool_fill > 0.5` and HYBRID is legal; real `pool_fill` never drops
+below ~0.70 in either episode), not just the placeholder-forecaster
+posture ratchet. Investigated as a read-only question first (never
+assumed): does swapping in a trained masked-DQN checkpoint --
+`checkpoints/dqn_s1.pt` (trained on S1) for the S1 run,
+`checkpoints/dqn_s2.pt` (trained on S2, the S5 dose-response sweep's own
+checkpoint) for the S2 run -- produce genuine tier variety through this
+exact same real episode machinery? Real result, verified across seeds
+0-3: **yes** -- S1: `{HYBRID: 83, PQC: 167}`; S2: `{CLASSICAL: 6, HYBRID:
+163, PQC: 81}` (seed 0, 250 real decisions each; see SESSION_LOG.md's
+dated entry for the full multi-seed table). `_load_masked_policy`
+mirrors `render_migration_wave_demo.py::_load_masked_policy` /
+`render_results_demo.py::_load_greedy_policy` exactly (same established
+reload pattern -- reconstruct `DQNAgent` from the real config's own
+`state_dim`/`has_forecast`, load the checkpoint, wrap in
+`GreedyDQNPolicy`, eval only, no training call). `collect_real_episode`
+gained an optional `policy` param (default `None` preserves the
+original `StaticThresholdPolicy(0.5)` behavior byte-for-byte for every
+pre-existing call site) so the DQN runs reuse the identical episode
+construction, tenant graph, and renderer -- only the policy differs.
+Writes `dashboard/samples/living_system_s1_dqn_*.html` /
+`living_system_s2_dqn_*.html`, additive alongside (never replacing) the
+existing `StaticThresholdPolicy`-driven samples, which remain committed
+and honestly document the real, if saturated, finding in their own
+right.
+
 Run directly: `python -m dashboard.render_living_system_demo`.
 """
 
@@ -94,7 +124,8 @@ from pathlib import Path
 
 import numpy as np
 
-from agents.baselines import StaticThresholdPolicy
+from agents.baselines import Policy, StaticThresholdPolicy
+from agents.dqn import DQNAgent, flatten_state, load_dqn_config
 from dashboard.render_living_system import (
     LivingSystemSnapshot,
     RecentDecisionView,
@@ -104,10 +135,11 @@ from dashboard.render_living_system import (
 from env.contracts import Action, SensitivityClass, ThreatPosture
 from env.environment import SmartKeyNetEnv
 from env.request_generator import RequestGenerator, build_tenant_graph
-from experiments.train import load_full_config
+from experiments.train import GreedyDQNPolicy, load_full_config
 
-_S2_CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "scenarios" / "s2_hndl.yaml"
-_S1_CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "default.yaml"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_S2_CONFIG_PATH = _REPO_ROOT / "configs" / "scenarios" / "s2_hndl.yaml"
+_S1_CONFIG_PATH = _REPO_ROOT / "configs" / "default.yaml"
 """`configs/default.yaml` sets `scenario: S1` and carries no
 `threat_schedule` block -- the real steady/calm-traffic scenario, read
 through the exact same `load_full_config` + `SmartKeyNetEnv` path as
@@ -115,6 +147,16 @@ S2, per `env/environment.py`'s own scenario dispatch (design decision
 10: `self._threat_schedule_cfg` is only ever populated when `self.
 _scenario == "S2"`)."""
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
+
+_CHECKPOINTS_DIR = _REPO_ROOT / "checkpoints"
+_DQN_S1_CHECKPOINT_PATH = _CHECKPOINTS_DIR / "dqn_s1.pt"
+"""Masked DQN trained on real S1 (`configs/default.yaml`, Gate W3
+session) -- same checkpoint `render_migration_wave_demo.py` reloads for
+its own S1-trained-agent-on-S6 held-out eval."""
+_DQN_S2_CHECKPOINT_PATH = _CHECKPOINTS_DIR / "dqn_s2.pt"
+"""Masked DQN trained on real S2 (`configs/scenarios/s2_hndl.yaml`, the
+S5 dose-response sweep session) -- same checkpoint `render_results_demo.
+py::collect_real_dose_response` reloads."""
 
 _TENANT_GRAPH_SEED = 7
 """Dedicated structural seed for the tenant graph, deliberately decoupled
@@ -133,17 +175,39 @@ class _CollectedEpisode:
     hub_id: str
 
 
+def _load_masked_policy(config: dict, checkpoint_path: Path) -> GreedyDQNPolicy:
+    """Reconstruct a `DQNAgent` with this config's own `state_dim`/
+    `has_forecast` and load real, already-trained checkpoint weights --
+    mirrors `render_migration_wave_demo.py::_load_masked_policy` /
+    `render_results_demo.py::_load_greedy_policy` exactly (same
+    established pattern, not a new one). Eval only -- no training call
+    anywhere in this module."""
+    has_forecast = config.get("use_foresight", "off") != "off"
+    env = SmartKeyNetEnv({**config, "seed": 0})
+    state, _info = env.reset(seed=0)
+    state_dim = flatten_state(state, has_forecast).shape[0]
+    agent = DQNAgent(state_dim=state_dim, has_forecast=has_forecast, config=load_dqn_config())
+    agent.load(str(checkpoint_path))
+    return GreedyDQNPolicy(agent)
+
+
 def collect_real_episode(
-    seed: int = 0, max_steps: int = 250, scenario_config_path: Path = _S2_CONFIG_PATH
+    seed: int = 0,
+    max_steps: int = 250,
+    scenario_config_path: Path = _S2_CONFIG_PATH,
+    policy: Policy | None = None,
 ) -> _CollectedEpisode:
     """Step a real episode (S2 by default; pass `scenario_config_path=
-    _S1_CONFIG_PATH` for S1) under `StaticThresholdPolicy(0.5)`,
-    collecting one real `RecentDecisionView` per decision (tenant,
-    service, action, and the real served tier `SmartKeyNetEnv.
-    _resulting_key_type` resolves it to -- the exact same ground-truth
-    function `_apply_action` itself uses, never re-derived by hand),
-    plus the real `pool_fill`/resolved-posture pair in effect for that
-    decision, parallel-indexed to `decisions`.
+    _S1_CONFIG_PATH` for S1) under `policy` (default `None` builds the
+    original `StaticThresholdPolicy(0.5)` -- byte-identical behavior to
+    every pre-existing call site; pass a `GreedyDQNPolicy` from
+    `_load_masked_policy` to drive the same real episode with a trained
+    masked DQN instead), collecting one real `RecentDecisionView` per
+    decision (tenant, service, action, and the real served tier
+    `SmartKeyNetEnv._resulting_key_type` resolves it to -- the exact
+    same ground-truth function `_apply_action` itself uses, never
+    re-derived by hand), plus the real `pool_fill`/resolved-posture pair
+    in effect for that decision, parallel-indexed to `decisions`.
 
     Reaches into `env._current_request`/`env._sessions`/
     `env._resulting_key_type`/`env._forecaster` -- the same established
@@ -166,7 +230,8 @@ def collect_real_episode(
         request_stream_factory=lambda s: iter(RequestGenerator(graph, seed=s)),
     )
     state, info = env.reset(seed=seed)
-    policy = StaticThresholdPolicy(pool_fill_threshold=0.5)
+    if policy is None:
+        policy = StaticThresholdPolicy(pool_fill_threshold=0.5)
 
     decisions: list[RecentDecisionView] = []
     pool_fill_by_index: list[float] = []
@@ -297,6 +362,27 @@ def _tier_distribution(episode: _CollectedEpisode) -> Counter[str]:
     return Counter(decision.served_tier.name for decision in episode.decisions)
 
 
+def _write_snapshots_guarded(episode: _CollectedEpisode, *, prefix: str, pre_existing_html: set[str]) -> None:
+    """Same collision guard `main()`'s original S1 addition established
+    (per that session's own docstring: "must never silently overwrite a
+    pre-existing dashboard/samples/ file this run didn't itself just
+    (re)write") -- refuse to write any filename this `prefix` would
+    produce if a file of that exact name already existed AND was not
+    itself a prior output of this same `prefix` (i.e. re-running this
+    driver to regenerate its own previously-committed samples is fine
+    and idempotent; silently clobbering some OTHER panel's/prefix's file
+    of the same name is what the guard exists to catch)."""
+    picks = pick_snapshot_indices(episode, prefix=prefix)
+    external_pre_existing = {f for f in pre_existing_html if not f.startswith(f"{prefix}_")}
+    for name in picks:
+        filename = f"{name}.html"
+        assert filename not in external_pre_existing, (
+            f"refusing to write {filename} -- it collides with a pre-existing "
+            f"dashboard/samples/ file not produced by this {prefix} run"
+        )
+    _write_snapshots(episode, prefix=prefix)
+
+
 def main() -> None:
     _SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
     pre_existing_html = {p.name for p in _SAMPLES_DIR.glob("*.html")}
@@ -305,18 +391,7 @@ def main() -> None:
     _write_snapshots(s2_episode, prefix="living_system")
 
     s1_episode = collect_real_episode(scenario_config_path=_S1_CONFIG_PATH)
-    s1_picks = pick_snapshot_indices(s1_episode, prefix="living_system_s1")
-    for name in s1_picks:
-        filename = f"{name}.html"
-        # Collision guard (explicit per instruction): the S1 run is
-        # additive -- it must never silently overwrite a pre-existing
-        # dashboard/samples/ file this run didn't itself just (re)write
-        # (e.g. the S2 files above, or any other panel's samples).
-        assert filename not in pre_existing_html, (
-            f"refusing to write {filename} -- it collides with a pre-existing "
-            "dashboard/samples/ file not produced by this S1 run"
-        )
-    _write_snapshots(s1_episode, prefix="living_system_s1")
+    _write_snapshots_guarded(s1_episode, prefix="living_system_s1", pre_existing_html=pre_existing_html)
 
     s1_tiers = _tier_distribution(s1_episode)
     s2_tiers = _tier_distribution(s2_episode)
@@ -327,6 +402,39 @@ def main() -> None:
     print(
         f"Real tier distribution -- S2 (elevated HNDL), "
         f"{len(s2_episode.decisions)} decisions: {dict(sorted(s2_tiers.items()))}"
+    )
+
+    # --- DQN-driven runs (additive investigation, see SESSION_LOG.md) ---
+    # StaticThresholdPolicy saturates to 100% HYBRID on both S1 and S2
+    # (above) because it serves HYBRID whenever pool_fill > 0.5 and
+    # pool_fill never drops that low here. Swapping in a trained masked
+    # DQN checkpoint -- same real episode machinery, same tenant graph,
+    # same rendering -- was investigated and found to produce genuine
+    # tier variety (see this module's own docstring / SESSION_LOG.md for
+    # the full before/after numbers), so these two runs are additive
+    # samples alongside the StaticThresholdPolicy ones above, never a
+    # replacement for them.
+    s1_dqn_config = load_full_config(_S1_CONFIG_PATH)
+    s1_dqn_config["max_steps"] = 250
+    s1_dqn_policy = _load_masked_policy(s1_dqn_config, _DQN_S1_CHECKPOINT_PATH)
+    s1_dqn_episode = collect_real_episode(scenario_config_path=_S1_CONFIG_PATH, policy=s1_dqn_policy)
+    _write_snapshots_guarded(s1_dqn_episode, prefix="living_system_s1_dqn", pre_existing_html=pre_existing_html)
+
+    s2_dqn_config = load_full_config(_S2_CONFIG_PATH)
+    s2_dqn_config["max_steps"] = 250
+    s2_dqn_policy = _load_masked_policy(s2_dqn_config, _DQN_S2_CHECKPOINT_PATH)
+    s2_dqn_episode = collect_real_episode(scenario_config_path=_S2_CONFIG_PATH, policy=s2_dqn_policy)
+    _write_snapshots_guarded(s2_dqn_episode, prefix="living_system_s2_dqn", pre_existing_html=pre_existing_html)
+
+    s1_dqn_tiers = _tier_distribution(s1_dqn_episode)
+    s2_dqn_tiers = _tier_distribution(s2_dqn_episode)
+    print(
+        f"\nReal tier distribution -- S1, trained DQN (checkpoints/dqn_s1.pt), "
+        f"{len(s1_dqn_episode.decisions)} decisions: {dict(sorted(s1_dqn_tiers.items()))}"
+    )
+    print(
+        f"Real tier distribution -- S2, trained DQN (checkpoints/dqn_s2.pt), "
+        f"{len(s2_dqn_episode.decisions)} decisions: {dict(sorted(s2_dqn_tiers.items()))}"
     )
 
 

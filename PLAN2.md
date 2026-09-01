@@ -310,33 +310,51 @@ phases, each a separate session:
    tests, full suite 688 passed/1 xfailed. Zero changes to
    `env/forecast_provider.py`/`env/environment.py` (verified via
    `git diff --stat`).
-2. **Build and train the dual-head LSTM model** — not started.
-   `forecaster/model.py::SmartKeyForecaster` (threat head + pool head)
-   and `forecaster/train.py` remain real `NotImplementedError` stubs.
-   Will need to decide how Phase 1's RT-IoT2022-direct windowed output
-   relates to `forecaster/dataset.py`'s separate rollout-log-based
-   `RolloutWindowDataset` design (PLAN.md Addition A's original spec:
-   the pool head trains on logged environment rollouts; the threat
-   head's real-data source is Phase 1's output).
-3. **Validate the trained model** — not started. Per-class F1 (never
-   accuracy, given Phase 1's real measured class imbalance); confirm
-   it isn't a degenerate always-predict-majority shortcut.
-4. **Wire it in via `LSTMForecastProvider` and re-run the FULL
-   experimental campaign** — not started. Gate W3 on S1+S3, the
-   masked-vs-soft-reward S3 comparison, the full 11-point dose-response
-   sweep, all six dashboard panels, and the paper's Table V — since
-   every existing result was measured against the placeholder
-   forecaster and does not transfer automatically to a real one. This
-   is a later, separate, deliberate session per the project owner's
-   own instruction — never bundled into the same session as Phases 2-3.
+2. **Build and train the LSTM model — DONE 2026-09-01, threat-head-only
+   (scope decision, see below).** `forecaster/model.py::SmartKeyForecaster`
+   is now a real LSTM encoder + single threat head, trained by the new
+   `forecaster/train_threat_lstm.py` (kept separate from
+   `forecaster/train.py`, which remains a real `NotImplementedError`
+   stub). **Scope decision, made explicitly rather than silently
+   narrowed**: RT-IoT2022 carries no QKD pool telemetry
+   (`qber`/`skr`/`pool_fill`) to supervise a pool head from — that needs
+   logged `SmartKeyNetEnv` rollouts (PLAN.md Addition A's original
+   spec), a separate, not-yet-collected data source.
+   `forecaster/dataset.py::RolloutWindowDataset` remains the intended
+   future home for that, still a real stub. `LSTMForecastProvider.
+   get_pool_forecast()` delegates to a composed `MovingAverageForecaster`
+   instance verbatim in the meantime (reuse, not fabrication).
+3. **Validate the trained model — DONE 2026-09-01.** Real per-class
+   precision/recall/F1 on a leakage-free held-out split (benign
+   precision 0.951/recall 1.000/F1 0.975; attack precision 1.000/
+   recall 0.994/F1 0.997; macro-F1 0.986), confirmed non-degenerate via
+   both the training report's own check and an independent diverse-
+   held-out-sample prediction-variance test.
+4. **Wire it in via `LSTMForecastProvider`** — **live sanity-check wire-in
+   DONE 2026-09-01** (injected via the pre-existing
+   `forecast_provider_factory` seam, zero `env/environment.py` edits; 3
+   real episodes, zero crashes, genuine threat_score/floor variance —
+   see PROGRESS.md/SESSION_LOG.md's 2026-09-01 entries for full
+   numbers). **Re-running the FULL experimental campaign remains NOT
+   started** — Gate W3 on S1+S3, the masked-vs-soft-reward S3
+   comparison, the full 11-point dose-response sweep, all six dashboard
+   panels, and the paper's Table V — since every existing result was
+   measured against the placeholder forecaster and does not transfer
+   automatically to a real one. This is a later, separate, deliberate
+   session per the project owner's own instruction — never bundled into
+   the same session as Phases 2-3. It also requires wiring
+   `use_foresight: lstm` into `env/environment.py::_build_forecaster()`'s
+   existing stub branch, intentionally deferred (an `env/environment.py`
+   edit, out of the 2026-09-01 session's scope).
 
-**Until Phase 4 (wire-in + full re-validation) is complete, the
+**Until the full campaign re-validation above is complete, the
 `MovingAverageForecaster` placeholder remains the system's active,
-authoritative forecaster, and every existing experimental result in
-this document and the paper remains a valid, current measurement of
-the system as it stands. Phase 4 will require re-running the full
-experimental campaign, since results measured under the placeholder do
-not transfer to results under a real forecaster.**
+authoritative forecaster for every existing experimental result, and
+every existing result in this document and the paper remains a valid,
+current measurement of the system as it stands. That re-validation will
+require re-running the full experimental campaign, since results
+measured under the placeholder do not transfer to results under a real
+forecaster.**
 
 ---
 
