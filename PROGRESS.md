@@ -11,6 +11,149 @@
 
 ## Next task
 
+**RT-IoT2022 replay wiring — real held-out replay provider built,
+Step-4-verified to genuinely differentiate on real input, and run
+through a real, meaningful multi-episode campaign — DONE 2026-09-02.**
+Closes the gap the Addition E Phase 4a session's own docstring flagged
+explicitly: that session's live sanity check fed the trained LSTM the
+synthetic 2-dim `[qber, load]` placeholder (zero-padded to
+`feature_dim=39`), proving the WIRING works, not that the model
+consumes real, trained-on-shaped input. Scope held throughout: no true
+live packet capture (Hard Rule 11, permanently out of scope — this is
+replay of already-extracted RT-IoT2022 rows), no `env/masking.py`/
+`env/environment.py`/reward/action-space/DQN-checkpoint changes, no
+LSTM retraining/architecture change, no floor-table changes — verified
+via `git diff --stat` showing zero changes to any of `env/`,
+`agents/dqn.py`, `configs/scenarios/*.yaml`, `forecaster/model.py`,
+`forecaster/train_threat_lstm.py`, or `forecaster/rt_iot_features.py`.
+
+**Step 1 — held-out split reused (not re-derived), disjointness
+re-verified directly:** `forecaster/rt_iot_replay.py::held_out_replay_rows()`
+calls `train_threat_lstm.py`'s own `leakage_free_split()` +
+`assert_no_row_overlap()` unchanged — the exact split that produced the
+committed checkpoint's real val metrics (benign recall 1.000, attack
+recall 0.994). Real counts, measured this session: **3,073 train
+windows / 768 val windows** (unchanged from the training session).
+Converted to raw-row spans for replay: the val windows collapse to
+exactly **two contiguous real raw-row spans** (RT-IoT2022 has no
+interleaving between labels) — **2,496 benign rows** (raw rows
+9,984-12,480) and **22,144 attack rows** (raw rows 100,960-123,104),
+**24,640 real held-out rows total available for live replay**, none
+overlapping any train row (`assert_no_row_overlap` re-run and passing).
+
+**Step 2 — `RTIoT2022ReplayProvider`, a drop-in `ForecastProvider`:**
+`forecaster/rt_iot_replay.py::RTIoT2022ReplayProvider` subclasses
+`LSTMForecastProvider` (not a redesign — reuses its model loading,
+`_prepare_step_features` scaler application, and window buffer
+verbatim) and overrides only `update()`: pool telemetry
+(`qber`/`skr`/`pool_fill`, real from `pool_sim`) still flows through
+the inherited EWMA pool head unchanged, but instead of consuming
+`observation["threat_features"]` (still the synthetic placeholder —
+`env/environment.py` untouched), it pulls the next real held-out raw
+row (real chronological order preserved) from an internal replay
+stream. Injected purely via the existing `forecast_provider_factory`
+seam (design decision 17) — zero `env/environment.py` edits, same
+pattern Phase 4a and `attack/attacking_provider.py` already use. A
+strict shape guard (`ValueError` if `replay_features` width !=
+`feature_dim`) refuses to silently truncate/zero-pad real data to fit
+— the exact failure mode Phase 4a's placeholder-fed check could not
+have caught.
+
+**Step 3 — pool-head decision re-confirmed, not re-litigated:** pool
+forecasting stays on the inherited `MovingAverageForecaster` EWMA
+(reusing real pool telemetry the env already provides) — only the
+threat-input side is replaced. No fabricated pool data.
+
+**Step 4 — the real differentiation test, and it passes cleanly:**
+Two fresh providers, each fed 64 real consecutive held-out rows (one
+genuinely benign, one genuinely attack) via 64 `update()` calls:
+**benign threat_score = 0.0602, attack threat_score = 0.9726** — a
+huge, unmistakable real separation (re-confirmed at a second real
+offset into each span, gap still > 0.3), consistent with the
+checkpoint's own near-perfect val separation. 9 new tests in
+`tests/test_rt_iot_replay.py`: real held-out counts/disjointness, the
+shape-mismatch guard, an empty-input guard, a real-row-not-zero-padded
+buffer-content check (compares buffered entries directly against
+`_prepare_step_features` applied to the known real row — would fail on
+silent truncation/padding), a wraparound-not-fabrication check, a
+`start_offset` real-slice-selection check, and the two real
+differentiation tests above.
+
+**Step 5 — a real, meaningful campaign (not 2-3 episodes), run and
+reported honestly:** `forecaster/replay_campaign.py` ran **15 episodes
+per class x 60 steps = 900 decisions/class (1,800 total)**, S1 config,
+`StaticThresholdPolicy`, each seed given a different `start_offset`
+into the real held-out span (not the same 64 rows repeated 15 times).
+Benign-only and attack-only streams run separately, not artificially
+interleaved — RT-IoT2022 itself has no interleaved ground truth to
+replay (each `Attack_type` is one contiguous raw-row block), so
+reporting the two classes separately is the honest choice, not a
+simplification.
+
+Real results: **benign** — floor `{SERVE_HYBRID: 442 (49.1%),
+SERVE_PQC: 446 (49.6%), SERVE_CLASSICAL: 12 (1.3%)}`, threat_score mean
+0.1124 (min 0.0554, max 0.9255). **attack** — floor `{SERVE_HYBRID: 458
+(50.9%), SERVE_PQC: 442 (49.1%), SERVE_CLASSICAL: 0}`, threat_score
+mean 0.9746 (min 0.9676, max 0.9758).
+
+**Central real finding, reported plainly, not tuned away (Hard Rule
+7) — and it is NOT the 90/10-imbalance saturation the session brief
+anticipated; it's a different, real, previously-invisible artifact:**
+at the very first decision of every episode, the (pre-existing,
+Phase-4a-built, untouched-this-session) buffer holds only **1** real
+row — 63 zero-padded — because `LSTMForecastProvider` was only ever
+trained on full 64-row real windows, a near-all-zero window reads as
+spuriously elevated-threat **regardless of the true replayed class**:
+measured step-0 mean threat_score is 0.9221 for *benign* episodes and
+0.9723 for *attack* episodes — both high. Because Hard Rule 2's floor
+ratchet only ever raises, this transient artifact locks an elevated
+floor in for much of a genuinely benign episode's remainder, even
+though the real post-warmup benign signal (decision ≥5 onward) is
+correctly low: mean 0.0795 (max 0.3067) vs. attack's post-warmup mean
+0.9746 (min 0.9676) — a clean, sharp real separation once the buffer
+actually holds real data. This is WHY the benign and attack floor
+distributions above look so similar (~49/51 HYBRID/PQC split for both)
+despite the two classes' true post-warmup threat_score being almost
+perfectly separated — the cold-start spike, not the underlying signal,
+is doing a lot of the floor-setting work. **Not fixed here** —
+deliberately out of this session's scope (a `forecaster/model.py`
+behavior change, not a replay-wiring task) — locked in as a permanent
+regression test
+(`tests/test_rt_iot_replay_live_episodes.py::test_cold_start_zero_padding_causes_a_real_transient_spike_regardless_of_replayed_class`)
+so a future session can see exactly what changes if it's addressed.
+
+**Honest overall verdict on this session's original question ("is the
+forecaster now genuinely network-data-driven end to end?"): partially,
+not fully.** Step 4 proves the model itself responds correctly and
+strongly to real, correctly-shaped RT-IoT2022 input — that gap is
+closed. Step 5 proves a real replay-driven episode runs end-to-end
+with sensible, class-conditioned floor/posture behavior (modulo the
+cold-start caveat above). But the injection point is still a bespoke,
+provider-level replay stream (`RTIoT2022ReplayProvider` pulling
+directly from a held-out row array) constructed for this session, not
+`env/environment.py`'s own live tick-by-tick feature-ingestion path —
+`_threat_features_placeholder` is still what an ordinary (non-replay-
+injected) episode sees. Genuine live/replayed-pcap ingestion through
+the environment's own per-tick path is still Addition F's explicit
+job, sequenced next per PLAN2.md §8B.
+
+**Tests:** 9 new in `tests/test_rt_iot_replay.py`, 2 new in
+`tests/test_rt_iot_replay_live_episodes.py` (the live class-conditioned
+variance check + the cold-start regression test above). **Full suite:
+729 passed, 1 xfailed** (718 prior + 11 new).
+
+**Next task:** Addition F (pcap/replay wired into `env/environment.py`'s
+own live tick path, per PLAN2.md §8B) is the natural next step and
+would also settle whether to address the cold-start buffer-fill
+artifact found this session before or alongside that work. Phase 4b
+(the full Gate W3/S3/S5/dashboard/Table V campaign under the real
+forecaster) remains a separate, not-yet-started option — either is
+reasonable to pick up next; the cold-start finding above should be read
+first either way, since it affects how any LSTM-driven campaign's early
+episode steps should be interpreted.
+
+---
+
 **Addition E, Phases 2-4 — real LSTM threat forecaster: trained, validated
 non-degenerate, and wired in for a live sanity check — DONE 2026-09-01.**
 Builds on Phase 1 (below, unmodified this session — verified via
