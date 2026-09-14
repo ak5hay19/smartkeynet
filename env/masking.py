@@ -12,6 +12,7 @@ this module must never accept a signal path that could lower one.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -44,36 +45,38 @@ def load_key_lifetime_config(path: str | Path | None = None) -> dict[str, float]
 
 
 # ---------------------------------------------------------------------------
-# Placeholder (class x posture) -> floor table (Hard Rule 4: citable
-# artifacts only, no invented constants). Q-OPSEC's `synthetic_context_dataset`
-# calibration (PLAN.md "Datasets & Provenance" -> "Policy-table
-# calibration" row) hasn't happened yet -- that's Person A's future
-# job -- so this is a documented placeholder, not a final table.
+# (class x posture) -> floor table.
 #
-# Grounding (no numeric thresholds invented -- only relative ordering,
-# which is what's citable at placeholder stage):
-#   - SERVE_CLASSICAL (T0, X25519/AES-256-GCM): floor for data with no
-#     confidentiality exposure to Harvest-Now-Decrypt-Later (S0 public/
-#     non-sensitive telemetry) under CALM/ELEVATED posture.
-#   - SERVE_PQC (T1, ML-KEM-768, NIST PGC Category 3): the default
-#     floor once either the data has any real confidentiality need
-#     (S1+) or the posture is HIGH -- PQC is the "free" workhorse
-#     (PLAN.md), so raising this floor costs nothing but interop
-#     with non-PQC-capable legacy endpoints (handled by `pqc_capable`
-#     at the request-generator level, not here).
-#   - SERVE_HYBRID (T2/T3, ML-KEM-768 XOR QKD via HKDF): reserved for
-#     where CNSA 2.0 / SP 800-57's "protect highest-sensitivity data
-#     soonest, longest-lived data strongest" posture and ETSI GS QKD
-#     014-delivered key material are actually warranted -- long-lived,
-#     highly regulated data (S2/S3) once threat posture is elevated,
-#     and S3 (patient-record-grade, decades-long lifetime) even before
-#     any threat elevation, per instruction: never below SERVE_PQC at
-#     CALM, escalating to SERVE_HYBRID under ELEVATED/HIGH.
+# RECALIBRATED 2026-09-14 (prior placeholder values replaced with values
+# grounded in real, citable standards -- a capstone review had flagged
+# the previous cell values as arbitrary/hardcoded with no justification).
+# The table's STRUCTURE (this dict shape, the lookup mechanism in
+# `PolicyTable.floor` below, and the monotonicity guarantee) is
+# unchanged by this recalibration -- only the 12 cell values and their
+# documentation changed. Full per-cell reasoning lives in
+# `_FLOOR_TABLE_CALIBRATION` immediately below this dict (one entry per
+# cell, each explicitly labeled "citation_with_judgment", "citation", or
+# "judgment" -- see that dict's own docstring) and in PROGRESS.md's
+# 2026-09-14 session entry (before/after table + full writeup).
 #
-# The one invariant that isn't a placeholder and must never regress:
-# floor is monotonically non-decreasing in both sensitivity_class and
-# threat_posture (verified by `PolicyTable.floor`'s docstring contract
-# and covered by tests/test_masking.py's monotonicity tests).
+# Honesty note, load-bearing for how to read `_FLOOR_TABLE_CALIBRATION`:
+# none of the four standards cited anywhere in this module (NIST FIPS
+# 203; NIST SP 800-57 Part 1 Rev. 5; NSA/CNSA 2.0; ETSI GS QKD 014
+# V1.1.1) literally defines a 4-sensitivity-class x 3-posture -> tier
+# grid -- that structure is this project's own design. A citation
+# attached to a cell means "this standard directly dictates or strongly
+# implies this cell's specific value"; most cells instead carry a
+# "judgment" label, meaning "a defensible engineering choice informed
+# by, but not required by, the cited standard(s)." Both labels are
+# honest outcomes here -- do not read a "judgment" label as a defect.
+#
+# Only ONE cell's VALUE actually changed in this recalibration:
+# (S3, CALM): SERVE_PQC -> SERVE_HYBRID (see that cell's
+# "citation_with_judgment" entry below for the full CNSA 2.0-grounded
+# reasoning). Every other cell's value is unchanged from the prior
+# placeholder -- re-examined against the four standards and found to
+# already be a defensible engineering judgment, not in need of a
+# numeric change, just honest labeling.
 _PLACEHOLDER_FLOOR_TABLE: dict[tuple[SensitivityClass, ThreatPosture], Action] = {
     (SensitivityClass.S0, ThreatPosture.CALM): Action.SERVE_CLASSICAL,
     (SensitivityClass.S0, ThreatPosture.ELEVATED): Action.SERVE_CLASSICAL,
@@ -84,21 +87,184 @@ _PLACEHOLDER_FLOOR_TABLE: dict[tuple[SensitivityClass, ThreatPosture], Action] =
     (SensitivityClass.S2, ThreatPosture.CALM): Action.SERVE_PQC,
     (SensitivityClass.S2, ThreatPosture.ELEVATED): Action.SERVE_PQC,
     (SensitivityClass.S2, ThreatPosture.HIGH): Action.SERVE_HYBRID,
-    (SensitivityClass.S3, ThreatPosture.CALM): Action.SERVE_PQC,
+    (SensitivityClass.S3, ThreatPosture.CALM): Action.SERVE_HYBRID,
     (SensitivityClass.S3, ThreatPosture.ELEVATED): Action.SERVE_HYBRID,
     (SensitivityClass.S3, ThreatPosture.HIGH): Action.SERVE_HYBRID,
+}
+
+
+@dataclass(frozen=True)
+class FloorCalibrationBasis:
+    """One `_PLACEHOLDER_FLOOR_TABLE` cell's calibration justification.
+
+    `kind` is one of:
+      - `"citation"`: a named standard directly dictates or strongly
+        implies this exact cell value.
+      - `"judgment"`: a defensible engineering choice informed by, but
+        not required by, any of the four standards this module cites
+        -- labeled as such plainly rather than forcing a citation that
+        wouldn't hold up if someone read the source.
+      - `"citation_with_judgment"`: part of the value traces directly
+        to a cited standard and part is an additional engineering
+        choice layered on top -- `reasoning` spells out exactly where
+        the citation's support ends, so the two aren't blurred
+        together as if the standard mandated the whole value.
+
+    `reasoning` must name the specific standard(s) precisely (title +
+    date, no loose paraphrasing) whenever `kind != "judgment"`.
+    """
+
+    kind: str
+    reasoning: str
+
+
+# Per-cell calibration record (2026-09-14 recalibration session). Every
+# one of the 12 real `_PLACEHOLDER_FLOOR_TABLE` keys must appear here
+# exactly once -- enforced directly by
+# tests/test_masking.py::test_floor_table_calibration_covers_every_real_cell_exactly,
+# so a future edit to either dict without updating the other fails
+# loudly instead of silently drifting out of sync.
+_FLOOR_TABLE_CALIBRATION: dict[tuple[SensitivityClass, ThreatPosture], FloorCalibrationBasis] = {
+    (SensitivityClass.S0, ThreatPosture.CALM): FloorCalibrationBasis(
+        kind="judgment",
+        reasoning=(
+            "S0 is public/non-sensitive telemetry (env/contracts.py::SensitivityClass) with no "
+            "Harvest-Now-Decrypt-Later-relevant confidentiality exposure. None of the four standards "
+            "this module cites (NIST FIPS 203; NIST SP 800-57 Part 1 Rev. 5; NSA/CNSA 2.0; ETSI GS "
+            "QKD 014 V1.1.1) impose a protection floor on data with no confidentiality value to "
+            "protect -- SERVE_CLASSICAL absent any detected threat is a design default, not "
+            "something any of them require."
+        ),
+    ),
+    (SensitivityClass.S0, ThreatPosture.ELEVATED): FloorCalibrationBasis(
+        kind="judgment",
+        reasoning=(
+            "Same reasoning as (S0, CALM): an ELEVATED-but-not-HIGH signal doesn't create "
+            "confidentiality exposure S0 didn't already lack. Held at SERVE_CLASSICAL by the same "
+            "design choice, not escalated a step early."
+        ),
+    ),
+    (SensitivityClass.S0, ThreatPosture.HIGH): FloorCalibrationBasis(
+        kind="judgment",
+        reasoning=(
+            "Explicitly NOT standards-required -- S0 has no confidentiality exposure for any of the "
+            "four cited standards to protect, at any posture. Stepping to SERVE_PQC only at the "
+            "highest discrete threat posture is a deliberate, low-cost engineering choice (SERVE_PQC "
+            "is this codebase's 'free' workhorse tier -- no pool draw, no legacy-interop cost beyond "
+            "what request-generator-level `pqc_capable` already handles) to reduce the diversity of "
+            "still-classical-only crypto pathways while the system-wide threat signal is at its worst "
+            "-- operational defense-in-depth, not a confidentiality requirement."
+        ),
+    ),
+    (SensitivityClass.S1, ThreatPosture.CALM): FloorCalibrationBasis(
+        kind="judgment",
+        reasoning=(
+            "S1 is routine business data (env/contracts.py::SensitivityClass) with no acute HNDL "
+            "exposure. NIST SP 800-57 Part 1 Rev. 5's general graduated-protection posture (protection "
+            "intensity should track data sensitivity and expected lifetime) is consistent with leaving "
+            "S1 at SERVE_CLASSICAL absent any detected threat, but SP 800-57 does not name this "
+            "project's sensitivity classes or dictate this specific boundary -- informed by, not "
+            "required by, that standard."
+        ),
+    ),
+    (SensitivityClass.S1, ThreatPosture.ELEVATED): FloorCalibrationBasis(
+        kind="judgment",
+        reasoning=(
+            "Informed by NIST FIPS 203, \"Module-Lattice-Based Key-Encapsulation Mechanism Standard\" "
+            "(Aug 2024): FIPS 203 standardizes ML-KEM as a no-extra-cost quantum-resistant option "
+            "(this codebase's SERVE_PQC tier), so once any elevated threat signal is detected there is "
+            "no reason to keep serving S1 on a classically-secure-only scheme. FIPS 203 defines the "
+            "algorithm and its security categories; it does not itself say *when* a system should "
+            "invoke it -- the escalation trigger (posture >= ELEVATED) is this project's judgment."
+        ),
+    ),
+    (SensitivityClass.S1, ThreatPosture.HIGH): FloorCalibrationBasis(
+        kind="judgment",
+        reasoning=(
+            "Capped at SERVE_PQC even at HIGH: S1 does not carry the long-lived/regulated exposure "
+            "that NIST SP 800-57 Part 1 Rev. 5's cryptoperiod-by-sensitivity framing associates with "
+            "needing the strongest available tier. Escalating S1 all the way to SERVE_HYBRID at any "
+            "posture is not grounded in any of the four cited standards, so it deliberately isn't done "
+            "here -- an engineering judgment about where to cap this class, not a citation."
+        ),
+    ),
+    (SensitivityClass.S2, ThreatPosture.CALM): FloorCalibrationBasis(
+        kind="judgment",
+        reasoning=(
+            "S2 is regulated/financial data (env/contracts.py::SensitivityClass). NIST SP 800-57 Part "
+            "1 Rev. 5's general risk-graduated protection posture (higher-impact data warrants "
+            "stronger controls) supports defaulting S2 to SERVE_PQC even absent a detected threat -- "
+            "but SP 800-57 does not name 'regulated/financial data' as a class or mandate SERVE_PQC "
+            "specifically for it, so this is engineering judgment informed by, not dictated by, that "
+            "standard."
+        ),
+    ),
+    (SensitivityClass.S2, ThreatPosture.ELEVATED): FloorCalibrationBasis(
+        kind="judgment",
+        reasoning="Same basis as (S2, CALM); already at the SERVE_PQC floor, so ELEVATED changes nothing.",
+    ),
+    (SensitivityClass.S2, ThreatPosture.HIGH): FloorCalibrationBasis(
+        kind="judgment",
+        reasoning=(
+            "Informed by NIST SP 800-57 Part 1 Rev. 5's graduated-response posture and ETSI GS QKD "
+            "014 V1.1.1 (Feb 2019, the QKD key-delivery API spec -- establishes what a 'QKD-backed' "
+            "SERVE_HYBRID tier assumes technically). Under a confirmed HIGH threat signal, the "
+            "second-most-sensitive class escalates to this system's strongest tier -- consistent with "
+            "SP 800-57's escalation philosophy, not a literal requirement of it or of ETSI GS QKD 014."
+        ),
+    ),
+    (SensitivityClass.S3, ThreatPosture.CALM): FloorCalibrationBasis(
+        kind="citation_with_judgment",
+        reasoning=(
+            "CHANGED this recalibration (was SERVE_PQC). Direct, strong basis: NSA/CNSA 2.0 "
+            "(\"Commercial National Security Algorithm Suite 2.0\", Sept 2022, updated Dec 2024) sets "
+            "a 2030 deadline for National Security Systems to be FULLY quantum-resistant. S3 is "
+            "patient-record-grade data with a decades-long confidentiality lifetime "
+            "(env/contracts.py::SensitivityClass) -- exactly the long-lived, high-value data that "
+            "CNSA 2.0's harvest-now-decrypt-later-driven urgency targets. That gives a strong, direct "
+            "basis for making S3's floor NOT depend on the currently observed threat posture at all: "
+            "gating the single highest-sensitivity class behind reactive threat detection would defeat "
+            "the entire preemptive point of a hard transition deadline, so the floor is set the same at "
+            "CALM as at HIGH rather than escalating gradually. Explicit judgment layered on top, "
+            "stated to avoid overclaiming: CNSA 2.0 itself only mandates quantum-resistance, which "
+            "SERVE_PQC alone already satisfies -- it does not mandate the additional QKD-derived "
+            "SERVE_HYBRID layer. That the unconditional floor is specifically SERVE_HYBRID (not "
+            "'merely' SERVE_PQC) is this project's own engineering judgment about how much margin the "
+            "top-sensitivity class deserves, not something CNSA 2.0 itself requires."
+        ),
+    ),
+    (SensitivityClass.S3, ThreatPosture.ELEVATED): FloorCalibrationBasis(
+        kind="citation_with_judgment",
+        reasoning=(
+            "Same value as before this recalibration. Same CNSA 2.0-grounded basis as (S3, CALM) -- "
+            "see that entry for the full reasoning and its explicit scope limit; S3 is already at its "
+            "unconditional SERVE_HYBRID floor, so ELEVATED changes nothing."
+        ),
+    ),
+    (SensitivityClass.S3, ThreatPosture.HIGH): FloorCalibrationBasis(
+        kind="citation_with_judgment",
+        reasoning=(
+            "Same value as before this recalibration. Same CNSA 2.0-grounded basis as (S3, CALM) -- "
+            "already at the unconditional SERVE_HYBRID floor, the system's strongest tier, so there is "
+            "no further cell to escalate to."
+        ),
+    ),
 }
 
 
 class PolicyTable:
     """Maps (sensitivity_class, threat_posture) -> minimum tier (`Action` floor).
 
-    Calibrated against Q-OPSEC's `synthetic_context_dataset` (PLAN.md
-    "Datasets & Provenance" -> "Policy-table calibration" row). Tiers
-    map only to citable artifacts (Hard Rule 4): NIST PQC categories,
-    SP 800-57, CNSA 2.0, BSI/ANSSI, ETSI GS QKD 014. The lookup table
-    itself is currently `_PLACEHOLDER_FLOOR_TABLE` above -- documented
-    placeholder, not the final calibrated mapping.
+    Recalibrated 2026-09-14 against four citable standards (NIST FIPS
+    203; NIST SP 800-57 Part 1 Rev. 5; NSA/CNSA 2.0; ETSI GS QKD 014
+    V1.1.1) -- see `_FLOOR_TABLE_CALIBRATION` above for the per-cell
+    citation-or-judgment reasoning and PROGRESS.md's 2026-09-14 entry
+    for the full before/after writeup. The lookup table itself is
+    `_PLACEHOLDER_FLOOR_TABLE` above; Q-OPSEC's `synthetic_context_dataset`
+    (PLAN.md "Datasets & Provenance" -> "Policy-table calibration" row)
+    still hasn't been folded in -- this recalibration is against public
+    standards, not that dataset, so the name is kept but this is no
+    longer an unjustified/arbitrary placeholder.
 
     `ratchet_up` interpretation (flagged in SESSION_LOG -- the stub's
     docstring establishes *that* threat signals may only raise floors,

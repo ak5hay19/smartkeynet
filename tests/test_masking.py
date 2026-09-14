@@ -9,7 +9,13 @@ from __future__ import annotations
 import itertools
 
 from env.contracts import Action, KeyType, N_ACTIONS, Request, SensitivityClass, ThreatPosture
-from env.masking import PolicyTable, compute_mask, load_key_lifetime_config
+from env.masking import (
+    _FLOOR_TABLE_CALIBRATION,
+    _PLACEHOLDER_FLOOR_TABLE,
+    PolicyTable,
+    compute_mask,
+    load_key_lifetime_config,
+)
 
 MAX_KEY_AGE = load_key_lifetime_config()["max_key_age_steps"]
 
@@ -224,6 +230,52 @@ def test_s3_never_floors_below_pqc():
 def test_s0_can_floor_at_classical_when_calm():
     table = PolicyTable()
     assert table.floor(SensitivityClass.S0, ThreatPosture.CALM) == Action.SERVE_CLASSICAL
+
+
+def test_s3_floors_at_hybrid_unconditionally_2026_09_14_recalibration():
+    """The one real value change from the 2026-09-14 recalibration
+    (see env/masking.py's `_FLOOR_TABLE_CALIBRATION`, CNSA 2.0-grounded
+    reasoning): S3 no longer gradates PQC (CALM) -> HYBRID (ELEVATED/
+    HIGH) -- it floors at SERVE_HYBRID unconditionally, at every
+    posture, since the top-sensitivity class's floor is not supposed to
+    depend on a transient, currently-observed threat signal."""
+    table = PolicyTable()
+    for posture in ThreatPosture:
+        assert table.floor(SensitivityClass.S3, posture) == Action.SERVE_HYBRID
+
+
+# ---------------------------------------------------------------------------
+# Floor table calibration -- every real cell must be labeled (2026-09-14)
+# ---------------------------------------------------------------------------
+
+
+def test_floor_table_calibration_covers_every_real_cell_exactly():
+    """No cell may be silently uncalibrated/forgotten -- the
+    calibration dict's keys must match the floor table's keys exactly
+    (not a superset or subset), and every entry must carry a real
+    citation-or-judgment label with non-empty reasoning."""
+    assert set(_FLOOR_TABLE_CALIBRATION.keys()) == set(_PLACEHOLDER_FLOOR_TABLE.keys())
+    assert len(_FLOOR_TABLE_CALIBRATION) == 12  # 4 sensitivity classes x 3 postures
+
+    for (sc, posture), basis in _FLOOR_TABLE_CALIBRATION.items():
+        assert basis.kind in ("citation", "judgment", "citation_with_judgment"), (
+            f"({sc.name}, {posture.name}) has an unrecognized calibration kind: {basis.kind!r}"
+        )
+        assert basis.reasoning.strip(), f"({sc.name}, {posture.name}) has empty reasoning"
+
+
+def test_floor_table_calibration_citations_name_a_real_standard():
+    """Every cell whose kind involves a citation must actually name one
+    of the four standards this recalibration is grounded in -- catches
+    a label saying "citation" with reasoning that doesn't really cite
+    anything."""
+    named_standards = ("FIPS 203", "SP 800-57", "CNSA 2.0", "ETSI GS QKD 014")
+    for (sc, posture), basis in _FLOOR_TABLE_CALIBRATION.items():
+        if basis.kind in ("citation", "citation_with_judgment"):
+            assert any(name in basis.reasoning for name in named_standards), (
+                f"({sc.name}, {posture.name}) is labeled {basis.kind!r} but its reasoning names none "
+                f"of {named_standards}"
+            )
 
 
 # ---------------------------------------------------------------------------

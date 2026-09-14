@@ -11,6 +11,116 @@
 
 ## Next task
 
+**Floor lookup table recalibration — placeholder cell values replaced
+with real, citable-standards-grounded values (or explicitly labeled
+engineering judgment) — DONE 2026-09-14.** A capstone review flagged
+the floor table's cell values as arbitrary/hardcoded with no
+justification. This session addressed that directly, strictly scoped
+to `env/masking.py`'s `_PLACEHOLDER_FLOOR_TABLE` + its documentation
+and `tests/test_masking.py` — no change to the lookup MECHANISM
+(`PolicyTable.floor`), `env/environment.py`, the reward function, the
+action space, the DQN agent, or any checkpoint (`git diff --stat`
+confirms only those two files changed).
+
+**Honesty framing, load-bearing for this whole session:** none of the
+four standards below literally define a 4-sensitivity-class x
+3-posture grid — that structure is this project's own design. Each of
+the 12 real cells is labeled one of: `citation` (a standard directly
+dictates/strongly implies the value), `judgment` (a defensible
+engineering choice informed by, but not required by, the standards —
+labeled as such rather than forcing a citation that wouldn't hold up),
+or `citation_with_judgment` (part of the value traces to a citation,
+part is judgment layered on top — spelled out explicitly so the two
+aren't blurred). New `env/masking.py::FloorCalibrationBasis` dataclass
++ `_FLOOR_TABLE_CALIBRATION` dict carry this per-cell, in code, next to
+the table itself (not just in this doc) — enforced by two new tests
+(`tests/test_masking.py::test_floor_table_calibration_covers_every_real_cell_exactly`,
+`::test_floor_table_calibration_citations_name_a_real_standard`) so a
+future edit to the table without updating its justification fails
+loudly instead of silently drifting stale.
+
+**The four standards used** (per session brief, already verified
+real): NIST FIPS 203, "Module-Lattice-Based Key-Encapsulation
+Mechanism Standard" (Aug 2024); NIST SP 800-57 Part 1 Rev. 5 (May
+2020); NSA/CNSA 2.0, "Commercial National Security Algorithm Suite
+2.0" (Sept 2022, updated Dec 2024); ETSI GS QKD 014 V1.1.1 (Feb 2019,
+the QKD key-delivery API spec).
+
+**Before/after, all 12 cells** (`SensitivityClass.S0` = public/
+non-sensitive telemetry ... `S3` = patient-record-grade, decades-long
+lifetime; `ThreatPosture.CALM`/`ELEVATED`/`HIGH`):
+
+| Cell (class, posture) | Before | After | Label | One-line reasoning |
+|---|---|---|---|---|
+| S0, CALM | SERVE_CLASSICAL | SERVE_CLASSICAL (unchanged) | judgment | No HNDL-relevant confidentiality exposure; none of the four standards impose a floor on non-confidential data. |
+| S0, ELEVATED | SERVE_CLASSICAL | SERVE_CLASSICAL (unchanged) | judgment | Same as CALM — ELEVATED alone doesn't create confidentiality exposure S0 never had. |
+| S0, HIGH | SERVE_PQC | SERVE_PQC (unchanged) | judgment | Explicitly NOT standards-required (S0 has no confidentiality exposure for any of the four to protect); a low-cost defense-in-depth step at the worst discrete posture, design choice only. |
+| S1, CALM | SERVE_CLASSICAL | SERVE_CLASSICAL (unchanged) | judgment | Informed by SP 800-57 Part 1 Rev. 5's graduated-protection posture; routine business data with no acute HNDL exposure doesn't need PQC absent a detected threat. |
+| S1, ELEVATED | SERVE_PQC | SERVE_PQC (unchanged) | judgment | Informed by FIPS 203 (PQC = no-extra-cost quantum-resistant option); FIPS 203 defines the algorithm, not *when* to invoke it — the ELEVATED trigger is judgment. |
+| S1, HIGH | SERVE_PQC | SERVE_PQC (unchanged) | judgment | Capped below HYBRID — S1 lacks the long-lived/regulated exposure SP 800-57's cryptoperiod framing associates with needing the strongest tier. |
+| S2, CALM | SERVE_PQC | SERVE_PQC (unchanged) | judgment | Informed by SP 800-57's risk-graduated posture; SP 800-57 doesn't name "regulated/financial data" or mandate PQC for it specifically. |
+| S2, ELEVATED | SERVE_PQC | SERVE_PQC (unchanged) | judgment | Same basis as CALM; already at the PQC floor. |
+| S2, HIGH | SERVE_HYBRID | SERVE_HYBRID (unchanged) | judgment | Informed by SP 800-57's escalation posture + ETSI GS QKD 014 (defines what "QKD-backed" HYBRID assumes technically); not a literal requirement of either. |
+| **S3, CALM** | **SERVE_PQC** | **SERVE_HYBRID (CHANGED)** | citation_with_judgment | CNSA 2.0's 2030 full-quantum-resistance deadline for NSS is a strong, direct basis for making S3's floor NOT depend on currently-observed posture at all (S3 = decades-long-lifetime, HNDL-exposed data; gating it behind reactive detection defeats the deadline's preemptive point) — floor set the same at CALM as at HIGH, not gradually. Explicit scope limit: CNSA 2.0 only mandates quantum-resistance (satisfied by PQC alone); that the unconditional floor is specifically HYBRID, not merely PQC, is this project's own judgment, not a CNSA 2.0 requirement. |
+| S3, ELEVATED | SERVE_HYBRID | SERVE_HYBRID (unchanged value; basis reclassified) | citation_with_judgment | Same CNSA-2.0-grounded basis as (S3, CALM); already at the unconditional floor. |
+| S3, HIGH | SERVE_HYBRID | SERVE_HYBRID (unchanged value; basis reclassified) | citation_with_judgment | Same basis; already at the system's strongest tier, nothing further to escalate to. |
+
+**Only ONE cell's value actually changed**: (S3, CALM), SERVE_PQC ->
+SERVE_HYBRID. Every other cell's value survived honest re-examination
+against the four standards unchanged — re-labeled with real reasoning
+rather than forced into a different number for its own sake (per
+instruction: an honestly-labeled judgment call is a better outcome
+than a citation that doesn't hold up).
+
+**Monotonicity — verified unchanged, not re-derived from scratch**:
+`tests/test_masking.py::test_floor_monotonic_in_sensitivity_class`/
+`::test_floor_monotonic_in_threat_posture` (pre-existing, unmodified)
+still pass against the new values — S3 always HYBRID at every posture
+is trivially still monotonic in posture (constant), and monotonic in
+class since S2's ceiling (PQC/PQC/HYBRID) never exceeds S3's floor at
+any posture. `test_s3_never_floors_below_pqc` (pre-existing) still
+passes (now vacuously — S3 is always HYBRID, strictly above PQC). New
+regression test `test_s3_floors_at_hybrid_unconditionally_2026_09_14_recalibration`
+locks in the actual new behavior (not just ">= PQC") so a future edit
+can't silently regress S3 back to gradual escalation.
+
+**Tests**: 3 new in `tests/test_masking.py` (the S3-unconditional
+regression test above, the calibration-coverage test, the
+citation-names-a-real-standard test). **Full suite: 737 passed, 1
+xfailed** (734 prior + 3 new). `git diff --stat`: only `env/masking.py`
+and `tests/test_masking.py` changed — confirmed zero changes to
+`env/environment.py`, `env/contracts.py`, `agents/dqn.py`, any
+checkpoint, or any `configs/scenarios/*.yaml` file. One incidental fix
+needed to stay within scope: the first draft of the (S3, CALM)
+citation text used the word "migration" (as in "quantum migration
+deadline"), which tripped the pre-existing Hard Rule 3 test
+(`tests/test_environment.py::test_hard_rule_3_no_s6_scenario_aware_branching_downstream_of_request_generation`,
+which forbids "migration"/"s6" mentions in `env/masking.py` to keep S6
+scenario-awareness out of it) — reworded to "transition deadline";
+no scenario-awareness was ever actually added, this was purely a
+word-choice collision.
+
+**Downstream files that import `_PLACEHOLDER_FLOOR_TABLE` directly**
+(`dashboard/explain.py`, `dashboard/render_migration_wave.py` +
+its tests) were checked line-by-line before this change, not just
+assumed safe: none of their exact-value assertions or "CALM baseline"
+lookups reference the `(S3, CALM)` cell specifically, so the one value
+change doesn't invalidate anything they assert — confirmed by the full
+suite passing without touching any of those files. Committed
+`dashboard/samples/*.html` files that happen to render an
+`S3`+`CALM` combination are historical, frozen captures from real past
+runs (same convention as every other committed sample) and are
+deliberately left untouched, per this session's strict scope boundary
+— not regenerated, not claimed to reflect the current live table.
+
+**Next task:** Addition F (pcap/replay wired into `env/environment.py`'s
+own live tick path) or Phase 4b (the full experimental campaign under
+the real forecaster) remain the two open options per the standing
+roadmap below — this session's recalibration doesn't block either, and
+Phase 4b's future campaign will now reflect the corrected S3 floor.
+
+---
+
 **Cold-start buffer fix — the 2026-09-02 session's central finding (LSTM
 window buffer holds 1 real row + 63 zero-padded rows at episode start,
 spuriously spiking `threat_score` regardless of true class) is now
