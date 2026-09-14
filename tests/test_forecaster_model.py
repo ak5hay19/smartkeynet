@@ -173,6 +173,95 @@ def test_buffer_window_caps_at_configured_window_length(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Cold-start warm-start fix (2026-09-14, S5-flat-curve follow-up) -- see
+# `get_threat_forecast`'s own comment for why this provider's fix is a
+# reactive analog of `RTIoT2022ReplayProvider._warm_start_buffer()`'s
+# replicate-first-row fallback, not a verbatim copy of it (this provider
+# has no pre-loaded array to borrow real PREDECESSOR rows from -- only
+# ever the earliest row THIS episode has itself delivered so far).
+# ---------------------------------------------------------------------------
+
+
+def test_first_forecast_after_one_update_is_not_zero_padded(tmp_path):
+    """Immediately after the very first `update()` call (the exact
+    moment the old code fed the model 1 real row + `window - 1` zeros),
+    the model must instead see `window` copies of that one real row --
+    never a zero row."""
+    checkpoint = make_tiny_checkpoint(tmp_path, feature_dim=4, window=6)
+    provider = LSTMForecastProvider(str(checkpoint))
+    provider.update(make_observation(threat_features=[3.0, 3.0, 3.0, 3.0]))
+
+    provider.get_threat_forecast()  # must not crash; real assertion below
+
+    expected = provider._prepare_step_features([3.0, 3.0, 3.0, 3.0])
+    # Reconstruct exactly what get_threat_forecast fed the model, mirroring
+    # its own padding logic, to assert no zero rows were used.
+    history = list(provider._buffer)
+    pad = provider._window - len(history)
+    padded = [history[0]] * pad + history if pad > 0 else history
+    assert len(padded) == 6
+    for row in padded:
+        np.testing.assert_allclose(row, expected)
+        assert not np.allclose(row, 0.0)
+
+
+def test_partial_buffer_pads_with_earliest_real_row_not_zeros(tmp_path):
+    """After a few (but fewer than `window`) real updates, the missing
+    slots must be filled by replicating the earliest real row this
+    episode has delivered so far -- not zero-padded."""
+    checkpoint = make_tiny_checkpoint(tmp_path, feature_dim=3, window=5)
+    provider = LSTMForecastProvider(str(checkpoint))
+    rows = [[1.0, 1.0, 1.0], [2.0, 2.0, 2.0], [3.0, 3.0, 3.0]]
+    for row in rows:
+        provider.update(make_observation(threat_features=row))
+
+    history = list(provider._buffer)
+    assert len(history) == 3
+    expected_first = provider._prepare_step_features(rows[0])
+    np.testing.assert_allclose(history[0], expected_first)
+
+    # Reproduce get_threat_forecast's own padding to assert the 2 missing
+    # slots are filled with history[0] (real), not zeros.
+    pad = provider._window - len(history)
+    padded = [history[0]] * pad + history
+    for row in padded[:pad]:
+        np.testing.assert_allclose(row, expected_first)
+        assert not np.allclose(row, 0.0)
+
+
+def test_cold_start_no_longer_spikes_threat_score_on_real_checkpoint():
+    """Regression test for the real, measured before-fix artifact
+    (SESSION_LOG.md 2026-09-14 S5-flat-curve follow-up session): on the
+    real trained checkpoint, feeding a genuinely calm-looking
+    `[qber, load]` reading and immediately reading `get_threat_forecast()`
+    (the exact cold-start moment) must no longer land at the pre-fix
+    ~0.96 spike this bug produced on a real S2 episode's first decision.
+    This does not assert a specific "correct" calm threat_score (the
+    model was never trained on this 2-dim placeholder shape -- see
+    `LSTMForecastProvider`'s own "live-feed caveat" docstring), only that
+    the fix actually changed cold-start behavior versus feeding an
+    all-zero window directly."""
+    if not REAL_CHECKPOINT.exists():
+        pytest.skip("lstm_threat_forecaster.pt not present")
+
+    provider = LSTMForecastProvider(str(REAL_CHECKPOINT))
+    provider.update(make_observation(threat_features=[0.02, 0.05]))
+    fixed_score = provider.get_threat_forecast().threat_score
+
+    # Reproduce the OLD (zero-padded) behavior directly for comparison,
+    # without touching the fixed code path.
+    history = list(provider._buffer)
+    zero_padded = [np.zeros(provider._feature_dim, dtype=np.float64)] * (provider._window - len(history)) + history
+    window_arr = np.stack(zero_padded, axis=0).astype(np.float32)
+    with torch.no_grad():
+        old_logit = provider._model(torch.from_numpy(window_arr).unsqueeze(0))
+        old_score = float(torch.sigmoid(old_logit).item())
+
+    assert old_score == pytest.approx(0.9570, abs=0.01)  # the real, measured pre-fix spike
+    assert fixed_score != pytest.approx(old_score, abs=0.05)
+
+
+# ---------------------------------------------------------------------------
 # Real, committed, trained checkpoint -- the degenerate-collapse gate
 # ---------------------------------------------------------------------------
 

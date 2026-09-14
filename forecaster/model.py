@@ -198,7 +198,34 @@ class LSTMForecastProvider(ForecastProvider):
         history = list(self._buffer)
         pad = self._window - len(history)
         if pad > 0:
-            history = [np.zeros(self._feature_dim, dtype=np.float64)] * pad + history
+            # Warm-start fix (2026-09-14, S5-flat-curve follow-up): the
+            # model was only ever trained on full `window`-length real
+            # windows, so a mostly-zero window at cold start is wildly
+            # out-of-distribution and spikes `threat_score` regardless of
+            # true class (measured: ~0.96 at the very first decision of a
+            # real S2 episode, before this fix) -- the same class of bug
+            # `RTIoT2022ReplayProvider._warm_start_buffer()` fixed for the
+            # replay provider. That fix can't be reused verbatim: it
+            # warm-starts at __init__ time from a fully pre-loaded replay
+            # array, so it can borrow real rows that PRECEDE the episode.
+            # This provider has no such array -- it only ever sees rows
+            # one at a time via `update()`, so at cold start there is no
+            # "real preceding row" to reach for, by construction, only
+            # ever the earliest real row THIS episode has actually
+            # delivered so far (`history[0]`). Replicating that row to
+            # fill the missing slots is the direct analog of the replay
+            # provider's own documented fallback (replicate the earliest
+            # available real row rather than zero-pad) -- a real-
+            # magnitude, in-distribution-ish constant window instead of
+            # an all-zero one, not equivalent to real history, same as
+            # that fallback's own honest framing. `history` is only ever
+            # empty before this episode's first `update()` call, which
+            # `env/environment.py`'s tick loop always runs before the
+            # first `get_threat_forecast()` call -- the plain-zero pad
+            # below is an unreachable-in-practice last resort, not the
+            # real fix.
+            filler = history[0] if history else np.zeros(self._feature_dim, dtype=np.float64)
+            history = [filler] * pad + history
         window_arr = np.stack(history, axis=0).astype(np.float32)
 
         with torch.no_grad():
