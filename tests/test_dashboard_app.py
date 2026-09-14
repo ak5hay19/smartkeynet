@@ -13,9 +13,19 @@ from __future__ import annotations
 import threading
 import urllib.request
 
-from dashboard.app import PANELS, build_server, render_index_html, resolve_route
+from dashboard.app import PANELS, build_server, render_index_html, render_index_v2_html, resolve_route
 
 _ALL_REAL_FILENAMES = [pf.filename for panel in PANELS for pf in panel.files]
+
+# Strings that only ever appear in the mockup's own fabricated
+# placeholder data/framing -- if any of these show up in a real,
+# data-driven page, that page has drifted onto mockup content instead
+# of the real PANELS registry.
+_MOCKUP_ONLY_MARKERS = (
+    "mockup · sample data",
+    "illustrative placeholders",
+    "capture_2026-08-14.pcapng",
+)
 
 
 def test_panels_registry_has_nine_panels() -> None:
@@ -75,6 +85,79 @@ def test_path_traversal_outside_whitelist_returns_404() -> None:
     assert status == 404
 
 
+def test_v2_route_returns_200_html() -> None:
+    status, content_type, body = resolve_route("/v2")
+    assert status == 200
+    assert content_type.startswith("text/html")
+    assert b"SmartKeyNet" in body
+
+
+def test_v2_html_route_alias_returns_same_body_as_v2() -> None:
+    status_a, _ct_a, body_a = resolve_route("/v2")
+    status_b, _ct_b, body_b = resolve_route("/v2.html")
+    assert status_a == status_b == 200
+    assert body_a == body_b
+
+
+def test_render_index_v2_html_matches_resolve_route_body() -> None:
+    # Same contract as render_index_html/resolve_route("/"): the pure
+    # function and the route must not silently diverge.
+    _status, _content_type, body = resolve_route("/v2")
+    assert body.decode("utf-8") == render_index_v2_html()
+
+
+def test_v2_shell_references_every_real_panel_filename() -> None:
+    # This is the test that would fail if the shell accidentally
+    # pointed at mockup data instead of a real dashboard/samples/*.html
+    # file: every filename in the real PANELS registry must appear
+    # (as a JSON-embedded iframe src target) in the v2 page.
+    body = render_index_v2_html()
+    for filename in _ALL_REAL_FILENAMES:
+        assert filename in body, f"v2 shell is missing a reference to real panel file {filename}"
+
+
+def test_v2_shell_does_not_reference_the_mockup_file_or_its_fabricated_data() -> None:
+    body = render_index_v2_html()
+    assert "smartkeynet_dashboard_mockup_v2.html" not in body
+    for marker in _MOCKUP_ONLY_MARKERS:
+        assert marker not in body, f"v2 shell leaked mockup-only content: {marker!r}"
+
+
+def test_v2_shell_groups_living_system_panels_into_one_tab() -> None:
+    # 9 real panels (4 Living System + Explain Decision + Dose-Response
+    # + S3 Comparison Table + Budgeting Brain + Migration Wave) collapse
+    # to 6 tabs -- Living System's 4 variants share one tab, switched
+    # via a client-side variant selector, everything else gets its own.
+    from dashboard.app import _v2_panel_data
+
+    tabs = _v2_panel_data()
+    assert len(tabs) == 6
+    living_system_tabs = [t for t in tabs if t["tabLabel"] == "Living System"]
+    assert len(living_system_tabs) == 1
+    assert len(living_system_tabs[0]["variants"]) == 4
+
+
+def test_v2_shell_tab_data_covers_every_real_panel_exactly_once() -> None:
+    from dashboard.app import _v2_panel_data
+
+    tabs = _v2_panel_data()
+    seen_filenames = [f["filename"] for t in tabs for v in t["variants"] for f in v["files"]]
+    assert sorted(seen_filenames) == sorted(_ALL_REAL_FILENAMES)
+    assert len(seen_filenames) == len(set(seen_filenames))  # no file listed twice
+
+
+def test_classic_index_links_to_v2_shell() -> None:
+    status, _content_type, body = resolve_route("/")
+    assert status == 200
+    assert b'href="/v2"' in body
+
+
+def test_v2_shell_links_back_to_classic_index() -> None:
+    status, _content_type, body = resolve_route("/v2")
+    assert status == 200
+    assert b'href="/"' in body
+
+
 def test_server_end_to_end_over_real_http() -> None:
     server = build_server(port=0)  # OS-assigned ephemeral port
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -89,6 +172,12 @@ def test_server_end_to_end_over_real_http() -> None:
         first_panel_file = PANELS[0].files[0].filename
         with urllib.request.urlopen(f"http://{host}:{port}/samples/{first_panel_file}", timeout=5) as resp:
             assert resp.status == 200
+
+        with urllib.request.urlopen(f"http://{host}:{port}/v2", timeout=5) as resp:
+            assert resp.status == 200
+            v2_body = resp.read()
+            assert b"SmartKeyNet" in v2_body
+            assert first_panel_file.encode("utf-8") in v2_body
     finally:
         server.shutdown()
         server.server_close()

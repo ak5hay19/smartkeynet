@@ -35,6 +35,17 @@ path-traversal surface to reason about, and a typo'd or removed sample
 file fails loudly (404) rather than silently serving something outside
 the registry.
 
+Two entry points, both served over the same route whitelist: `/`
+(the original card-grid index) and `/v2` (a tabbed shell styled after
+`dashboard/mockups/smartkeynet_dashboard_mockup_v2.html`'s visual
+language -- dark theme, tab nav, tier-color legend -- that embeds
+each real sample file via a same-origin iframe rather than
+re-rendering it, so the honesty-guard-tested markup each panel's own
+render_*.py driver produced is shown byte-for-byte). Both read from
+the same `PANELS` registry, so neither can drift from the other or
+from the mockup's own fabricated placeholder data. `/` remains the
+default for now -- see PROGRESS.md's routing recommendation.
+
 Run directly: `python -m dashboard.app` (prints the URL to open).
 """
 
@@ -42,6 +53,7 @@ from __future__ import annotations
 
 import html
 import http.server
+import json
 from pathlib import Path
 from typing import NamedTuple
 
@@ -243,7 +255,7 @@ footer{{max-width:1080px;margin:8px auto 0;padding:16px 22px 0;font-family:var(-
 </header>
 <main>
 <p class="thesis">Security is enforced as a <b>hard, structural constraint</b> &mdash; action masking, never a term in the reward.</p>
-<div class="subtitle">Real, pre-rendered panels from dashboard/samples/, served as-is &mdash; nothing computed live, nothing in these pages is a placeholder.</div>
+<div class="subtitle">Real, pre-rendered panels from dashboard/samples/, served as-is &mdash; nothing computed live, nothing in these pages is a placeholder. <a href="/v2" style="color:var(--quantum);">Try the tabbed view &rarr;</a></div>
 <div class="legend-row">{legend_html}</div>
 <div class="grid">
 {cards_html}
@@ -254,11 +266,260 @@ footer{{max-width:1080px;margin:8px auto 0;padding:16px 22px 0;font-family:var(-
 </html>"""
 
 
+def _v2_tab_groups() -> tuple[tuple[str, tuple[Panel, ...]], ...]:
+    """Groups PANELS into v2-shell tabs: every "Living System -- ..."
+    panel collapses into one "Living System" tab (switched client-side
+    via a variant selector); every other panel gets its own tab.
+    Derived directly from PANELS' own titles -- there is no separate,
+    hardcoded tab/file list that could silently drift out of sync with
+    the real registry `render_index_html()` already uses."""
+    living = tuple(p for p in PANELS if p.title.startswith("Living System"))
+    rest = tuple(p for p in PANELS if not p.title.startswith("Living System"))
+    return (("Living System", living),) + tuple((p.title, (p,)) for p in rest)
+
+
+def _v2_panel_data() -> list[dict]:
+    """PANELS, reshaped into the tab/variant/file JSON the v2 shell's
+    client-side JS switches between -- filenames and descriptions are
+    copied verbatim from PANELS, nothing is re-derived or fabricated."""
+    tabs = []
+    for tab_label, group_panels in _v2_tab_groups():
+        multi = len(group_panels) > 1
+        variants = []
+        for p in group_panels:
+            variant_label = p.title.split(" -- ", 1)[1] if multi and " -- " in p.title else None
+            variants.append(
+                {
+                    "variantLabel": variant_label,
+                    "description": p.description,
+                    "files": [{"filename": pf.filename, "label": pf.label} for pf in p.files],
+                }
+            )
+        tabs.append({"tabLabel": tab_label, "variants": variants})
+    return tabs
+
+
+def render_index_v2_html() -> str:
+    """Pure function: build the tabbed-shell entry point, styled after
+    dashboard/mockups/smartkeynet_dashboard_mockup_v2.html's visual
+    language (dark theme, tab nav, tier-color legend, card/typography
+    system) -- but every tab/sub-tab/file comes from `_v2_panel_data()`,
+    i.e. straight from the real PANELS registry `render_index_html()`
+    already uses, never from the mockup itself. The mockup remains a
+    style reference only: no number, finding, or fabricated data point
+    from it is copied here. Each real sample file is embedded via a
+    same-origin iframe (auto-resized client-side) rather than
+    re-rendered -- so the honesty-guard-tested markup each panel's own
+    render_*.py driver already produced is shown byte-for-byte, not
+    reimplemented in parallel. No file I/O, no server -- safe to call
+    directly in tests, matching `render_index_html()`'s own contract."""
+    tabs = _v2_panel_data()
+    tabs_json = json.dumps(tabs).replace("</", "<\\/")
+
+    legend_html = "\n".join(
+        f'<div class="legend-item"><span class="legend-swatch" style="background:{color}"></span>{html.escape(label)}</div>'
+        for label, color in _TIER_LEGEND
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartKeyNet -- Dashboard</title>
+<style>
+:root{{
+  --bg:#0A0E13; --panel:#111820; --panel-2:#151D27; --line:#212C39; --line-soft:#171F29;
+  --text:#E9EEF4; --text-dim:#8FA0B3; --text-faint:#4C5A6B; --quantum:#6E7EFF;
+  --classical:#8B95A5; --pqc:#E8A33D; --hybrid:#33D687;
+  --radius:12px; --radius-sm:7px;
+  --mono:ui-monospace,SFMono-Regular,Consolas,'Courier New',monospace;
+  --disp:-apple-system,'Segoe UI',Roboto,sans-serif;
+}}
+*{{box-sizing:border-box;}}
+html,body{{margin:0;padding:0;}}
+body{{
+  background:
+    radial-gradient(circle at 1px 1px, #16202C 1px, transparent 0) 0 0/28px 28px,
+    var(--bg);
+  color:var(--text);font-family:var(--disp);min-height:100vh;
+}}
+a{{color:inherit;}}
+button{{font-family:inherit;}}
+
+.topbar{{
+  display:flex;align-items:center;gap:14px;padding:14px 22px;
+  border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg, rgba(17,24,32,.9), rgba(17,24,32,.55));
+  position:sticky;top:0;z-index:50;flex-wrap:wrap;
+}}
+.brand{{display:flex;align-items:center;gap:10px;margin-right:auto;}}
+.brand-name{{font-weight:700;font-size:16px;letter-spacing:.05em;}}
+.brand-sub{{font-family:var(--mono);font-size:10px;color:var(--text-faint);letter-spacing:.12em;text-transform:uppercase;margin-top:1px;}}
+.pill{{
+  font-family:var(--mono);font-size:11px;color:var(--text-dim);
+  background:var(--panel-2);border:1px solid var(--line);
+  padding:5px 10px;border-radius:999px;white-space:nowrap;
+}}
+.classic-link{{
+  font-family:var(--mono);font-size:11px;color:var(--quantum);text-decoration:none;
+  border:1px solid rgba(110,126,255,.35);border-radius:999px;padding:5px 10px;white-space:nowrap;
+}}
+.classic-link:hover{{background:rgba(110,126,255,.1);}}
+
+.tab-nav{{display:flex;gap:2px;padding:0 22px;border-bottom:1px solid var(--line);overflow-x:auto;}}
+.tab-btn{{
+  font-family:var(--disp);font-weight:600;font-size:13px;
+  color:var(--text-faint);background:transparent;border:none;
+  padding:12px 14px 10px;cursor:pointer;border-bottom:2px solid transparent;
+  display:flex;align-items:center;gap:7px;white-space:nowrap;
+}}
+.tab-btn .n{{font-family:var(--mono);font-size:10px;color:var(--text-faint);border:1px solid var(--line);border-radius:4px;padding:1px 5px;}}
+.tab-btn:hover{{color:var(--text-dim);}}
+.tab-btn.active{{color:var(--text);border-bottom-color:var(--quantum);}}
+.tab-btn.active .n{{border-color:var(--quantum);color:var(--quantum);}}
+
+main{{max-width:1200px;margin:0 auto;padding:24px 22px 60px;}}
+.tab-head{{margin-bottom:16px;}}
+.tab-title{{font-weight:700;font-size:22px;letter-spacing:-.01em;}}
+.tab-desc{{color:var(--text-dim);font-size:13px;max-width:760px;margin-top:6px;line-height:1.55;}}
+
+.chip-row{{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}}
+.chip-btn{{
+  font-family:var(--mono);font-size:11px;color:var(--text-dim);background:var(--panel-2);
+  border:1px solid var(--line);border-radius:999px;padding:6px 13px;cursor:pointer;
+}}
+.chip-btn.active{{color:#0A0E13;background:var(--quantum);border-color:var(--quantum);font-weight:600;}}
+
+.iframe-card{{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;}}
+.iframe-card iframe{{display:block;width:100%;height:900px;border:none;background:var(--bg);}}
+
+.legend-row{{display:flex;gap:16px;flex-wrap:wrap;}}
+.legend-item{{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--text-dim);}}
+.legend-swatch{{width:10px;height:10px;border-radius:3px;display:inline-block;}}
+
+footer{{max-width:1200px;margin:14px auto 0;padding:16px 22px 0;font-family:var(--mono);font-size:10.5px;color:var(--text-faint);border-top:1px solid var(--line);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div>
+      <div class="brand-name">SMARTKEYNET</div>
+      <div class="brand-sub">Hybrid KMS &middot; Decision Layer</div>
+    </div>
+  </div>
+  <span class="pill">Static, pre-rendered panels</span>
+  <span class="pill">Nothing computed live &middot; nothing is a placeholder</span>
+  <a class="classic-link" href="/">Classic card view</a>
+</header>
+
+<nav class="tab-nav" id="tabNav"></nav>
+
+<main>
+  <div class="tab-head">
+    <div class="tab-title" id="tabTitle"></div>
+    <div class="tab-desc" id="tabDesc"></div>
+  </div>
+  <div class="chip-row" id="variantNav"></div>
+  <div class="chip-row" id="momentNav"></div>
+  <div class="iframe-card"><iframe id="panelFrame" title="panel"></iframe></div>
+  <div class="legend-row" style="margin-top:18px;">{legend_html}</div>
+</main>
+
+<footer>
+  <span>SmartKeyNet &mdash; decision layer for a multi-tenant hybrid-crypto KMS</span>
+  <span>Visual shell only &mdash; every panel embedded here is the exact file linked from the classic view</span>
+</footer>
+
+<script>
+  const TABS = {tabs_json};
+  let activeTab = 0, activeVariant = 0, activeMoment = 0;
+
+  const tabNav = document.getElementById('tabNav');
+  const variantNav = document.getElementById('variantNav');
+  const momentNav = document.getElementById('momentNav');
+  const tabTitle = document.getElementById('tabTitle');
+  const tabDesc = document.getElementById('tabDesc');
+  const frame = document.getElementById('panelFrame');
+
+  function renderTabNav(){{
+    tabNav.innerHTML = '';
+    TABS.forEach((t, i) => {{
+      const btn = document.createElement('button');
+      btn.className = 'tab-btn' + (i === activeTab ? ' active' : '');
+      btn.innerHTML = '<span class="n">' + String(i + 1).padStart(2, '0') + '</span> ' + t.tabLabel;
+      btn.addEventListener('click', () => selectTab(i));
+      tabNav.appendChild(btn);
+    }});
+  }}
+
+  function renderVariantNav(){{
+    const variants = TABS[activeTab].variants;
+    variantNav.innerHTML = '';
+    variantNav.hidden = variants.length < 2;
+    variants.forEach((v, i) => {{
+      const btn = document.createElement('button');
+      btn.className = 'chip-btn' + (i === activeVariant ? ' active' : '');
+      btn.textContent = v.variantLabel || TABS[activeTab].tabLabel;
+      btn.addEventListener('click', () => {{ activeVariant = i; activeMoment = 0; renderVariantNav(); renderMomentNav(); renderFrame(); }});
+      variantNav.appendChild(btn);
+    }});
+  }}
+
+  function renderMomentNav(){{
+    const files = TABS[activeTab].variants[activeVariant].files;
+    momentNav.innerHTML = '';
+    momentNav.hidden = files.length < 2;
+    files.forEach((f, i) => {{
+      const btn = document.createElement('button');
+      btn.className = 'chip-btn' + (i === activeMoment ? ' active' : '');
+      btn.textContent = f.label;
+      btn.addEventListener('click', () => {{ activeMoment = i; renderMomentNav(); renderFrame(); }});
+      momentNav.appendChild(btn);
+    }});
+  }}
+
+  function renderFrame(){{
+    const variant = TABS[activeTab].variants[activeVariant];
+    const file = variant.files[activeMoment];
+    tabDesc.textContent = variant.description;
+    frame.src = '/samples/' + file.filename;
+  }}
+
+  function selectTab(i){{
+    activeTab = i; activeVariant = 0; activeMoment = 0;
+    renderTabNav();
+    tabTitle.textContent = TABS[activeTab].tabLabel;
+    renderVariantNav();
+    renderMomentNav();
+    renderFrame();
+  }}
+
+  frame.addEventListener('load', () => {{
+    try {{
+      const doc = frame.contentWindow.document;
+      const h = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight);
+      frame.style.height = (h + 20) + 'px';
+    }} catch (e) {{
+      frame.style.height = '900px';
+    }}
+  }});
+
+  selectTab(0);
+</script>
+</body>
+</html>"""
+
+
 def resolve_route(path: str) -> tuple[int, str, bytes]:
     """Pure routing logic: request path -> (status, content_type, body).
     No socket I/O -- the handler below is a thin adapter over this."""
     if path in ("/", "/index.html"):
         return 200, "text/html; charset=utf-8", render_index_html().encode("utf-8")
+
+    if path in ("/v2", "/v2.html"):
+        return 200, "text/html; charset=utf-8", render_index_v2_html().encode("utf-8")
 
     if path.startswith("/samples/"):
         filename = path[len("/samples/") :]
