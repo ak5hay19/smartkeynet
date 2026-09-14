@@ -13,13 +13,13 @@ be comparable from day one, not bolted on after the agent looks good.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
 from agents.baselines import Policy
 from attack.attacking_provider import AttackingForecastProvider
-from env.contracts import Action, KeyType, SensitivityClass, ThreatPosture
+from env.contracts import Action, ForecastProvider, KeyType, SensitivityClass, ThreatPosture
 from env.environment import _KEY_TYPE_TO_SERVE_ACTION, _LATENCY_UNITS, SmartKeyNetEnv
 from env.forecast_provider import MovingAverageForecaster
 from env.masking import PolicyTable
@@ -147,7 +147,11 @@ def _delivered_tier(action: Action, key_type_onehot: Any, floor: Action) -> Acti
 
 
 def run_scenario(
-    policy: Policy, scenario: str, config: dict[str, Any], seed: int
+    policy: Policy,
+    scenario: str,
+    config: dict[str, Any],
+    seed: int,
+    forecast_provider_factory: Callable[[int | None], ForecastProvider | None] | None = None,
 ) -> ScenarioResult:
     """Run one episode of `scenario` with `policy`, return its
     `ScenarioResult`.
@@ -157,6 +161,12 @@ def run_scenario(
     S1-S6 grid) even though `env/environment.py` currently only
     dispatches S1 (a separate future session wires S2-S6; see
     PROGRESS.md).
+
+    `forecast_provider_factory` (Addition E Phase 4b addition, mirrors
+    `SmartKeyNetEnv`'s own constructor parameter of the same name,
+    design decision 17): threaded straight through to the `SmartKeyNetEnv`
+    this function constructs. `None` (the default -- every pre-existing
+    call site) reproduces prior behavior byte-for-byte.
 
     `pool_exhaustion_events` is reported as the count of `RegretEvent`s
     logged this episode: in the current environment every regret event
@@ -172,7 +182,7 @@ def run_scenario(
     """
     env_config = {**config, "scenario": scenario, "seed": seed}
     env_config.setdefault("max_steps", _DEFAULT_MAX_STEPS)
-    env = SmartKeyNetEnv(env_config)
+    env = SmartKeyNetEnv(env_config, forecast_provider_factory=forecast_provider_factory)
     state, info = env.reset(seed=seed)
 
     latencies: list[float] = []
@@ -338,6 +348,7 @@ def evaluate_multi_seed(
     scenario: str,
     config: dict[str, Any],
     eval_seeds: list[int],
+    forecast_provider_factory: Callable[[int | None], ForecastProvider | None] | None = None,
 ) -> MultiSeedEvalResult:
     """Run `policy` on `scenario` across every seed in `eval_seeds` via
     `run_scenario`, and summarize the metrics PLAN.md's closing table
@@ -350,11 +361,18 @@ def evaluate_multi_seed(
     in `experiments/train.py` because it's a generic evaluation
     primitive, matching this file's existing role ("runs any Policy"),
     not something DQN-specific.
+
+    `forecast_provider_factory` (Addition E Phase 4b addition): passed
+    straight through to every `run_scenario` call this makes. `None`
+    (the default -- every pre-existing call site) is unaffected.
     """
     if not eval_seeds:
         raise ValueError("eval_seeds must be non-empty")
 
-    results = [run_scenario(policy, scenario, config, seed) for seed in eval_seeds]
+    results = [
+        run_scenario(policy, scenario, config, seed, forecast_provider_factory=forecast_provider_factory)
+        for seed in eval_seeds
+    ]
 
     p99_latencies = [r.p99_latency for r in results]
     total_rewards = [r.total_reward for r in results]
@@ -445,7 +463,13 @@ class AttackScenarioResult:
 
 
 def run_scenario_under_attack(
-    policy: Policy, scenario: str, config: dict[str, Any], seed: int, alpha: float
+    policy: Policy,
+    scenario: str,
+    config: dict[str, Any],
+    seed: int,
+    alpha: float,
+    base_provider_factory: Callable[[], ForecastProvider] | None = None,
+    shadow_provider_factory: Callable[[], ForecastProvider] | None = None,
 ) -> AttackScenarioResult:
     """Run one episode of `scenario` with `policy`, under the equation-7
     steering attack at strength `alpha`, and return its
@@ -467,13 +491,31 @@ def run_scenario_under_attack(
     unattacked path, matching this file's own precedent of separate
     functions for genuinely different concerns (`run_scenario` vs.
     `evaluate_multi_seed`).
+
+    `base_provider_factory`/`shadow_provider_factory` (Addition E Phase
+    4b addition): zero-arg callables constructing the `ForecastProvider`
+    instances `AttackingForecastProvider` wraps/shadows. Both default to
+    `None`, which reproduces prior behavior byte-for-byte -- a fresh
+    `MovingAverageForecaster()` for each, exactly as this function
+    always hardcoded before this parameter existed. A caller wanting the
+    equation-7 attack applied against a real trained forecaster (e.g.
+    `forecaster.model.LSTMForecastProvider`) instead of the EWMA
+    placeholder passes e.g. `lambda: LSTMForecastProvider(checkpoint_path)`
+    for both -- a fresh instance each, since `ForecastProvider`
+    instances carry per-episode buffer/EWMA state that must not leak
+    across episodes (same reasoning `forecast_provider_factory`
+    elsewhere in this codebase is always a *factory*, not a shared
+    instance).
     """
     env_config = {**config, "scenario": scenario, "seed": seed}
     env_config.setdefault("max_steps", _DEFAULT_MAX_STEPS)
 
-    shadow_provider = MovingAverageForecaster()
+    base_provider_factory = base_provider_factory or (lambda: MovingAverageForecaster())
+    shadow_provider_factory = shadow_provider_factory or (lambda: MovingAverageForecaster())
+
+    shadow_provider = shadow_provider_factory()
     attacking_provider = AttackingForecastProvider(
-        base_provider=MovingAverageForecaster(), alpha=alpha, shadow_provider=shadow_provider
+        base_provider=base_provider_factory(), alpha=alpha, shadow_provider=shadow_provider
     )
     shadow_policy_table = PolicyTable()
 
@@ -594,18 +636,40 @@ class MultiSeedAttackEvalResult:
 
 
 def evaluate_attack_multi_seed(
-    policy: Policy, scenario: str, config: dict[str, Any], eval_seeds: list[int], alpha: float
+    policy: Policy,
+    scenario: str,
+    config: dict[str, Any],
+    eval_seeds: list[int],
+    alpha: float,
+    base_provider_factory: Callable[[], ForecastProvider] | None = None,
+    shadow_provider_factory: Callable[[], ForecastProvider] | None = None,
 ) -> MultiSeedAttackEvalResult:
     """Run `policy` on `scenario` under attack strength `alpha` across
     every seed in `eval_seeds` via `run_scenario_under_attack`, and
     summarize `below_floor_rate_true` (equation 4's real V(pi)) plus
     the standard metrics as mean + std -- never a bare single-seed
     point estimate, matching `evaluate_multi_seed`'s own convention.
+
+    `base_provider_factory`/`shadow_provider_factory` (Addition E Phase
+    4b addition): passed straight through to every `run_scenario_under_attack`
+    call this makes -- see that function's own docstring. `None` (the
+    default -- every pre-existing call site) is unaffected.
     """
     if not eval_seeds:
         raise ValueError("eval_seeds must be non-empty")
 
-    results = [run_scenario_under_attack(policy, scenario, config, seed, alpha) for seed in eval_seeds]
+    results = [
+        run_scenario_under_attack(
+            policy,
+            scenario,
+            config,
+            seed,
+            alpha,
+            base_provider_factory=base_provider_factory,
+            shadow_provider_factory=shadow_provider_factory,
+        )
+        for seed in eval_seeds
+    ]
 
     below_floor_rates_true = [r.below_floor_rate_true for r in results]
     total_rewards = [r.scenario_result.total_reward for r in results]

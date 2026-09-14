@@ -116,6 +116,84 @@ def test_train_respects_explicit_total_steps_not_the_real_default():
 
 
 # ---------------------------------------------------------------------------
+# forecast_provider_factory (Addition E Phase 4b addition)
+# ---------------------------------------------------------------------------
+
+
+class _CountingForecaster:
+    """Minimal real `ForecastProvider` that counts its own `update()`
+    calls -- used to prove `forecast_provider_factory` is genuinely
+    threaded through to every `SmartKeyNetEnv` a caller constructs
+    (both the main training env and each periodic eval snapshot's env),
+    not just accepted and silently dropped."""
+
+    instances_constructed = 0
+
+    def __init__(self) -> None:
+        self.update_calls = 0
+        _CountingForecaster.instances_constructed += 1
+
+    def update(self, observation):
+        self.update_calls += 1
+
+    def get_threat_forecast(self):
+        from env.contracts import ThreatForecast
+
+        return ThreatForecast(threat_score=0.5, posture_probs=[0.2, 0.6, 0.2], horizon_scores=[0.5] * 5)
+
+    def get_pool_forecast(self):
+        from env.contracts import PoolForecast
+
+        return PoolForecast(pool_level_hat=[0.5] * 3, skr_mean_hat=[0.5] * 3, hybrid_demand_hat=[0.0] * 3)
+
+
+def test_train_forecast_provider_factory_is_actually_used(tmp_path):
+    """`None` (the default) is already covered by every other test in
+    this file continuing to pass unmodified; this proves the non-None
+    path genuinely swaps the forecaster in, for both the main training
+    env and the periodic eval-snapshot envs -- not silently ignored."""
+    full_config = load_full_config()
+    full_config["use_foresight"] = "ewma"  # has_forecast=True, so the swapped-in forecaster is actually read
+    overrides = {
+        "total_steps": 80,
+        "eval_every": 40,
+        "eval_max_steps": 10,
+        "checkpoint_path": str(tmp_path / "dqn_factory_smoke.pt"),
+    }
+    _CountingForecaster.instances_constructed = 0
+
+    _agent, record = train(
+        full_config, training_overrides=overrides, forecast_provider_factory=lambda seed: _CountingForecaster()
+    )
+
+    # one instance for the main training env's reset() + one per eval snapshot (2 snapshots at eval_every=40)
+    assert _CountingForecaster.instances_constructed == 3
+    assert len(record.eval_snapshots) == 2
+
+
+def test_train_soft_reward_baseline_forecast_provider_factory_is_actually_used(tmp_path):
+    from experiments.train import train_soft_reward_baseline
+
+    full_config = load_full_config(
+        __import__("pathlib").Path("configs") / "soft_reward_baseline.yaml"
+    )
+    overrides = {
+        "total_steps": 80,
+        "eval_every": 40,
+        "eval_max_steps": 10,
+        "checkpoint_path": str(tmp_path / "soft_reward_factory_smoke.pt"),
+    }
+    _CountingForecaster.instances_constructed = 0
+
+    _agent, record = train_soft_reward_baseline(
+        full_config, training_overrides=overrides, forecast_provider_factory=lambda seed: _CountingForecaster()
+    )
+
+    assert _CountingForecaster.instances_constructed == 3
+    assert len(record.eval_snapshots) == 2
+
+
+# ---------------------------------------------------------------------------
 # GreedyDQNPolicy -- deterministic eval vs. stochastic training act()
 # ---------------------------------------------------------------------------
 

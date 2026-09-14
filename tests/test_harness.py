@@ -537,3 +537,131 @@ def test_evaluate_attack_multi_seed_rejects_empty_eval_seeds():
     config = load_test_config(overrides={"max_steps": 20})
     with pytest.raises(ValueError):
         evaluate_attack_multi_seed(AlwaysPQCPolicy(), "S1", config, eval_seeds=[], alpha=0.5)
+
+
+# ---------------------------------------------------------------------------
+# forecast_provider_factory / base_provider_factory / shadow_provider_factory
+# (Addition E Phase 4b addition)
+# ---------------------------------------------------------------------------
+
+
+class _AlwaysHighForecaster:
+    """A trivial, always-HIGH stub `ForecastProvider` -- used only to
+    prove `run_scenario`/`evaluate_multi_seed`'s new
+    `forecast_provider_factory` parameter genuinely swaps the live
+    forecaster in (a real, observable behavior change: the floor is
+    HIGH-posture from the very first decision), not silently ignored."""
+
+    def update(self, observation):
+        pass
+
+    def get_threat_forecast(self):
+        from env.contracts import ThreatForecast
+
+        return ThreatForecast(threat_score=1.0, posture_probs=[0.0, 0.0, 1.0], horizon_scores=[1.0] * 5)
+
+    def get_pool_forecast(self):
+        from env.contracts import PoolForecast
+
+        return PoolForecast(pool_level_hat=[0.0] * 3, skr_mean_hat=[0.0] * 3, hybrid_demand_hat=[0.0] * 3)
+
+
+def test_run_scenario_forecast_provider_factory_swaps_the_live_forecaster():
+    config = load_test_config(overrides={"use_foresight": "ewma", "max_steps": 20})
+    policy = AlwaysPQCPolicy()
+
+    default_result = run_scenario(policy, "S1", config, seed=0)
+    swapped_result = run_scenario(
+        policy, "S1", config, seed=0, forecast_provider_factory=lambda seed: _AlwaysHighForecaster()
+    )
+
+    # default (ewma) never reaches HIGH this early under S1's ordinary [qber, load] signal --
+    # 0 floor_violations either way (masking holds), but the swapped-in forecaster genuinely
+    # changes total_reward (HIGH floor forces costlier tiers from decision 1 onward).
+    assert swapped_result.total_reward != pytest.approx(default_result.total_reward)
+    assert swapped_result.floor_violations == 0
+
+
+def test_evaluate_multi_seed_forecast_provider_factory_is_passed_through():
+    config = load_test_config(overrides={"use_foresight": "ewma", "max_steps": 20})
+    policy = AlwaysPQCPolicy()
+
+    result = evaluate_multi_seed(
+        policy, "S1", config, eval_seeds=[0, 1], forecast_provider_factory=lambda seed: _AlwaysHighForecaster()
+    )
+    manual = [
+        run_scenario(policy, "S1", config, seed=s, forecast_provider_factory=lambda seed: _AlwaysHighForecaster())
+        for s in [0, 1]
+    ]
+    assert [r.total_reward for r in result.results] == [r.total_reward for r in manual]
+
+
+def test_run_scenario_under_attack_base_provider_factory_swaps_the_wrapped_forecaster():
+    """`None` (the default) is already proven byte-for-byte unaffected
+    by every pre-existing test in this file continuing to pass; this
+    proves the non-None path genuinely swaps in a different base
+    `ForecastProvider` for `AttackingForecastProvider` to wrap, rather
+    than the hardcoded `MovingAverageForecaster` it always used before
+    this parameter existed."""
+    config = load_test_config(
+        overrides={
+            "scenario": "S2",
+            "threat_schedule": {"elevate_at_step": 50, "elevated_signal": 6.0},
+            "max_steps": 20,
+        }
+    )
+    policy = AlwaysPQCPolicy()
+
+    default_result = run_scenario_under_attack(policy, "S2", config, seed=0, alpha=0.0)
+    swapped_result = run_scenario_under_attack(
+        policy,
+        "S2",
+        config,
+        seed=0,
+        alpha=0.0,
+        base_provider_factory=lambda: _AlwaysHighForecaster(),
+        shadow_provider_factory=lambda: _AlwaysHighForecaster(),
+    )
+
+    # a always-HIGH base/shadow forces HIGH posture (hence a real floor) from decision 1,
+    # unlike the default EWMA path on S2's ordinary pre-elevation signal -- observable via
+    # a genuinely different total_reward (costlier tiers forced immediately).
+    assert swapped_result.scenario_result.total_reward != pytest.approx(default_result.scenario_result.total_reward)
+    # base and shadow agree (both always-HIGH), so there's nothing for the TRUE track to diverge on
+    assert swapped_result.below_floor_true_count == 0
+
+
+def test_evaluate_attack_multi_seed_base_provider_factory_is_passed_through():
+    config = load_test_config(
+        overrides={
+            "scenario": "S2",
+            "threat_schedule": {"elevate_at_step": 50, "elevated_signal": 6.0},
+            "max_steps": 20,
+        }
+    )
+    policy = AlwaysPQCPolicy()
+
+    result = evaluate_attack_multi_seed(
+        policy,
+        "S2",
+        config,
+        eval_seeds=[0, 1],
+        alpha=0.0,
+        base_provider_factory=lambda: _AlwaysHighForecaster(),
+        shadow_provider_factory=lambda: _AlwaysHighForecaster(),
+    )
+    manual = [
+        run_scenario_under_attack(
+            policy,
+            "S2",
+            config,
+            seed=s,
+            alpha=0.0,
+            base_provider_factory=lambda: _AlwaysHighForecaster(),
+            shadow_provider_factory=lambda: _AlwaysHighForecaster(),
+        )
+        for s in [0, 1]
+    ]
+    assert [r.scenario_result.total_reward for r in result.results] == [
+        r.scenario_result.total_reward for r in manual
+    ]

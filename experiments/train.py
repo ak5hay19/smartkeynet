@@ -44,7 +44,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -53,7 +53,7 @@ import yaml
 from agents.baselines import StaticThresholdPolicy
 from agents.dqn import DQNAgent, flatten_state, load_dqn_config
 from agents.soft_reward_baseline import SoftRewardConfig, compute_soft_reward
-from env.contracts import Action, ActionMask, StateDict
+from env.contracts import Action, ActionMask, ForecastProvider, StateDict
 from env.environment import SmartKeyNetEnv
 from experiments.harness import ScenarioResult, run_scenario
 
@@ -113,6 +113,7 @@ def train(
     full_config: dict[str, Any] | None = None,
     training_overrides: dict[str, Any] | None = None,
     scenario: str = "S1",
+    forecast_provider_factory: Callable[[int | None], ForecastProvider | None] | None = None,
 ) -> tuple[DQNAgent, TrainingRecord]:
     """Run one continuous training episode against `scenario` (the env
     has no natural terminal state -- see env/environment.py -- so
@@ -142,6 +143,19 @@ def train(
     tests use this to shrink `total_steps`/`eval_every`/`eval_max_steps`
     down to a CI-fast smoke run without touching this file's real
     defaults.
+
+    `forecast_provider_factory` (Addition E Phase 4b, mirrors
+    `env/environment.py`'s own `forecast_provider_factory` constructor
+    parameter, design decision 17 -- same shape, same default-`None`-
+    preserves-prior-behavior guarantee): threaded straight into both
+    `SmartKeyNetEnv` constructions this function makes (the main
+    training env and each periodic eval snapshot's env), so a caller
+    can train/evaluate against e.g. a real `forecaster.model.
+    LSTMForecastProvider` instead of whatever `config["use_foresight"]`
+    would otherwise build via `_build_forecaster()`. `None` (the
+    default -- every pre-existing call site) reproduces prior behavior
+    byte-for-byte, since `SmartKeyNetEnv.__init__` itself falls back to
+    `_build_forecaster()` whenever this is `None`.
     """
     full_config = full_config if full_config is not None else load_full_config()
 
@@ -176,7 +190,7 @@ def train(
     has_forecast = full_config.get("use_foresight", "off") != "off"
 
     env_config = {**full_config, "scenario": scenario, "seed": training_cfg["seed"]}
-    env = SmartKeyNetEnv(env_config)
+    env = SmartKeyNetEnv(env_config, forecast_provider_factory=forecast_provider_factory)
     state, info = env.reset(seed=training_cfg["seed"])
     mask = info["action_mask"]
 
@@ -222,7 +236,13 @@ def train(
             reward_window = []
 
             eval_config = {**full_config, "max_steps": eval_max_steps}
-            eval_result = run_scenario(GreedyDQNPolicy(agent), scenario, eval_config, seed=eval_seed)
+            eval_result = run_scenario(
+                GreedyDQNPolicy(agent),
+                scenario,
+                eval_config,
+                seed=eval_seed,
+                forecast_provider_factory=forecast_provider_factory,
+            )
             record.eval_snapshots.append((step, eval_result))
 
     checkpoint_path = training_cfg["checkpoint_path"]
@@ -237,6 +257,7 @@ def train_soft_reward_baseline(
     full_config: dict[str, Any] | None = None,
     training_overrides: dict[str, Any] | None = None,
     scenario: str = "S1",
+    forecast_provider_factory: Callable[[int | None], ForecastProvider | None] | None = None,
 ) -> tuple[DQNAgent, TrainingRecord]:
     """`agents.soft_reward_baseline`'s training entry point -- additive,
     does not touch `train()` above (Hard Rule 1: the masked agent's own
@@ -270,6 +291,10 @@ def train_soft_reward_baseline(
     here, never passed to `agent.observe()` -- `compute_soft_reward` is
     the only reward this agent ever learns from, computed independently
     from the pre-decision `state` and the chosen `action` alone.
+
+    `forecast_provider_factory` (Addition E Phase 4b addition): same
+    shape/default-preserves-behavior guarantee as `train()`'s own
+    parameter of the same name -- see that docstring.
     """
     full_config = full_config if full_config is not None else load_full_config(_SOFT_REWARD_CONFIG_PATH)
 
@@ -290,7 +315,7 @@ def train_soft_reward_baseline(
     soft_reward_cfg = SoftRewardConfig(**full_config["soft_reward"])
 
     env_config = {**full_config, "scenario": scenario, "seed": training_cfg["seed"]}
-    env = SmartKeyNetEnv(env_config)
+    env = SmartKeyNetEnv(env_config, forecast_provider_factory=forecast_provider_factory)
     state, info = env.reset(seed=training_cfg["seed"])
     mask = info["action_mask"]
 
@@ -339,7 +364,13 @@ def train_soft_reward_baseline(
             # policy actually served any request below its real floor --
             # exactly the property this agent exists to demonstrate. See
             # tests/test_train.py's soft-reward-baseline tests.
-            eval_result = run_scenario(GreedyDQNPolicy(agent), scenario, eval_config, seed=eval_seed)
+            eval_result = run_scenario(
+                GreedyDQNPolicy(agent),
+                scenario,
+                eval_config,
+                seed=eval_seed,
+                forecast_provider_factory=forecast_provider_factory,
+            )
             record.eval_snapshots.append((step, eval_result))
 
     checkpoint_path = training_cfg["checkpoint_path"]
