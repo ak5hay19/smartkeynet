@@ -11,6 +11,85 @@
 
 ## Next task
 
+**Cold-start buffer fix — the 2026-09-02 session's central finding (LSTM
+window buffer holds 1 real row + 63 zero-padded rows at episode start,
+spuriously spiking `threat_score` regardless of true class) is now
+FIXED — DONE 2026-09-14.** Strictly scoped to `forecaster/rt_iot_replay.py`
+(`RTIoT2022ReplayProvider`'s buffer construction) and its two direct
+test files, per instruction — no LSTM retraining/architecture/weight
+change, no `env/masking.py`/`env/environment.py`/reward/DQN-checkpoint
+change, and the one-way floor ratchet itself (Hard Rule 2) is untouched
+(the bug was the ratchet's cold-start INPUT, not the ratchet).
+
+**Mechanism, confirmed before fixing:** the zero-pad lives in the
+inherited `LSTMForecastProvider.get_threat_forecast()`
+(`forecaster/model.py`, untouched) — `self._buffer` starts empty at
+construction and is left-padded with zeros whenever it holds fewer
+than `window=64` entries. `RTIoT2022ReplayProvider` never pre-filled
+it, so the very first decision (which always follows exactly 1 real
+`update()` call) saw 1 real row + 63 zeros. No other contributor was
+found or needed to explain the artifact.
+
+**Fix — `RTIoT2022ReplayProvider._warm_start_buffer()`, called from
+`__init__` before any `update()`:** preferred path warm-starts the
+buffer with real rows immediately preceding `start_offset` within the
+SAME held-out class span (genuinely real, not-yet-consumed-by-this-
+episode context) whenever `start_offset > 0`. Fallback, explicitly
+documented as an approximation, not equivalent to real history: when
+an episode starts at the true beginning of the held-out span
+(`start_offset=0` — every default-constructed provider and every
+campaign seed-0 episode), the earliest available real row is
+REPLICATED to fill the buffer instead of zero-padding. No retraining;
+`forecaster/model.py` is byte-unchanged.
+
+**Validated, real before/after numbers (same 15-seed/`start_offset =
+seed * max_steps` scheme as `replay_campaign.py`), full success, not
+partial:**
+
+| | benign step-0 mean | attack step-0 mean |
+|---|---|---|
+| Before | 0.9221 | 0.9723 |
+| After | **0.0808** | **0.9750** |
+
+Benign step-0 now sits right next to the true post-warmup benign mean
+(0.0795, unchanged) — the false-positive spike is gone, not reduced.
+Attack step-0 stayed correctly high — genuine early detection is
+preserved.
+
+**Confirmed at the full-campaign level too** (re-ran
+`forecaster/replay_campaign.py`, unmodified, under the fix):
+
+| | benign floor dist. | benign threat_score (min/mean/max) | attack floor dist. | attack threat_score (min/mean/max) |
+|---|---|---|---|---|
+| Before | `{HYBRID: 442 (49.1%), PQC: 446 (49.6%), CLASSICAL: 12 (1.3%)}` | 0.0554 / 0.1124 / 0.9255 | `{HYBRID: 458 (50.9%), PQC: 442 (49.1%)}` | 0.9676 / 0.9746 / 0.9758 |
+| After | `{PQC: 458 (50.9%), CLASSICAL: 442 (49.1%)}` — **zero HYBRID** | 0.0554 / 0.0748 / **0.2011** | `{HYBRID: 458 (50.9%), PQC: 442 (49.1%)}` — unchanged | 0.9676 / 0.9746 / 0.9758 |
+
+The benign campaign's floor distribution no longer shows any
+`SERVE_HYBRID` (was 49.1%, entirely the cold-start-ratchet artifact);
+max benign threat_score across all 900 decisions dropped from the
+0.9255 cold-start outlier to a genuine post-warmup 0.2011. Attack
+campaign numbers are unchanged to 4 decimal places — the fix touches
+only benign-episode cold-start behavior.
+
+**Tests:** 4 new unit tests in `tests/test_rt_iot_replay.py` (buffer
+fully populated/non-zero immediately after construction; the preferred
+real-preceding-rows path; the fallback replicate-first-row path; the
+partial-context case). `tests/test_rt_iot_replay_live_episodes.py`'s
+old bug-documenting test (which asserted the BUG — step-0 > 0.5 for
+benign) was replaced with two fix-verifying regression tests (step-0
+benign < 0.5 and attack > 0.5; step-0 no longer spikes relative to
+post-warmup benign scores). **Full suite: 734 passed, 1 xfailed** (729
+prior − 1 removed + 6 new). `git diff --stat` confirms zero changes
+outside `forecaster/rt_iot_replay.py` and its two test files.
+
+**Next task:** Addition F (pcap/replay wired into `env/environment.py`'s
+own live tick path, per PLAN2.md §8B) or Phase 4b (the full
+experimental campaign under the real forecaster) remain the two open
+options per the standing roadmap below — both can now proceed without
+this cold-start caveat distorting early-episode behavior.
+
+---
+
 **RT-IoT2022 replay wiring — real held-out replay provider built,
 Step-4-verified to genuinely differentiate on real input, and run
 through a real, meaningful multi-episode campaign — DONE 2026-09-02.**

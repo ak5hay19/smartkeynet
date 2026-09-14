@@ -12,6 +12,7 @@ re-asserted here as a flaky statistical test.
 
 from __future__ import annotations
 
+import statistics
 from pathlib import Path
 
 import pytest
@@ -69,22 +70,71 @@ def test_replay_provider_drives_live_episodes_with_genuine_class_conditioned_var
 
 
 @requires_real_data
-def test_cold_start_zero_padding_causes_a_real_transient_spike_regardless_of_replayed_class():
-    """A real finding from this session's Step-5 campaign (see
-    SESSION_LOG.md), locked in as a regression test rather than left as
-    a one-off observation: at the very first decision of an episode,
-    `LSTMForecastProvider.get_threat_forecast()`'s buffer holds only 1
-    real replayed row (63 zero-padded, per its pre-existing,
-    Phase-4a-built cold-start behavior -- untouched by this session).
-    That mostly-zero window reads as spuriously high-threat to the
-    model REGARDLESS of whether the one real row is benign or attack
-    (the model was only ever trained on FULL 64-row real windows, never
-    a near-all-zero one), and -- because Hard Rule 2's floor ratchet
-    only ever raises -- this transient artifact can lock an elevated
-    floor in for a genuinely benign episode's entire remaining
-    duration. This is NOT fixed here (deliberately out of this
-    session's scope -- see SESSION_LOG.md); this test exists so a
-    future session addressing it can see exactly what changes."""
+def test_cold_start_buffer_warm_start_fixes_the_false_positive_spike():
+    """Regression test for the cold-start artifact found in the
+    original replay-wiring session (see SESSION_LOG.md/PROGRESS.md) and
+    fixed in the "cold-start buffer fix" session:
+    `RTIoT2022ReplayProvider` used to leave its inherited LSTM window
+    buffer empty at construction, so the very first decision of an
+    episode saw only 1 real replayed row + 63 zero-padded rows --
+    wildly out-of-distribution for a model trained only on full 64-row
+    real windows, which responded by spiking `threat_score` to ~0.92
+    REGARDLESS of whether the replayed data was genuinely benign or
+    attack. Because Hard Rule 2's floor ratchet only ever raises, that
+    transient false positive could lock an elevated floor in for a
+    genuinely benign episode's entire remaining duration.
+
+    Fix: `RTIoT2022ReplayProvider._warm_start_buffer()` now pre-fills
+    the buffer with real context before the first `update()` call --
+    real preceding held-out rows when available, or the earliest
+    available real row replicated as a documented approximation when
+    the episode starts at the true beginning of the held-out span
+    (this benign-class case, `start_offset=0`, always hits the
+    fallback -- see that method's docstring). This test would fail
+    again if the buffer were ever left empty/zero-padded at cold start.
+
+    Real, measured before/after this session (15-seed mean, matching
+    `forecaster/replay_campaign.py`'s own seed/start_offset scheme):
+    benign step-0 threat_score mean was 0.9221 (false positive) before
+    the fix, 0.0808 after -- landing right next to the true post-warmup
+    benign mean (~0.08, unchanged by this fix). Attack step-0 stayed
+    correctly high throughout: 0.9723 before, 0.9750 after -- the fix
+    does not suppress genuine early detection."""
+    holdout = held_out_replay_rows()
+    config = {**load_full_config(), "max_steps": 60}
+    policy = StaticThresholdPolicy(pool_fill_threshold=0.5)
+
+    def first_decision_score(features):
+        env = SmartKeyNetEnv(
+            config,
+            forecast_provider_factory=lambda _seed, feats=features: RTIoT2022ReplayProvider(
+                str(REAL_CHECKPOINT), feats
+            ),
+        )
+        state, info = env.reset(seed=0)
+        return state["threat_score"]
+
+    benign_score = first_decision_score(holdout.benign_features)
+    attack_score = first_decision_score(holdout.attack_features)
+
+    # the false-positive artifact this fix removes: benign step-0 must
+    # now read low, close to the true post-warmup benign signal, not
+    # the false ~0.92 the empty/zero-padded buffer used to produce.
+    assert benign_score < 0.5
+    # genuine early detection must be preserved: attack step-0 must
+    # still read correctly high.
+    assert attack_score > 0.5
+
+
+@requires_real_data
+def test_cold_start_no_longer_spikes_relative_to_post_warmup_benign_scores():
+    """Companion check to the regression test above, using the same
+    shape as the original bug-documenting test: step-0 and post-warmup
+    (decision >=5) benign scores must now be of a similar, low
+    magnitude -- there must be no large transient spike at episode
+    start. Before the fix, step-0 (~0.92) was far above every
+    post-warmup score (max 0.31); after the fix they sit in the same
+    range."""
     holdout = held_out_replay_rows()
     config = {**load_full_config(), "max_steps": 60}
     policy = StaticThresholdPolicy(pool_fill_threshold=0.5)
@@ -107,9 +157,7 @@ def test_cold_start_zero_padding_causes_a_real_transient_spike_regardless_of_rep
         if i >= 5:  # buffer has by now filled with several real benign rows
             later_scores.append(state["threat_score"])
 
-    # real, measured this session: step-0 spuriously reads elevated
-    # (mean 0.92 across 15 seeds) even though the replayed data is
-    # genuinely benign; once the buffer fills with real rows the score
-    # correctly drops (post-warmup mean 0.08, max 0.31).
-    assert first_decision_score > 0.5
+    assert first_decision_score < 0.5
     assert max(later_scores) < 0.5
+    # no large cold-start spike relative to the post-warmup regime
+    assert first_decision_score - statistics.mean(later_scores) < 0.3

@@ -206,6 +206,52 @@ class RTIoT2022ReplayProvider(LSTMForecastProvider):
 
         self._replay_features = replay_features
         self._replay_pos = start_offset % len(replay_features)
+        self._warm_start_buffer()
+
+    def _warm_start_buffer(self) -> None:
+        """Fills the inherited `LSTMForecastProvider._buffer` with real
+        context BEFORE this episode's first `update()` call, instead of
+        leaving it empty for `get_threat_forecast()`'s zero-pad fallback
+        (`forecaster/model.py`) to kick in at step 0.
+
+        Real finding (this session, see SESSION_LOG.md/PROGRESS.md): a
+        buffer that is 1 real row + 63 zero-padded rows is wildly
+        out-of-distribution for a model only ever trained on full
+        64-row real windows, and it responds by spiking `threat_score`
+        to ~0.92-0.97 regardless of the true replayed class -- a false
+        positive that (because Hard Rule 2's floor ratchet only ever
+        raises) locks an elevated floor in for much of a genuinely
+        benign episode.
+
+        **Preferred**: real rows immediately preceding `self._replay_pos`
+        within this SAME held-out class span, not yet consumed by this
+        episode (genuine chronological real context -- `replay_features`
+        is real chronological raw-CSV-row order per this class's
+        docstring). Used whenever `self._replay_pos >= self._window` or
+        partially when fewer real preceding rows exist.
+
+        **Fallback, explicitly an approximation, not equivalent to real
+        history**: when this episode's `start_offset` sits at or near
+        the true beginning of the held-out span (no real predecessor
+        available within it -- e.g. every default `start_offset=0`
+        episode), the earliest real preceding row available (or, with
+        none at all, `replay_features[0]` -- the first row this episode
+        is about to replay) is REPLICATED to fill the remaining slots.
+        This gives the LSTM a real-magnitude, in-distribution-ish
+        constant window rather than an all-zero one; it is not real
+        history and is documented here as a deliberate, honest
+        approximation, not a synthetic patch presented as equivalent.
+        """
+        available = min(self._replay_pos, self._window)
+        preceding = [self._replay_features[self._replay_pos - available + i] for i in range(available)]
+
+        missing = self._window - available
+        if missing > 0:
+            filler_row = preceding[0] if preceding else self._replay_features[self._replay_pos]
+            preceding = [filler_row] * missing + preceding
+
+        for row in preceding:
+            self._buffer.append(self._prepare_step_features(row))
 
     def update(self, observation: ForecastObservation) -> None:
         self._pool_ewma.update(observation)  # real pool telemetry, unaffected by replay

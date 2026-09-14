@@ -172,6 +172,89 @@ def test_replay_provider_wraps_rather_than_fabricating_rows_past_span_end(tmp_pa
         assert any(np.allclose(entry, p) for p in possible)
 
 
+# ---------------------------------------------------------------------------
+# Cold-start buffer warm-start (regression tests for the "1 real row + 63
+# zero-padded rows at episode start" artifact -- see SESSION_LOG.md/
+# PROGRESS.md's "cold-start buffer fix" session). These test
+# `_warm_start_buffer()` directly, at the unit level, rather than only via
+# the slower full-env live-episode checks in
+# tests/test_rt_iot_replay_live_episodes.py.
+# ---------------------------------------------------------------------------
+
+
+def test_buffer_is_fully_populated_and_non_zero_immediately_after_construction(tmp_path):
+    """Before this fix, `self._buffer` was empty right after `__init__`
+    and only filled with real data one row per `update()` call --
+    `get_threat_forecast()`'s zero-pad fallback covered the rest until
+    `self._window` updates had happened. Now the buffer must already be
+    full of real (non-zero) values before any `update()` call at all."""
+    checkpoint = make_tiny_checkpoint(tmp_path, feature_dim=5, window=8)
+    rng = np.random.default_rng(1)
+    replay_features = rng.uniform(1.0, 5.0, size=(20, 5))
+
+    provider = RTIoT2022ReplayProvider(str(checkpoint), replay_features)
+
+    buffered = list(provider._buffer)
+    assert len(buffered) == 8  # == window, not 0
+    for row in buffered:
+        assert not np.allclose(row, 0.0)
+
+
+def test_buffer_warm_start_prefers_real_preceding_rows_when_available(tmp_path):
+    """Preferred path: when `start_offset >= window`, the entire
+    pre-filled buffer must be exactly the real rows immediately
+    preceding `start_offset` in `replay_features` -- genuine held-out
+    history, not a replicated stand-in."""
+    checkpoint = make_tiny_checkpoint(tmp_path, feature_dim=4, window=3)
+    replay_features = np.array(
+        [[float(i)] * 4 for i in range(10)]
+    )  # row i == [i, i, i, i], easy to identify
+
+    provider = RTIoT2022ReplayProvider(str(checkpoint), replay_features, start_offset=6)
+
+    buffered = list(provider._buffer)
+    expected_raw = replay_features[3:6]  # the 3 real rows immediately before offset 6
+    for actual, raw in zip(buffered, expected_raw):
+        np.testing.assert_allclose(actual, provider._prepare_step_features(raw))
+
+
+def test_buffer_warm_start_falls_back_to_replicating_first_row_at_span_start(tmp_path):
+    """Fallback path: `start_offset=0` means no real predecessor exists
+    within this held-out span (the true beginning of the contiguous
+    block) -- the buffer must be filled entirely with the first real
+    row, replicated (a documented approximation), never zeros."""
+    checkpoint = make_tiny_checkpoint(tmp_path, feature_dim=4, window=5)
+    replay_features = np.array([[9.0, 9.0, 9.0, 9.0], [1.0, 1.0, 1.0, 1.0], [2.0, 2.0, 2.0, 2.0]])
+
+    provider = RTIoT2022ReplayProvider(str(checkpoint), replay_features, start_offset=0)
+
+    buffered = list(provider._buffer)
+    expected = provider._prepare_step_features(replay_features[0])
+    assert len(buffered) == 5
+    for row in buffered:
+        np.testing.assert_allclose(row, expected)
+
+
+def test_buffer_warm_start_partial_real_context_pads_with_earliest_available_row(tmp_path):
+    """Partial case: `0 < start_offset < window` -- some real preceding
+    rows exist (fewer than `window`), so the remaining slots are filled
+    by replicating the earliest of THOSE available real rows, not by
+    zero-padding."""
+    checkpoint = make_tiny_checkpoint(tmp_path, feature_dim=3, window=4)
+    replay_features = np.array([[5.0, 5.0, 5.0], [6.0, 6.0, 6.0], [7.0, 7.0, 7.0], [8.0, 8.0, 8.0]])
+
+    provider = RTIoT2022ReplayProvider(str(checkpoint), replay_features, start_offset=2)
+
+    buffered = list(provider._buffer)
+    # 2 real preceding rows available (indices 0, 1); window=4 means 2
+    # filler slots, filled with the earliest available real row (index 0).
+    expected_raw = [replay_features[0], replay_features[0], replay_features[0], replay_features[1]]
+    for actual, raw in zip(buffered, expected_raw):
+        np.testing.assert_allclose(actual, provider._prepare_step_features(raw))
+    for row in buffered:
+        assert not np.allclose(row, 0.0)
+
+
 def test_replay_provider_start_offset_selects_a_different_real_slice(tmp_path):
     checkpoint = make_tiny_checkpoint(tmp_path, feature_dim=3, window=2)
     replay_features = np.array([[1.0, 1.0, 1.0], [2.0, 2.0, 2.0], [3.0, 3.0, 3.0], [4.0, 4.0, 4.0]])
