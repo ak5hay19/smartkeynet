@@ -85,7 +85,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -98,19 +98,39 @@ from dashboard.render_migration_wave import (
     attribute_floor_change,
     write_migration_wave_html,
 )
-from env.contracts import Action, SensitivityClass, ThreatPosture
+from env.contracts import Action, ForecastProvider, SensitivityClass, ThreatPosture
 from env.environment import SmartKeyNetEnv
 from env.request_generator import build_tenant_graph
 from experiments.train import GreedyDQNPolicy, load_full_config
+from forecaster.rt_iot_replay import RTIoT2022ReplayProvider, held_out_replay_rows
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CHECKPOINTS_DIR = _REPO_ROOT / "checkpoints"
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
+_LSTM_CHECKPOINT_PATH = _CHECKPOINTS_DIR / "lstm_threat_forecaster.pt"
 
 _SCENARIO_CONFIG_PATH = _REPO_ROOT / "configs" / "scenarios" / "s6_migration.yaml"
 _CHECKPOINT_PATH = _CHECKPOINTS_DIR / "dqn_s1.pt"
 _SEED = 900  # held-out eval seed -- not a training seed of dqn_s1.pt
 _MAX_STEPS = 250
+
+
+def _replay_provider_factory() -> Callable[[int | None], ForecastProvider]:
+    """Real-forecaster factory for S6 (Addition E Phase 4b's own
+    forecaster-choice decision, SESSION_LOG.md 2026-09-14): S6 has no
+    adversarial/scripted-schedule dependency on `observation
+    ["threat_features"]`, so `RTIoT2022ReplayProvider` -- matching the
+    forecaster `checkpoints/dqn_s1.pt` was actually retrained under
+    (S1) -- is the correct, consistent choice for this held-out S6
+    eval, per `scratchpad/phase4b_s6.py`'s own established re-check."""
+    rows = held_out_replay_rows()
+    features = np.concatenate([rows.benign_features, rows.attack_features], axis=0)
+
+    def factory(episode_seed: int | None) -> ForecastProvider:
+        offset = episode_seed or 0
+        return RTIoT2022ReplayProvider(str(_LSTM_CHECKPOINT_PATH), features, start_offset=offset)
+
+    return factory
 
 
 @dataclasses.dataclass
@@ -124,7 +144,9 @@ class _RawDecision:
     served_tier: Any
 
 
-def _load_masked_policy(config: dict[str, Any]) -> GreedyDQNPolicy:
+def _load_masked_policy(
+    config: dict[str, Any], forecast_provider_factory: Callable[[int | None], ForecastProvider] | None = None
+) -> GreedyDQNPolicy:
     """Reconstruct a `DQNAgent` with S6's own `state_dim`/`has_forecast`
     and load the real, already-trained `checkpoints/dqn_s1.pt` weights
     -- mirrors `render_results_demo.py::_load_greedy_policy` exactly.
@@ -132,7 +154,7 @@ def _load_masked_policy(config: dict[str, Any]) -> GreedyDQNPolicy:
     `s6_migration.yaml::train_eligible` is enforced by
     `experiments/train.py::train()`, which this module never calls)."""
     has_forecast = config.get("use_foresight", "off") != "off"
-    env = SmartKeyNetEnv({**config, "seed": 0})
+    env = SmartKeyNetEnv({**config, "seed": 0}, forecast_provider_factory=forecast_provider_factory)
     state, _info = env.reset(seed=0)
     state_dim = flatten_state(state, has_forecast).shape[0]
     agent = DQNAgent(state_dim=state_dim, has_forecast=has_forecast, config=load_dqn_config())
@@ -162,9 +184,12 @@ def _real_pre_migration_classes(config: dict[str, Any]) -> dict[str, Sensitivity
     }
 
 
-def _run_real_episode(policy: GreedyDQNPolicy, config: dict[str, Any], seed: int) -> tuple[
-    list[_RawDecision], list[PoolTrajectoryPoint]
-]:
+def _run_real_episode(
+    policy: GreedyDQNPolicy,
+    config: dict[str, Any],
+    seed: int,
+    forecast_provider_factory: Callable[[int | None], ForecastProvider] | None = None,
+) -> tuple[list[_RawDecision], list[PoolTrajectoryPoint]]:
     """Step one real S6 episode, collecting one real `_RawDecision` +
     one real `PoolTrajectoryPoint` per decision. Reaches into
     `env._current_request`/`env._sessions`/`env._resulting_key_type`/
@@ -173,7 +198,7 @@ def _run_real_episode(policy: GreedyDQNPolicy, config: dict[str, Any], seed: int
     `dashboard/render_living_system_demo.py::collect_real_episode`
     already use for exactly this reason (the public Gym API doesn't
     surface per-request tenant/session-key/forecaster internals)."""
-    env = SmartKeyNetEnv(config)
+    env = SmartKeyNetEnv(config, forecast_provider_factory=forecast_provider_factory)
     state, info = env.reset(seed=seed)
 
     decisions: list[_RawDecision] = []
@@ -279,9 +304,10 @@ def collect_real_migration_wave_data() -> MigrationWaveData:
     config["max_steps"] = _MAX_STEPS
     assert config.get("train_eligible", True) is False  # Hard Rule 8 guard is real in this config
 
+    factory = _replay_provider_factory()
     pre_migration_classes = _real_pre_migration_classes(config)
-    policy = _load_masked_policy(config)
-    decisions, trajectory = _run_real_episode(policy, config, _SEED)
+    policy = _load_masked_policy(config, factory)
+    decisions, trajectory = _run_real_episode(policy, config, _SEED, factory)
 
     events = tuple(
         _build_event_view(event, decisions, pre_migration_classes)

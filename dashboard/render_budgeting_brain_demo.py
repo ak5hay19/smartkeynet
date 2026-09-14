@@ -74,7 +74,9 @@ from __future__ import annotations
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+import numpy as np
 
 import numpy as np
 
@@ -87,21 +89,42 @@ from dashboard.render_budgeting_brain import (
     PoolTrajectoryPoint,
     write_budgeting_brain_html,
 )
-from env.contracts import Action
+from env.contracts import Action, ForecastProvider
 from env.environment import _LATENCY_UNITS, SmartKeyNetEnv
 from experiments.harness import _delivered_tier, _resolved_cost_action
 from experiments.train import GreedyDQNPolicy, load_full_config
+from forecaster.rt_iot_replay import RTIoT2022ReplayProvider, held_out_replay_rows
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CHECKPOINTS_DIR = _REPO_ROOT / "checkpoints"
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
+_LSTM_CHECKPOINT_PATH = _CHECKPOINTS_DIR / "lstm_threat_forecaster.pt"
 
 _SCENARIO = "S3"
 _SEED = 900  # held-out eval seed, NOT the checkpoint's own training seed (1)
 _MAX_STEPS = 250
 
 
-def _load_masked_policy(config: dict[str, Any]) -> GreedyDQNPolicy:
+def _replay_provider_factory() -> Callable[[int | None], ForecastProvider]:
+    """Real-forecaster factory for S3 (Addition E Phase 4b's own
+    forecaster-choice decision, SESSION_LOG.md 2026-09-14): no
+    adversarial attack is involved, so `RTIoT2022ReplayProvider` --
+    genuinely real, network-data-driven -- is the correct choice,
+    matching the forecaster `checkpoints/s3_masked_seed1.pt` was
+    actually retrained under this session."""
+    rows = held_out_replay_rows()
+    features = np.concatenate([rows.benign_features, rows.attack_features], axis=0)
+
+    def factory(episode_seed: int | None) -> ForecastProvider:
+        offset = episode_seed or 0
+        return RTIoT2022ReplayProvider(str(_LSTM_CHECKPOINT_PATH), features, start_offset=offset)
+
+    return factory
+
+
+def _load_masked_policy(
+    config: dict[str, Any], forecast_provider_factory: Callable[[int | None], ForecastProvider] | None = None
+) -> GreedyDQNPolicy:
     """Mirrors `dashboard/render_results_demo.py::_load_greedy_policy`
     exactly (same `state_dim`/`has_forecast` derivation, same
     `load_dqn_config()` network-shape source) -- reused here as its
@@ -109,7 +132,7 @@ def _load_masked_policy(config: dict[str, Any]) -> GreedyDQNPolicy:
     is a byte-for-byte-identical re-implementation of that established
     reload pattern, not a divergent one."""
     has_forecast = config.get("use_foresight", "off") != "off"
-    env = SmartKeyNetEnv({**config, "seed": 0})
+    env = SmartKeyNetEnv({**config, "seed": 0}, forecast_provider_factory=forecast_provider_factory)
     state, _info = env.reset(seed=0)
     state_dim = flatten_state(state, has_forecast).shape[0]
     agent = DQNAgent(state_dim=state_dim, has_forecast=has_forecast, config=load_dqn_config())
@@ -126,15 +149,22 @@ def _run_episode_with_trajectory(
     series_key: str,
     tag: str,
     pool_capacity_bits: float,
+    forecast_provider_factory: Callable[[int | None], ForecastProvider] | None = None,
 ) -> PolicyEpisode:
     """Run one real S3 episode with `policy`, collecting the real
     per-decision `(env._step_count, state["pool_fill"])` trajectory and
     every real `RegretEvent`, alongside the same aggregate stats
     `experiments/harness.py::run_scenario` computes (via its own
     `_delivered_tier`/`_resolved_cost_action` helpers, imported
-    directly -- not re-derived)."""
+    directly -- not re-derived).
+
+    `forecast_provider_factory` (dashboard-refresh session addition):
+    both real episodes below (agent and baseline) are run against the
+    SAME real forecaster factory, matching the same-seed/same-
+    conditions design this module's own docstring already establishes
+    for the exogenous QKD/request streams."""
     env_config = {**config, "scenario": _SCENARIO, "seed": seed, "max_steps": _MAX_STEPS}
-    env = SmartKeyNetEnv(env_config)
+    env = SmartKeyNetEnv(env_config, forecast_provider_factory=forecast_provider_factory)
     state, info = env.reset(seed=seed)
 
     trajectory: list[PoolTrajectoryPoint] = [
@@ -209,8 +239,9 @@ def collect_real_budgeting_brain_data() -> BudgetingBrainData:
     (`AlwaysHybridPolicy` needs none)."""
     config = load_full_config(_REPO_ROOT / "configs" / "scenarios" / "s3_degradation.yaml")
     pool_capacity_bits = float(config["pool"]["capacity_bits"])
+    factory = _replay_provider_factory()
 
-    masked_policy = _load_masked_policy(config)
+    masked_policy = _load_masked_policy(config, factory)
     agent_episode = _run_episode_with_trajectory(
         masked_policy,
         config,
@@ -219,6 +250,7 @@ def collect_real_budgeting_brain_data() -> BudgetingBrainData:
         series_key="agent",
         tag=f"foresight: {config.get('use_foresight', 'off')}",
         pool_capacity_bits=pool_capacity_bits,
+        forecast_provider_factory=factory,
     )
 
     baseline_policy = AlwaysHybridPolicy()
@@ -230,6 +262,7 @@ def collect_real_budgeting_brain_data() -> BudgetingBrainData:
         series_key="baseline",
         tag="no budgeting",
         pool_capacity_bits=pool_capacity_bits,
+        forecast_provider_factory=factory,
     )
 
     return BudgetingBrainData(

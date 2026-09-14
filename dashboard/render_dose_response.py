@@ -175,10 +175,22 @@ def render_dose_response_html(
     *,
     scenario: str = "S2",
     title: str = "SmartKeyNet -- Steering Attack Dose-Response",
+    shape_note: str | None = None,
 ) -> str:
     """Render the real dose-response curves in `series` as a
     self-contained HTML page. Pure view: reads each series' own
-    `DoseResponsePoint`s only, invents no alpha step and no value."""
+    `DoseResponsePoint`s only, invents no alpha step and no value.
+
+    `shape_note` (dashboard-refresh session addition, optional): free-
+    text HTML-escaped caveat rendered as its own callout, above the
+    per-series boundary callouts below. Exists so a caller (e.g. this
+    session's `render_results_demo.py`, after the 2026-09-14 LSTM
+    cold-start warm-start fix changed the real curve's shape from a
+    smooth monotonic rise to a two-plateau step function) can carry
+    that honest, curve-specific context directly in the panel's own
+    text -- not just in PROGRESS.md/SESSION_LOG.md -- without this
+    renderer inventing or hardcoding shape language itself (which would
+    silently go stale against a still-different future real curve)."""
     chart_svg = _svg_chart(series)
 
     alphas_sorted = sorted({p.alpha for s in series for p in s.points})
@@ -212,6 +224,10 @@ def render_dose_response_html(
         provenance_rows.append(f"{_e(s.label)}: {n} real alpha points, each mean&plusmn;std over its own real eval seeds.")
     provenance = "<br>".join(provenance_rows)
 
+    shape_note_html = (
+        f'<div class="callout"><b>Shape note:</b> {_e(shape_note)}</div>' if shape_note else ""
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -233,6 +249,7 @@ def render_dose_response_html(
     <div class="dose-axis">{axis_labels}</div>
     <div class="legend-row">{legend_items}</div>
   </div>
+  {shape_note_html}
   {"".join(boundary_callouts)}
   <div class="provenance">{provenance}</div>
 </main>
@@ -247,8 +264,11 @@ def write_dose_response_html(
     *,
     scenario: str = "S2",
     title: str = "SmartKeyNet -- Steering Attack Dose-Response",
+    shape_note: str | None = None,
 ) -> Path:
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(render_dose_response_html(series, scenario=scenario, title=title), encoding="utf-8")
+    out_path.write_text(
+        render_dose_response_html(series, scenario=scenario, title=title, shape_note=shape_note), encoding="utf-8"
+    )
     return out_path

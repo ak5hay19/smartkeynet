@@ -64,7 +64,7 @@ class Panel(NamedTuple):
 PANELS: tuple[Panel, ...] = (
     Panel(
         "Living System -- S1 (steady/calm)",
-        "The same real tenant graph and policy under S1 (steady, unscripted traffic) -- shown honestly: this run also saturates to hybrid on every real decision (see the panel for why -- pool_fill stays above the demo policy's threshold throughout, compounding the same placeholder-forecaster posture ratchet documented on S2).",
+        "The same real tenant graph and policy under S1 (steady, unscripted traffic), driven by the real, trained forecaster (RTIoT2022ReplayProvider) -- shown honestly: this run still saturates to hybrid on every real decision, but for a single, now-isolated cause -- StaticThresholdPolicy itself serves hybrid whenever pool_fill > 0.5, and pool_fill never drops that low here; posture stays CALM throughout under the real forecaster (no longer an artifact-driven ratchet).",
         (
             PanelFile("living_system_s1_01_first_decision.html", "1. First decision"),
             PanelFile("living_system_s1_02_graph_fully_populated.html", "2. Graph fully populated"),
@@ -82,7 +82,7 @@ PANELS: tuple[Panel, ...] = (
     ),
     Panel(
         "Living System -- S1, trained DQN",
-        "Same real tenant graph/episode as the S1 card above, but driven by a trained masked-DQN checkpoint (checkpoints/dqn_s1.pt) instead of StaticThresholdPolicy -- genuine tier variety (250 real decisions: 83 hybrid, 167 PQC), unlike that card's 100% hybrid saturation.",
+        "Same real tenant graph/episode as the S1 card above (real RTIoT2022ReplayProvider forecaster), but driven by a trained masked-DQN checkpoint (checkpoints/dqn_s1.pt, retrained under the real forecaster) instead of StaticThresholdPolicy -- genuine tier variety (250 real decisions: 68 classical, 83 hybrid, 99 PQC), unlike that card's 100% hybrid saturation.",
         (
             PanelFile("living_system_s1_dqn_01_first_decision.html", "1. First decision"),
             PanelFile("living_system_s1_dqn_02_graph_fully_populated.html", "2. Graph fully populated"),
@@ -91,7 +91,7 @@ PANELS: tuple[Panel, ...] = (
     ),
     Panel(
         "Living System -- S2, trained DQN",
-        "Same real tenant graph/episode as the S2 card above, but driven by a trained masked-DQN checkpoint (checkpoints/dqn_s2.pt) instead of StaticThresholdPolicy -- genuine tier variety (250 real decisions: 6 classical, 163 hybrid, 81 PQC), unlike that card's 100% hybrid saturation.",
+        "Same real tenant graph/episode as the S2 card above (real LSTMForecastProvider), but driven by a trained masked-DQN checkpoint (checkpoints/dqn_s2.pt, retrained under the real forecaster) instead of StaticThresholdPolicy -- genuine tier variety (250 real decisions: 6 classical, 163 hybrid, 81 PQC), unlike that card's 100% hybrid saturation.",
         (
             PanelFile("living_system_s2_dqn_01_first_decision.html", "1. First decision"),
             PanelFile("living_system_s2_dqn_02_graph_fully_populated.html", "2. Graph fully populated"),
@@ -100,7 +100,7 @@ PANELS: tuple[Panel, ...] = (
     ),
     Panel(
         "Explain Decision",
-        "The floor lookup, action mask legality, cost comparison, and final decision for three real, structurally-different S2 decisions.",
+        "The floor lookup, action mask legality, cost comparison, and final decision for three real, structurally-different S2 decisions, under the real, trained LSTMForecastProvider and the recalibrated floor table.",
         (
             PanelFile("01_first_decision.html", "1. First decision"),
             PanelFile("02_floor_driven_only_hybrid_clears.html", "2. Floor-driven (only HYBRID clears)"),
@@ -109,22 +109,22 @@ PANELS: tuple[Panel, ...] = (
     ),
     Panel(
         "Dose-Response",
-        "The steering-attack headline result: V(pi) vs. attack strength alpha, masked agent vs. soft-reward baseline.",
+        "The steering-attack headline result: V(pi) vs. attack strength alpha, masked agent vs. soft-reward baseline -- real, trained LSTMForecastProvider (cold-start fixed), a two-plateau step curve, not the earlier placeholder-forecaster sweep's smooth rise.",
         (PanelFile("dose_response_chart.html", "Open panel"),),
     ),
     Panel(
         "S3 Comparison Table",
-        "Masked DQN vs. soft-reward baseline on S3 (QKD degradation): p99 latency, total reward, rekey ratio, regret/exhaustion, below-floor rate.",
+        "Masked DQN vs. soft-reward baseline on S3 (QKD degradation), real RTIoT2022ReplayProvider forecaster + recalibrated floor table: p99 latency, total reward, rekey ratio, regret/exhaustion, below-floor rate.",
         (PanelFile("s3_comparison_table.html", "Open panel"),),
     ),
     Panel(
         "Budgeting Brain",
-        "Real S3 pool-trajectory comparison, masked DQN vs. AlwaysHybridPolicy -- same seed, same conditions, real exhaustion-event markers.",
+        "Real S3 pool-trajectory comparison, masked DQN vs. AlwaysHybridPolicy -- same seed, same conditions, real exhaustion-event markers, real RTIoT2022ReplayProvider forecaster.",
         (PanelFile("budgeting_brain.html", "Open panel"),),
     ),
     Panel(
         "Migration Wave",
-        "S6's three scripted floor-ratchet events against a real held-out episode from an agent never trained on S6, with an honesty-gated attribution.",
+        "S6's three scripted floor-ratchet events against a real held-out episode (real RTIoT2022ReplayProvider forecaster) from an agent never trained on S6, with an honesty-gated attribution.",
         (PanelFile("migration_wave.html", "Open panel"),),
     ),
 )

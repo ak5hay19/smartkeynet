@@ -12,6 +12,12 @@ own `dashboard/render_migration_wave_demo.py` produced -- see
 real scripted schedule itself (steps 60/130/190, tenant_index 0/3/4,
 new_sensitivity_class 3/3/2) is `configs/scenarios/s6_migration.yaml::
 migration_schedule`, read directly, not retyped by hand from memory.
+
+2026-09-14 dashboard-refresh update: `_real_events()` (and the tests
+built directly on its exact posture values) were regenerated against
+the real, trained `RTIoT2022ReplayProvider` forecaster + retrained
+`checkpoints/dqn_s1.pt`, replacing the earlier placeholder-EWMA run --
+posture is now CALM throughout this eval seed's episode, not ELEVATED.
 """
 
 from __future__ import annotations
@@ -115,10 +121,11 @@ def test_no_visible_change_when_floor_already_at_post_migration_level():
 
 
 def test_scripted_when_posture_held_constant_and_floor_genuinely_rises():
-    """The real seed=900 tenant_3 case: posture identical (ELEVATED)
+    """The real seed=900 tenant_3 case (2026-09-14 dashboard-refresh,
+    real RTIoT2022ReplayProvider forecaster): posture identical (CALM)
     before and after, floor genuinely rises PQC -> HYBRID."""
-    before = _obs(121, "tenant_3", SensitivityClass.S2, ThreatPosture.ELEVATED, Action.SERVE_PQC)
-    after = _obs(243, "tenant_3", SensitivityClass.S3, ThreatPosture.ELEVATED, Action.SERVE_HYBRID)
+    before = _obs(121, "tenant_3", SensitivityClass.S2, ThreatPosture.CALM, Action.SERVE_PQC)
+    after = _obs(243, "tenant_3", SensitivityClass.S3, ThreatPosture.CALM, Action.SERVE_HYBRID)
     attribution, note = attribute_floor_change(
         event_step=130,
         old_sensitivity_class=SensitivityClass.S2,
@@ -127,7 +134,7 @@ def test_scripted_when_posture_held_constant_and_floor_genuinely_rises():
         after=after,
     )
     assert attribution == "scripted"
-    assert "SAME posture (ELEVATED) throughout" in note
+    assert "SAME posture (CALM) throughout" in note
 
 
 def test_scripted_note_flags_when_pre_event_floor_already_above_calm_baseline():
@@ -135,8 +142,8 @@ def test_scripted_note_flags_when_pre_event_floor_already_above_calm_baseline():
     the pre-event floor was already elevated above the CALM baseline
     for the OLD class by this episode's own load-driven posture ratchet
     -- not silently implying the climb started from CLASSICAL."""
-    before = _obs(179, "tenant_4", SensitivityClass.S0, ThreatPosture.ELEVATED, Action.SERVE_CLASSICAL)
-    after = _obs(199, "tenant_4", SensitivityClass.S2, ThreatPosture.ELEVATED, Action.SERVE_PQC)
+    before = _obs(179, "tenant_4", SensitivityClass.S0, ThreatPosture.CALM, Action.SERVE_CLASSICAL)
+    after = _obs(199, "tenant_4", SensitivityClass.S2, ThreatPosture.CALM, Action.SERVE_PQC)
     attribution, note = attribute_floor_change(
         event_step=190,
         old_sensitivity_class=SensitivityClass.S0,
@@ -168,11 +175,11 @@ def test_before_after_floors_match_real_masking_table_lookup():
     """Cross-check against the REAL floor table (imported, not
     reimplemented) -- the real seed=900 tenant_3/tenant_4 observations'
     floors must equal what `env/masking.py`'s own table gives for their
-    real (class, posture) pairs."""
-    assert _PLACEHOLDER_FLOOR_TABLE[(SensitivityClass.S2, ThreatPosture.ELEVATED)] == Action.SERVE_PQC
-    assert _PLACEHOLDER_FLOOR_TABLE[(SensitivityClass.S3, ThreatPosture.ELEVATED)] == Action.SERVE_HYBRID
-    assert _PLACEHOLDER_FLOOR_TABLE[(SensitivityClass.S0, ThreatPosture.ELEVATED)] == Action.SERVE_CLASSICAL
-    assert _PLACEHOLDER_FLOOR_TABLE[(SensitivityClass.S2, ThreatPosture.ELEVATED)] == Action.SERVE_PQC
+    real (class, posture) pairs (2026-09-14 dashboard-refresh: CALM
+    throughout, not ELEVATED -- see module docstring)."""
+    assert _PLACEHOLDER_FLOOR_TABLE[(SensitivityClass.S2, ThreatPosture.CALM)] == Action.SERVE_PQC
+    assert _PLACEHOLDER_FLOOR_TABLE[(SensitivityClass.S3, ThreatPosture.CALM)] == Action.SERVE_HYBRID
+    assert _PLACEHOLDER_FLOOR_TABLE[(SensitivityClass.S0, ThreatPosture.CALM)] == Action.SERVE_CLASSICAL
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +200,19 @@ def test_real_schedule_values_loaded_from_config_are_the_expected_three_events()
 def _real_events() -> tuple[MigrationEventView, ...]:
     """The three real `MigrationEventView`s from the actual seed=900
     `dashboard/render_migration_wave_demo.py` run, values copied
-    verbatim from `dashboard/samples/migration_data.json`."""
-    ev1_after = _obs(79, "tenant_0", SensitivityClass.S3, ThreatPosture.ELEVATED, Action.SERVE_HYBRID, KeyType.HYBRID)
+    verbatim from `dashboard/samples/migration_data.json`.
+
+    2026-09-14 dashboard-refresh update: re-generated under the real,
+    trained `RTIoT2022ReplayProvider` forecaster (replacing the earlier
+    placeholder-EWMA-forecaster run) + retrained `checkpoints/dqn_s1.pt`.
+    Real, honest finding: this eval seed's replay offset lands entirely
+    within the real held-out BENIGN span, so posture stays CALM for all
+    250 decisions (not ELEVATED, as the old placeholder-forecaster run
+    found) -- see PROGRESS.md's Phase 4b S6 re-check entry. The
+    per-event attribution outcome (2 scripted, 1 no_before_observation)
+    is unchanged -- a real, independently-confirmed structural finding,
+    not assumed to carry over."""
+    ev1_after = _obs(79, "tenant_0", SensitivityClass.S3, ThreatPosture.CALM, Action.SERVE_HYBRID, KeyType.HYBRID)
     ev1_attr, ev1_note = attribute_floor_change(
         event_step=60, old_sensitivity_class=SensitivityClass.S1, new_sensitivity_class=SensitivityClass.S3,
         before=None, after=ev1_after,
@@ -205,8 +223,8 @@ def _real_events() -> tuple[MigrationEventView, ...]:
         attribution=ev1_attr, attribution_note=ev1_note,
     )
 
-    ev2_before = _obs(121, "tenant_3", SensitivityClass.S2, ThreatPosture.ELEVATED, Action.SERVE_PQC, KeyType.PQC)
-    ev2_after = _obs(243, "tenant_3", SensitivityClass.S3, ThreatPosture.ELEVATED, Action.SERVE_HYBRID, KeyType.HYBRID)
+    ev2_before = _obs(121, "tenant_3", SensitivityClass.S2, ThreatPosture.CALM, Action.SERVE_PQC, KeyType.PQC)
+    ev2_after = _obs(243, "tenant_3", SensitivityClass.S3, ThreatPosture.CALM, Action.SERVE_HYBRID, KeyType.HYBRID)
     ev2_attr, ev2_note = attribute_floor_change(
         event_step=130, old_sensitivity_class=SensitivityClass.S2, new_sensitivity_class=SensitivityClass.S3,
         before=ev2_before, after=ev2_after,
@@ -217,8 +235,8 @@ def _real_events() -> tuple[MigrationEventView, ...]:
         attribution=ev2_attr, attribution_note=ev2_note,
     )
 
-    ev3_before = _obs(179, "tenant_4", SensitivityClass.S0, ThreatPosture.ELEVATED, Action.SERVE_CLASSICAL, KeyType.PQC)
-    ev3_after = _obs(199, "tenant_4", SensitivityClass.S2, ThreatPosture.ELEVATED, Action.SERVE_PQC, KeyType.PQC)
+    ev3_before = _obs(179, "tenant_4", SensitivityClass.S0, ThreatPosture.CALM, Action.SERVE_CLASSICAL, KeyType.CLASSICAL)
+    ev3_after = _obs(199, "tenant_4", SensitivityClass.S2, ThreatPosture.CALM, Action.SERVE_PQC, KeyType.PQC)
     ev3_attr, ev3_note = attribute_floor_change(
         event_step=190, old_sensitivity_class=SensitivityClass.S0, new_sensitivity_class=SensitivityClass.S2,
         before=ev3_before, after=ev3_after,

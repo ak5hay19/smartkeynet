@@ -13,11 +13,25 @@ view over an explicit input object is the correct level (mirrors
 the actual real S3 (seed=900) episode this session's own
 `dashboard/render_budgeting_brain_demo.py` produced (see
 `dashboard/samples/budgeting_data.json` for the full real run): the
-masked DQN never drops below 0.7568 of pool capacity and hits zero
+masked DQN never drops below 0.7184 of pool capacity and hits zero
 real deferral events; `AlwaysHybridPolicy` drains to 0.0016 by tick
 131 and stays pinned there through 18 real deferral events until the
 degradation window ends at tick 200. All 18 real exhaustion events
 below are copied verbatim from that real run, not invented.
+
+**Dashboard-refresh session (2026-09-14) update**: re-generated under
+the real, trained `RTIoT2022ReplayProvider` forecaster (Addition E
+Phase 4b's own forecaster-choice decision for S3) and the retrained
+`checkpoints/s3_masked_seed1.pt`, replacing the earlier placeholder-
+EWMA-forecaster run. `AlwaysHybridPolicy`'s baseline trajectory and all
+18 exhaustion events are BYTE-IDENTICAL to the prior run -- expected,
+not a bug: that policy always attempts `SERVE_HYBRID` regardless of
+forecaster/posture, so its real behavior here is driven entirely by
+the (seed-identical, forecaster-independent) QKD/request streams. The
+masked DQN's own trajectory DID change (different checkpoint, driven
+by the real forecaster's different posture signal) -- its real new
+minimum is 0.7184 (was 0.7568) and its real new `forced_rekey_ratio` is
+0.1087 (was 0.2020); still zero real deferral events either way.
 """
 
 from __future__ import annotations
@@ -35,25 +49,29 @@ from dashboard.render_budgeting_brain import (
 )
 
 # Real, representative subset of the agent (masked DQN) trajectory --
-# actual (step, pool_fill) pairs from the real seed=900 S3 episode.
+# actual (step, pool_fill) pairs from the real seed=900 S3 episode
+# (2026-09-14 dashboard-refresh regeneration, real RTIoT2022ReplayProvider
+# forecaster + retrained checkpoints/s3_masked_seed1.pt).
 _AGENT_TRAJECTORY = [
     PoolTrajectoryPoint(step=2, pool_fill=1.0),
     PoolTrajectoryPoint(step=50, pool_fill=0.9872),
-    PoolTrajectoryPoint(step=100, pool_fill=0.872),
+    PoolTrajectoryPoint(step=100, pool_fill=0.8848),
     PoolTrajectoryPoint(step=150, pool_fill=0.8336),
-    PoolTrajectoryPoint(step=199, pool_fill=0.7568),  # real minimum this episode
+    PoolTrajectoryPoint(step=196, pool_fill=0.7184),  # real minimum this episode
     PoolTrajectoryPoint(step=200, pool_fill=1.0),
     PoolTrajectoryPoint(step=262, pool_fill=1.0),
 ]
 
 # Real, representative subset of the baseline (AlwaysHybridPolicy)
 # trajectory -- actual (step, pool_fill) pairs, same real episode/seed.
+# Byte-identical to the pre-refresh run (AlwaysHybridPolicy ignores the
+# forecaster entirely -- see module docstring).
 _BASELINE_TRAJECTORY = [
     PoolTrajectoryPoint(step=2, pool_fill=1.0),
     PoolTrajectoryPoint(step=50, pool_fill=0.9872),
     PoolTrajectoryPoint(step=100, pool_fill=0.3472),
     PoolTrajectoryPoint(step=131, pool_fill=0.0016),  # real minimum this episode
-    PoolTrajectoryPoint(step=198, pool_fill=0.0016),
+    PoolTrajectoryPoint(step=197, pool_fill=0.0016),
     PoolTrajectoryPoint(step=200, pool_fill=1.0),
     PoolTrajectoryPoint(step=272, pool_fill=1.0),
 ]
@@ -91,7 +109,7 @@ def _real_agent_episode(*, include_p99: bool = True) -> PolicyEpisode:
         regret_events=0,
         pool_exhaustion_events=0,
         below_floor_rate=0.0,
-        forced_rekey_ratio=0.20202020202020202,
+        forced_rekey_ratio=0.10869565217391304,
         p99_latency=1.5,
     )
 
@@ -229,7 +247,7 @@ def test_real_minimum_pool_fill_values_appear_in_callouts():
     data = _real_data()
     html_out = render_budgeting_brain_html(data)
     # real minimums from the constructed trajectories
-    assert "0.757" in html_out  # agent's real min, 0.7568, rounded to 3dp
+    assert "0.718" in html_out  # agent's real min, 0.7184, rounded to 3dp
     assert "0.002" in html_out  # baseline's real min, 0.0016, rounded to 3dp
 
 
@@ -311,7 +329,7 @@ def test_stat_box_values_match_the_real_policyepisode_fields_exactly():
 
     # agent: zero events, zero below-floor rate, its real forced_rekey_ratio
     assert ">0.0000<" in html_out  # below_floor_rate, both sides
-    assert ">0.202<" in html_out  # agent forced_rekey_ratio, 3dp
+    assert ">0.109<" in html_out  # agent forced_rekey_ratio, 3dp
     assert ">0.081<" in html_out  # baseline forced_rekey_ratio, 3dp
     assert ">18<" in html_out  # baseline regret/pool-exhaustion count
 

@@ -92,9 +92,9 @@ body{
   <div class="subgraph-tags"><span class="sg-tag">tenant_0 &middot; notify <span class="arrow">&rarr;</span> <span class="to">SERVE_HYBRID</span></span></div>
   <div class="mig-grid">
     <div class="floor-stat"><div class="k">Floor before</div><div class="v" style="color:var(--text-faint)">not observed</div><div class="meta">no real decision found</div></div>
-    <div class="floor-stat"><div class="k">Floor after</div><div class="v" style="color:#33D687">SERVE_HYBRID</div><div class="meta">t=79 &middot; S3+ELEVATED &middot; served HYBRID</div></div>
+    <div class="floor-stat"><div class="k">Floor after</div><div class="v" style="color:#33D687">SERVE_HYBRID</div><div class="meta">t=79 &middot; S3+CALM &middot; served HYBRID</div></div>
   </div>
-  <div class="note neutral"><b>attribution:</b> No real decision for tenant tenant_0 was observed before step 60 in this episode -- there is nothing to compare the post-event floor against, so no floor-change claim is made for this event. The only real fact available: the first decision observed after the event that actually reflects the new class S3 (t=79) showed floor=SERVE_HYBRID at posture ELEVATED.</div>
+  <div class="note neutral"><b>attribution:</b> No real decision for tenant tenant_0 was observed before step 60 in this episode -- there is nothing to compare the post-event floor against, so no floor-change claim is made for this event. The only real fact available: the first decision observed after the event that actually reflects the new class S3 (t=79) showed floor=SERVE_HYBRID at posture CALM.</div>
 </div><div class="card phase-card">
   <div class="phase-head">
     <div><div class="phase-title">Phase 2 &middot; step 130</div>
@@ -103,10 +103,10 @@ body{
   </div>
   <div class="subgraph-tags"><span class="sg-tag">tenant_3 &middot; auth <span class="arrow">&rarr;</span> <span class="to">SERVE_HYBRID</span></span></div>
   <div class="mig-grid">
-    <div class="floor-stat"><div class="k">Floor before</div><div class="v" style="color:#E8A33D">SERVE_PQC</div><div class="meta">t=121 &middot; S2+ELEVATED &middot; served PQC</div></div>
-    <div class="floor-stat"><div class="k">Floor after</div><div class="v" style="color:#33D687">SERVE_HYBRID</div><div class="meta">t=243 &middot; S3+ELEVATED &middot; served HYBRID</div></div>
+    <div class="floor-stat"><div class="k">Floor before</div><div class="v" style="color:#E8A33D">SERVE_PQC</div><div class="meta">t=121 &middot; S2+CALM &middot; served PQC</div></div>
+    <div class="floor-stat"><div class="k">Floor after</div><div class="v" style="color:#33D687">SERVE_HYBRID</div><div class="meta">t=243 &middot; S3+CALM &middot; served HYBRID</div></div>
   </div>
-  <div class="note good"><b>attribution:</b> Real, attributable: the last observed decision before the event (t=121) showed floor=SERVE_PQC at S2+ELEVATED; the first decision observed after the event that actually reflects the new class S3 (t=243) showed floor=SERVE_HYBRID at S3+ELEVATED -- the SAME posture (ELEVATED) throughout, so this floor increase is attributable to the scripted migration, not a posture shift.</div>
+  <div class="note good"><b>attribution:</b> Real, attributable: the last observed decision before the event (t=121) showed floor=SERVE_PQC at S2+CALM; the first decision observed after the event that actually reflects the new class S3 (t=243) showed floor=SERVE_HYBRID at S3+CALM -- the SAME posture (CALM) throughout, so this floor increase is attributable to the scripted migration, not a posture shift.</div>
 </div><div class="card phase-card">
   <div class="phase-head">
     <div><div class="phase-title">Phase 3 &middot; step 190</div>
@@ -115,10 +115,10 @@ body{
   </div>
   <div class="subgraph-tags"><span class="sg-tag">tenant_4 &middot; ingest <span class="arrow">&rarr;</span> <span class="to">SERVE_PQC</span></span></div>
   <div class="mig-grid">
-    <div class="floor-stat"><div class="k">Floor before</div><div class="v" style="color:#8B95A5">SERVE_CLASSICAL</div><div class="meta">t=179 &middot; S0+ELEVATED &middot; served PQC</div></div>
-    <div class="floor-stat"><div class="k">Floor after</div><div class="v" style="color:#E8A33D">SERVE_PQC</div><div class="meta">t=199 &middot; S2+ELEVATED &middot; served PQC</div></div>
+    <div class="floor-stat"><div class="k">Floor before</div><div class="v" style="color:#8B95A5">SERVE_CLASSICAL</div><div class="meta">t=179 &middot; S0+CALM &middot; served CLASSICAL</div></div>
+    <div class="floor-stat"><div class="k">Floor after</div><div class="v" style="color:#E8A33D">SERVE_PQC</div><div class="meta">t=199 &middot; S2+CALM &middot; served PQC</div></div>
   </div>
-  <div class="note good"><b>attribution:</b> Real, attributable: the last observed decision before the event (t=179) showed floor=SERVE_CLASSICAL at S0+ELEVATED; the first decision observed after the event that actually reflects the new class S2 (t=199) showed floor=SERVE_PQC at S2+ELEVATED -- the SAME posture (ELEVATED) throughout, so this floor increase is attributable to the scripted migration, not a posture shift.</div>
+  <div class="note good"><b>attribution:</b> Real, attributable: the last observed decision before the event (t=179) showed floor=SERVE_CLASSICAL at S0+CALM; the first decision observed after the event that actually reflects the new class S2 (t=199) showed floor=SERVE_PQC at S2+CALM -- the SAME posture (CALM) throughout, so this floor increase is attributable to the scripted migration, not a posture shift.</div>
 </div>
   </div>
   <div class="card" style="margin-top:16px;">

@@ -121,6 +121,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -132,10 +133,12 @@ from dashboard.render_living_system import (
     build_snapshot,
     write_living_system_html,
 )
-from env.contracts import Action, SensitivityClass, ThreatPosture
+from env.contracts import Action, ForecastProvider, SensitivityClass, ThreatPosture
 from env.environment import SmartKeyNetEnv
 from env.request_generator import RequestGenerator, build_tenant_graph
 from experiments.train import GreedyDQNPolicy, load_full_config
+from forecaster.model import LSTMForecastProvider
+from forecaster.rt_iot_replay import RTIoT2022ReplayProvider, held_out_replay_rows
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _S2_CONFIG_PATH = _REPO_ROOT / "configs" / "scenarios" / "s2_hndl.yaml"
@@ -165,6 +168,44 @@ from the episode seed -- same rationale `env/environment.py`'s own S4
 established (design decisions 13/15): tenant identity must be a stable
 fact of this demo, not redrawn per episode seed."""
 
+_LSTM_CHECKPOINT_PATH = _REPO_ROOT / "checkpoints" / "lstm_threat_forecaster.pt"
+
+
+def _replay_provider_factory() -> Callable[[int | None], ForecastProvider]:
+    """Real-forecaster factory for S1 (Addition E Phase 4b's own
+    forecaster-choice decision, SESSION_LOG.md 2026-09-14: S1 has no
+    adversarial/scripted-schedule dependency on `observation
+    ["threat_features"]`, so `RTIoT2022ReplayProvider` -- genuinely
+    real, network-data-driven -- is the correct choice, matching the
+    forecaster `checkpoints/dqn_s1.pt` was actually retrained under
+    this session). A fresh provider per episode (real held-out RT-
+    IoT2022 rows, benign span then attack span, offset by the real
+    episode seed) -- never a shared instance, since a `ForecastProvider`
+    carries per-episode buffer state."""
+    rows = held_out_replay_rows()
+    features = np.concatenate([rows.benign_features, rows.attack_features], axis=0)
+
+    def factory(episode_seed: int | None) -> ForecastProvider:
+        offset = episode_seed or 0
+        return RTIoT2022ReplayProvider(str(_LSTM_CHECKPOINT_PATH), features, start_offset=offset)
+
+    return factory
+
+
+def _lstm_provider_factory() -> Callable[[int | None], ForecastProvider]:
+    """Real-forecaster factory for S2 (same Phase 4b decision):
+    `RTIoT2022ReplayProvider.update()` ignores `observation
+    ["threat_features"]` entirely -- the one channel S2's scripted
+    `threat_schedule` uses -- so bare `LSTMForecastProvider`, fed via
+    that channel, is the only real-trained-model option S2 can actually
+    exercise. Matches the forecaster `checkpoints/dqn_s2.pt` was
+    retrained under this session."""
+
+    def factory(_episode_seed: int | None) -> ForecastProvider:
+        return LSTMForecastProvider(str(_LSTM_CHECKPOINT_PATH))
+
+    return factory
+
 
 @dataclass
 class _CollectedEpisode:
@@ -175,15 +216,27 @@ class _CollectedEpisode:
     hub_id: str
 
 
-def _load_masked_policy(config: dict, checkpoint_path: Path) -> GreedyDQNPolicy:
+def _load_masked_policy(
+    config: dict,
+    checkpoint_path: Path,
+    forecast_provider_factory: Callable[[int | None], ForecastProvider] | None = None,
+) -> GreedyDQNPolicy:
     """Reconstruct a `DQNAgent` with this config's own `state_dim`/
     `has_forecast` and load real, already-trained checkpoint weights --
     mirrors `render_migration_wave_demo.py::_load_masked_policy` /
     `render_results_demo.py::_load_greedy_policy` exactly (same
     established pattern, not a new one). Eval only -- no training call
-    anywhere in this module."""
+    anywhere in this module.
+
+    `forecast_provider_factory` (dashboard-refresh session addition,
+    optional, default `None` preserves prior byte-for-byte behavior):
+    threaded into the dummy shape-probe env too, matching
+    `scratchpad/phase4b_gate_w3.py::load_agent`'s own established
+    pattern -- `state_dim` only depends on `has_forecast`, not on which
+    real forecaster is in use, so this is a consistency choice, not a
+    correctness requirement."""
     has_forecast = config.get("use_foresight", "off") != "off"
-    env = SmartKeyNetEnv({**config, "seed": 0})
+    env = SmartKeyNetEnv({**config, "seed": 0}, forecast_provider_factory=forecast_provider_factory)
     state, _info = env.reset(seed=0)
     state_dim = flatten_state(state, has_forecast).shape[0]
     agent = DQNAgent(state_dim=state_dim, has_forecast=has_forecast, config=load_dqn_config())
@@ -196,6 +249,7 @@ def collect_real_episode(
     max_steps: int = 250,
     scenario_config_path: Path = _S2_CONFIG_PATH,
     policy: Policy | None = None,
+    forecast_provider_factory: Callable[[int | None], ForecastProvider] | None = None,
 ) -> _CollectedEpisode:
     """Step a real episode (S2 by default; pass `scenario_config_path=
     _S1_CONFIG_PATH` for S1) under `policy` (default `None` builds the
@@ -214,6 +268,13 @@ def collect_real_episode(
     precedent `dashboard/explain.py::explain_decision_from_env` already
     uses for exactly this reason (the public Gym API doesn't surface
     per-request tenant/session-key internals).
+
+    `forecast_provider_factory` (dashboard-refresh session addition,
+    optional, default `None` preserves the original placeholder-EWMA
+    behavior byte-for-byte for every pre-existing test call site): pass
+    `_replay_provider_factory()`/`_lstm_provider_factory()` (above) to
+    drive the episode with the real, trained forecaster instead --
+    `main()` below always passes one explicitly.
     """
     config = load_full_config(scenario_config_path)
     config["max_steps"] = max_steps
@@ -228,6 +289,7 @@ def collect_real_episode(
     env = SmartKeyNetEnv(
         config,
         request_stream_factory=lambda s: iter(RequestGenerator(graph, seed=s)),
+        forecast_provider_factory=forecast_provider_factory,
     )
     state, info = env.reset(seed=seed)
     if policy is None:
@@ -387,10 +449,19 @@ def main() -> None:
     _SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
     pre_existing_html = {p.name for p in _SAMPLES_DIR.glob("*.html")}
 
-    s2_episode = collect_real_episode(scenario_config_path=_S2_CONFIG_PATH)
+    # Real forecaster wiring (dashboard-refresh session, 2026-09-14):
+    # every episode below is now driven by the real, trained forecaster
+    # its checkpoint was actually retrained under (Addition E Phase 4b's
+    # own forecaster-choice decision -- see this module's
+    # `_replay_provider_factory`/`_lstm_provider_factory` docstrings),
+    # not the old placeholder EWMA forecaster every panel used before.
+    replay_factory = _replay_provider_factory()
+    lstm_factory = _lstm_provider_factory()
+
+    s2_episode = collect_real_episode(scenario_config_path=_S2_CONFIG_PATH, forecast_provider_factory=lstm_factory)
     _write_snapshots(s2_episode, prefix="living_system")
 
-    s1_episode = collect_real_episode(scenario_config_path=_S1_CONFIG_PATH)
+    s1_episode = collect_real_episode(scenario_config_path=_S1_CONFIG_PATH, forecast_provider_factory=replay_factory)
     _write_snapshots_guarded(s1_episode, prefix="living_system_s1", pre_existing_html=pre_existing_html)
 
     s1_tiers = _tier_distribution(s1_episode)
@@ -416,14 +487,18 @@ def main() -> None:
     # replacement for them.
     s1_dqn_config = load_full_config(_S1_CONFIG_PATH)
     s1_dqn_config["max_steps"] = 250
-    s1_dqn_policy = _load_masked_policy(s1_dqn_config, _DQN_S1_CHECKPOINT_PATH)
-    s1_dqn_episode = collect_real_episode(scenario_config_path=_S1_CONFIG_PATH, policy=s1_dqn_policy)
+    s1_dqn_policy = _load_masked_policy(s1_dqn_config, _DQN_S1_CHECKPOINT_PATH, replay_factory)
+    s1_dqn_episode = collect_real_episode(
+        scenario_config_path=_S1_CONFIG_PATH, policy=s1_dqn_policy, forecast_provider_factory=replay_factory
+    )
     _write_snapshots_guarded(s1_dqn_episode, prefix="living_system_s1_dqn", pre_existing_html=pre_existing_html)
 
     s2_dqn_config = load_full_config(_S2_CONFIG_PATH)
     s2_dqn_config["max_steps"] = 250
-    s2_dqn_policy = _load_masked_policy(s2_dqn_config, _DQN_S2_CHECKPOINT_PATH)
-    s2_dqn_episode = collect_real_episode(scenario_config_path=_S2_CONFIG_PATH, policy=s2_dqn_policy)
+    s2_dqn_policy = _load_masked_policy(s2_dqn_config, _DQN_S2_CHECKPOINT_PATH, lstm_factory)
+    s2_dqn_episode = collect_real_episode(
+        scenario_config_path=_S2_CONFIG_PATH, policy=s2_dqn_policy, forecast_provider_factory=lstm_factory
+    )
     _write_snapshots_guarded(s2_dqn_episode, prefix="living_system_s2_dqn", pre_existing_html=pre_existing_html)
 
     s1_dqn_tiers = _tier_distribution(s1_dqn_episode)

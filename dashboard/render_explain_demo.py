@@ -56,9 +56,26 @@ from dashboard.render_explain import write_trace_html
 from env.contracts import Action
 from env.environment import SmartKeyNetEnv
 from experiments.train import load_full_config
+from forecaster.model import LSTMForecastProvider
 
-_SCENARIO_CONFIG_PATH = Path(__file__).resolve().parent.parent / "configs" / "scenarios" / "s2_hndl.yaml"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SCENARIO_CONFIG_PATH = _REPO_ROOT / "configs" / "scenarios" / "s2_hndl.yaml"
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
+_LSTM_CHECKPOINT_PATH = _REPO_ROOT / "checkpoints" / "lstm_threat_forecaster.pt"
+
+
+def _lstm_provider_factory():
+    """Real-forecaster factory for S2 (Addition E Phase 4b's own
+    forecaster-choice decision, SESSION_LOG.md 2026-09-14):
+    `RTIoT2022ReplayProvider` ignores `observation["threat_features"]`
+    entirely -- the one channel S2's scripted `threat_schedule` uses --
+    so bare `LSTMForecastProvider`, fed via that channel, is the only
+    real-trained-model option S2 can actually exercise."""
+
+    def factory(_episode_seed: int | None):
+        return LSTMForecastProvider(str(_LSTM_CHECKPOINT_PATH))
+
+    return factory
 
 
 def collect_real_traces(seed: int = 0, max_steps: int = 250) -> list[DecisionTrace]:
@@ -67,10 +84,15 @@ def collect_real_traces(seed: int = 0, max_steps: int = 250) -> list[DecisionTra
     elsewhere), collecting one real `DecisionTrace` per decision via
     `explain_decision_from_env` -- called after `reset()`/`step()`
     returns `state`, before the *next* `step()` call, per that
-    function's own documented contract."""
+    function's own documented contract.
+
+    Driven by the real, trained `LSTMForecastProvider` (dashboard-
+    refresh session, 2026-09-14) via the real recalibrated floor table
+    it composes with, not the old placeholder EWMA forecaster this
+    panel used before."""
     config = load_full_config(_SCENARIO_CONFIG_PATH)
     config["max_steps"] = max_steps
-    env = SmartKeyNetEnv(config)
+    env = SmartKeyNetEnv(config, forecast_provider_factory=_lstm_provider_factory())
     state, info = env.reset(seed=seed)
     policy = StaticThresholdPolicy(pool_fill_threshold=0.5)
 

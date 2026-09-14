@@ -40,7 +40,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -55,6 +55,7 @@ from dashboard.render_dose_response import (
     DoseResponseSeries,
     write_dose_response_html,
 )
+from env.contracts import ForecastProvider
 from env.environment import SmartKeyNetEnv
 from experiments.harness import (
     MultiSeedAttackEvalResult,
@@ -63,18 +64,52 @@ from experiments.harness import (
     evaluate_multi_seed,
 )
 from experiments.train import GreedyDQNPolicy, load_full_config
+from forecaster.model import LSTMForecastProvider
+from forecaster.rt_iot_replay import RTIoT2022ReplayProvider, held_out_replay_rows
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _CHECKPOINTS_DIR = _REPO_ROOT / "checkpoints"
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
+_LSTM_CHECKPOINT_PATH = _CHECKPOINTS_DIR / "lstm_threat_forecaster.pt"
 
 _S3_EVAL_SEEDS = [900, 901, 902, 903, 904, 905, 906, 907]
 _S3_TRAINING_SEEDS = [1, 4, 7]
 _S5_EVAL_SEEDS = [900, 901, 902, 903, 904]
 _S5_ALPHAS = [round(0.1 * i, 1) for i in range(11)]  # 0.0, 0.1, ..., 1.0
 
+# Real-forecaster choice (Addition E Phase 4b, SESSION_LOG.md 2026-09-14):
+# S3 has no adversarial attack, so RTIoT2022ReplayProvider (matching the
+# forecaster the S3 checkpoints were actually retrained under) is used.
+# S5 attacks by shaping observation["threat_features"], which
+# RTIoT2022ReplayProvider.update() ignores entirely -- so S5 instead
+# attacks bare LSTMForecastProvider (matching the forecaster
+# checkpoints/dqn_s2.pt/soft_reward_baseline_s2.pt were retrained under).
 
-def _load_greedy_policy(checkpoint_path: Path, config: dict[str, Any]) -> GreedyDQNPolicy:
+
+def _replay_provider_factory() -> Callable[[int | None], ForecastProvider]:
+    rows = held_out_replay_rows()
+    features = np.concatenate([rows.benign_features, rows.attack_features], axis=0)
+
+    def factory(episode_seed: int | None) -> ForecastProvider:
+        offset = episode_seed or 0
+        return RTIoT2022ReplayProvider(str(_LSTM_CHECKPOINT_PATH), features, start_offset=offset)
+
+    return factory
+
+
+def _lstm_zero_arg_factory() -> Callable[[], ForecastProvider]:
+    """Zero-arg factory, matching `run_scenario_under_attack`'s own
+    `base_provider_factory`/`shadow_provider_factory` shape (distinct
+    from the one-arg `forecast_provider_factory` convention used
+    elsewhere in this module -- see that function's docstring)."""
+    return lambda: LSTMForecastProvider(str(_LSTM_CHECKPOINT_PATH))
+
+
+def _load_greedy_policy(
+    checkpoint_path: Path,
+    config: dict[str, Any],
+    forecast_provider_factory: Callable[[int | None], ForecastProvider] | None = None,
+) -> GreedyDQNPolicy:
     """Reconstruct a `DQNAgent` with the same `state_dim`/`has_forecast`
     `experiments/train.py::train()` used, then load real trained
     weights from `checkpoint_path` -- mirrors that module's own
@@ -83,7 +118,7 @@ def _load_greedy_policy(checkpoint_path: Path, config: dict[str, Any]) -> Greedy
     verbatim across every config in this repo's convention, so this is
     the same architecture every checkpoint was trained with)."""
     has_forecast = config.get("use_foresight", "off") != "off"
-    env = SmartKeyNetEnv({**config, "seed": 0})
+    env = SmartKeyNetEnv({**config, "seed": 0}, forecast_provider_factory=forecast_provider_factory)
     state, _info = env.reset(seed=0)
     state_dim = flatten_state(state, has_forecast).shape[0]
     agent = DQNAgent(state_dim=state_dim, has_forecast=has_forecast, config=load_dqn_config())
@@ -135,15 +170,20 @@ def collect_real_s3_comparison() -> ComparisonTableData:
     masked_config["max_steps"] = 250
     soft_config = load_full_config(_REPO_ROOT / "configs" / "soft_reward_baseline_s3.yaml")
     soft_config["max_steps"] = 250
+    factory = _replay_provider_factory()
 
     masked_results: list[MultiSeedEvalResult] = []
     soft_results: list[MultiSeedEvalResult] = []
     for seed in _S3_TRAINING_SEEDS:
-        masked_policy = _load_greedy_policy(_CHECKPOINTS_DIR / f"s3_masked_seed{seed}.pt", masked_config)
-        masked_results.append(evaluate_multi_seed(masked_policy, "S3", masked_config, _S3_EVAL_SEEDS))
+        masked_policy = _load_greedy_policy(_CHECKPOINTS_DIR / f"s3_masked_seed{seed}.pt", masked_config, factory)
+        masked_results.append(
+            evaluate_multi_seed(masked_policy, "S3", masked_config, _S3_EVAL_SEEDS, forecast_provider_factory=factory)
+        )
 
-        soft_policy = _load_greedy_policy(_CHECKPOINTS_DIR / f"s3_soft_reward_seed{seed}.pt", soft_config)
-        soft_results.append(evaluate_multi_seed(soft_policy, "S3", soft_config, _S3_EVAL_SEEDS))
+        soft_policy = _load_greedy_policy(_CHECKPOINTS_DIR / f"s3_soft_reward_seed{seed}.pt", soft_config, factory)
+        soft_results.append(
+            evaluate_multi_seed(soft_policy, "S3", soft_config, _S3_EVAL_SEEDS, forecast_provider_factory=factory)
+        )
 
     masked_metrics = _aggregate_across_training_seeds("Masked DQN", masked_results)
     soft_metrics = _aggregate_across_training_seeds("Soft-reward baseline", soft_results)
@@ -165,6 +205,12 @@ def collect_real_dose_response() -> list[DoseResponseSeries]:
     soft_config = load_full_config(_REPO_ROOT / "configs" / "soft_reward_baseline_s2.yaml")
     soft_config["max_steps"] = 250
 
+    # `_load_greedy_policy`'s env construction here is only ever used to
+    # probe `state_dim` (depends on `has_forecast`, not on which real
+    # forecaster is wired in) -- matches `scratchpad/
+    # phase4b_s5_dose_response.py::load_agent`'s own established
+    # pattern, which likewise passes no forecast_provider_factory for
+    # this shape-probe step, only for the real attacked episodes below.
     masked_policy = _load_greedy_policy(_CHECKPOINTS_DIR / "dqn_s2.pt", masked_config)
     soft_policy = _load_greedy_policy(_CHECKPOINTS_DIR / "soft_reward_baseline_s2.pt", soft_config)
 
@@ -172,10 +218,26 @@ def collect_real_dose_response() -> list[DoseResponseSeries]:
     soft_attack_results: list[MultiSeedAttackEvalResult] = []
     for alpha in _S5_ALPHAS:
         masked_attack_results.append(
-            evaluate_attack_multi_seed(masked_policy, "S2", masked_config, _S5_EVAL_SEEDS, alpha)
+            evaluate_attack_multi_seed(
+                masked_policy,
+                "S2",
+                masked_config,
+                _S5_EVAL_SEEDS,
+                alpha,
+                base_provider_factory=_lstm_zero_arg_factory(),
+                shadow_provider_factory=_lstm_zero_arg_factory(),
+            )
         )
         soft_attack_results.append(
-            evaluate_attack_multi_seed(soft_policy, "S2", soft_config, _S5_EVAL_SEEDS, alpha)
+            evaluate_attack_multi_seed(
+                soft_policy,
+                "S2",
+                soft_config,
+                _S5_EVAL_SEEDS,
+                alpha,
+                base_provider_factory=_lstm_zero_arg_factory(),
+                shadow_provider_factory=_lstm_zero_arg_factory(),
+            )
         )
 
     masked_series = DoseResponseSeries(
@@ -207,12 +269,14 @@ def _save_provenance_json(
 ) -> None:
     payload = {
         "provenance": (
-            "Re-run this session (see SESSION_LOG.md) from real, already-trained "
-            "checkpoints on disk (checkpoints/dqn_s2.pt, checkpoints/soft_reward_baseline_s2.pt, "
-            "checkpoints/s3_{masked,soft_reward}_seed{1,4,7}.pt) via "
+            "Re-run 2026-09-14 (dashboard data refresh, see SESSION_LOG.md) from the real, "
+            "Phase-4b-retrained checkpoints on disk (checkpoints/dqn_s2.pt, checkpoints/"
+            "soft_reward_baseline_s2.pt, checkpoints/s3_{masked,soft_reward}_seed{1,4,7}.pt) via "
             "experiments.harness.evaluate_multi_seed/evaluate_attack_multi_seed -- eval only, "
-            "no retraining. Spot-checked against SESSION_LOG.md's own 2026-08-25/2026-08-26 "
-            "figures and reproduced byte-for-byte before this driver was built."
+            "no retraining -- driven by the real trained forecaster (RTIoT2022ReplayProvider for "
+            "the S3 comparison, LSTMForecastProvider for the S5 sweep, per Addition E Phase 4b's "
+            "own forecaster-choice decision) and the recalibrated floor table, not the earlier "
+            "placeholder EWMA forecaster this driver used before."
         ),
         "s3_comparison": {
             "scenario": comparison.scenario,
@@ -257,7 +321,16 @@ def main() -> None:
     print(f"wrote {table_path}")
 
     dose_path = _SAMPLES_DIR / "dose_response_chart.html"
-    write_dose_response_html(dose_series, dose_path)
+    shape_note = (
+        "This curve was re-measured 2026-09-14 under the real, trained LSTMForecastProvider "
+        "(after fixing its cold-start zero-padding artifact) and the recalibrated floor table, "
+        "replacing an earlier placeholder-EWMA-forecaster measurement. Its real shape is a "
+        "two-plateau STEP function -- flat near zero through alpha=0.5, then jumping sharply "
+        "to a higher plateau at alpha>=0.6 -- not the smooth, gradual monotonic rise the "
+        "original placeholder-era sweep found. See SESSION_LOG.md's 2026-09-14 entries for the "
+        "full root-cause and before/after numbers."
+    )
+    write_dose_response_html(dose_series, dose_path, shape_note=shape_note)
     print(f"wrote {dose_path}")
 
 

@@ -1019,12 +1019,12 @@
         "tenant": "tenant_0",
         "service": "notify",
         "sensitivity_class": 3,
-        "posture": 1,
+        "posture": 0,
         "floor": 2,
         "served_tier": 2
       },
       "attribution": "no_before_observation",
-      "attribution_note": "No real decision for tenant tenant_0 was observed before step 60 in this episode -- there is nothing to compare the post-event floor against, so no floor-change claim is made for this event. The only real fact available: the first decision observed after the event that actually reflects the new class S3 (t=79) showed floor=SERVE_HYBRID at posture ELEVATED."
+      "attribution_note": "No real decision for tenant tenant_0 was observed before step 60 in this episode -- there is nothing to compare the post-event floor against, so no floor-change claim is made for this event. The only real fact available: the first decision observed after the event that actually reflects the new class S3 (t=79) showed floor=SERVE_HYBRID at posture CALM."
     },
     {
       "step": 130,
@@ -1036,7 +1036,7 @@
         "tenant": "tenant_3",
         "service": "auth",
         "sensitivity_class": 2,
-        "posture": 1,
+        "posture": 0,
         "floor": 1,
         "served_tier": 1
       },
@@ -1045,12 +1045,12 @@
         "tenant": "tenant_3",
         "service": "auth",
         "sensitivity_class": 3,
-        "posture": 1,
+        "posture": 0,
         "floor": 2,
         "served_tier": 2
       },
       "attribution": "scripted",
-      "attribution_note": "Real, attributable: the last observed decision before the event (t=121) showed floor=SERVE_PQC at S2+ELEVATED; the first decision observed after the event that actually reflects the new class S3 (t=243) showed floor=SERVE_HYBRID at S3+ELEVATED -- the SAME posture (ELEVATED) throughout, so this floor increase is attributable to the scripted migration, not a posture shift."
+      "attribution_note": "Real, attributable: the last observed decision before the event (t=121) showed floor=SERVE_PQC at S2+CALM; the first decision observed after the event that actually reflects the new class S3 (t=243) showed floor=SERVE_HYBRID at S3+CALM -- the SAME posture (CALM) throughout, so this floor increase is attributable to the scripted migration, not a posture shift."
     },
     {
       "step": 190,
@@ -1062,21 +1062,21 @@
         "tenant": "tenant_4",
         "service": "ingest",
         "sensitivity_class": 0,
-        "posture": 1,
+        "posture": 0,
         "floor": 0,
-        "served_tier": 1
+        "served_tier": 0
       },
       "after": {
         "step": 199,
         "tenant": "tenant_4",
         "service": "ingest",
         "sensitivity_class": 2,
-        "posture": 1,
+        "posture": 0,
         "floor": 1,
         "served_tier": 1
       },
       "attribution": "scripted",
-      "attribution_note": "Real, attributable: the last observed decision before the event (t=179) showed floor=SERVE_CLASSICAL at S0+ELEVATED; the first decision observed after the event that actually reflects the new class S2 (t=199) showed floor=SERVE_PQC at S2+ELEVATED -- the SAME posture (ELEVATED) throughout, so this floor increase is attributable to the scripted migration, not a posture shift."
+      "attribution_note": "Real, attributable: the last observed decision before the event (t=179) showed floor=SERVE_CLASSICAL at S0+CALM; the first decision observed after the event that actually reflects the new class S2 (t=199) showed floor=SERVE_PQC at S2+CALM -- the SAME posture (CALM) throughout, so this floor increase is attributable to the scripted migration, not a posture shift."
     }
   ]
 }
