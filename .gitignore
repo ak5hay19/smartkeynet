@@ -34,6 +34,15 @@ wandb/
 logs/
 *.log
 
+# --- Scratchpad (repo convention, restated 2026-09-14: every session's
+# scratchpad/*.py driver/diagnostic script + any *.json output it writes
+# is a local working file, never committed -- see PROGRESS.md/
+# SESSION_LOG.md's many "not committed, scratchpad convention" notes;
+# zero scratchpad file of any kind has ever been committed in this
+# repo's history. Real experimental numbers are made permanent by
+# transcribing them into PROGRESS.md/SESSION_LOG.md prose instead.) ---
+scratchpad/
+
 # --- Notebooks ---
 .ipynb_checkpoints/
 
