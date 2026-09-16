@@ -36,15 +36,20 @@ file fails loudly (404) rather than silently serving something outside
 the registry.
 
 Two entry points, both served over the same route whitelist: `/`
-(the original card-grid index) and `/v2` (a tabbed shell styled after
-`dashboard/mockups/smartkeynet_dashboard_mockup_v2.html`'s visual
-language -- dark theme, tab nav, tier-color legend -- that embeds
-each real sample file via a same-origin iframe rather than
+(default, aliased with `/v2`/`/v2.html` -- the tabbed shell styled
+after `dashboard/mockups/smartkeynet_dashboard_mockup_v2.html`'s
+visual language -- dark theme, tab nav, tier-color legend -- that
+embeds each real sample file via a same-origin iframe rather than
 re-rendering it, so the honesty-guard-tested markup each panel's own
-render_*.py driver produced is shown byte-for-byte). Both read from
-the same `PANELS` registry, so neither can drift from the other or
-from the mockup's own fabricated placeholder data. `/` remains the
-default for now -- see PROGRESS.md's routing recommendation.
+render_*.py driver produced is shown byte-for-byte) and `/classic`
+(aliased with `/classic.html` -- the original card-grid index, kept
+as an explicit fallback, e.g. for a presentation where the tabbed
+shell needs a known-good backstop). Both read from the same `PANELS`
+registry, so neither can drift from the other or from the mockup's
+own fabricated placeholder data. Flipped to `/v2` as the default
+2026-09-14 after a parity audit confirmed no panel, description,
+honesty framing, legend, or navigation path present on the old grid
+was missing from the tabbed shell -- see PROGRESS.md's newest entry.
 
 Run directly: `python -m dashboard.app` (prints the URL to open).
 """
@@ -255,7 +260,7 @@ footer{{max-width:1080px;margin:8px auto 0;padding:16px 22px 0;font-family:var(-
 </header>
 <main>
 <p class="thesis">Security is enforced as a <b>hard, structural constraint</b> &mdash; action masking, never a term in the reward.</p>
-<div class="subtitle">Real, pre-rendered panels from dashboard/samples/, served as-is &mdash; nothing computed live, nothing in these pages is a placeholder. <a href="/v2" style="color:var(--quantum);">Try the tabbed view &rarr;</a></div>
+<div class="subtitle">Real, pre-rendered panels from dashboard/samples/, served as-is &mdash; nothing computed live, nothing in these pages is a placeholder. This is the classic fallback view; <a href="/" style="color:var(--quantum);">the default tabbed view is here &rarr;</a></div>
 <div class="legend-row">{legend_html}</div>
 <div class="grid">
 {cards_html}
@@ -381,7 +386,9 @@ button{{font-family:inherit;}}
 
 main{{max-width:1200px;margin:0 auto;padding:24px 22px 60px;}}
 .tab-head{{margin-bottom:16px;}}
+.tab-title-row{{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}}
 .tab-title{{font-weight:700;font-size:22px;letter-spacing:-.01em;}}
+.file-count-badge{{font-family:var(--mono);font-size:10.5px;color:var(--text-faint);border:1px solid var(--line);border-radius:4px;padding:2px 7px;text-transform:uppercase;letter-spacing:.08em;}}
 .tab-desc{{color:var(--text-dim);font-size:13px;max-width:760px;margin-top:6px;line-height:1.55;}}
 
 .chip-row{{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}}
@@ -411,14 +418,17 @@ footer{{max-width:1200px;margin:14px auto 0;padding:16px 22px 0;font-family:var(
   </div>
   <span class="pill">Static, pre-rendered panels</span>
   <span class="pill">Nothing computed live &middot; nothing is a placeholder</span>
-  <a class="classic-link" href="/">Classic card view</a>
+  <a class="classic-link" href="/classic">Classic card view</a>
 </header>
 
 <nav class="tab-nav" id="tabNav"></nav>
 
 <main>
   <div class="tab-head">
-    <div class="tab-title" id="tabTitle"></div>
+    <div class="tab-title-row">
+      <div class="tab-title" id="tabTitle"></div>
+      <span class="file-count-badge" id="fileCountBadge"></span>
+    </div>
     <div class="tab-desc" id="tabDesc"></div>
   </div>
   <div class="chip-row" id="variantNav"></div>
@@ -441,6 +451,7 @@ footer{{max-width:1200px;margin:14px auto 0;padding:16px 22px 0;font-family:var(
   const momentNav = document.getElementById('momentNav');
   const tabTitle = document.getElementById('tabTitle');
   const tabDesc = document.getElementById('tabDesc');
+  const fileCountBadge = document.getElementById('fileCountBadge');
   const frame = document.getElementById('panelFrame');
 
   function renderTabNav(){{
@@ -484,6 +495,7 @@ footer{{max-width:1200px;margin:14px auto 0;padding:16px 22px 0;font-family:var(
     const variant = TABS[activeTab].variants[activeVariant];
     const file = variant.files[activeMoment];
     tabDesc.textContent = variant.description;
+    fileCountBadge.textContent = variant.files.length + (variant.files.length === 1 ? ' FILE' : ' FILES');
     frame.src = '/samples/' + file.filename;
   }}
 
@@ -514,12 +526,19 @@ footer{{max-width:1200px;margin:14px auto 0;padding:16px 22px 0;font-family:var(
 
 def resolve_route(path: str) -> tuple[int, str, bytes]:
     """Pure routing logic: request path -> (status, content_type, body).
-    No socket I/O -- the handler below is a thin adapter over this."""
-    if path in ("/", "/index.html"):
-        return 200, "text/html; charset=utf-8", render_index_html().encode("utf-8")
+    No socket I/O -- the handler below is a thin adapter over this.
 
-    if path in ("/v2", "/v2.html"):
+    `/` is aliased to the tabbed `/v2` shell (the default, since the
+    2026-09-14 parity audit) -- `/index.html` follows `/` rather than
+    the classic grid, so "index" always means "whatever's current
+    default." The classic card-grid index remains reachable, unchanged,
+    at the explicit `/classic` fallback path -- not deleted, since it's
+    a presentation-critical known-good backstop."""
+    if path in ("/", "/index.html", "/v2", "/v2.html"):
         return 200, "text/html; charset=utf-8", render_index_v2_html().encode("utf-8")
+
+    if path in ("/classic", "/classic.html"):
+        return 200, "text/html; charset=utf-8", render_index_html().encode("utf-8")
 
     if path.startswith("/samples/"):
         filename = path[len("/samples/") :]

@@ -42,19 +42,59 @@ def test_index_route_returns_200_html() -> None:
 
 
 def test_index_route_references_every_real_panel_filename() -> None:
+    # "/" now serves the v2 shell (default since the 2026-09-14 routing
+    # flip); it must still reference every real panel file, same as the
+    # classic grid always did.
     status, _content_type, body = resolve_route("/")
     assert status == 200
     text = body.decode("utf-8")
     assert len(_ALL_REAL_FILENAMES) == 19  # 3 Living System S1 + 3 S2 + 3 S1-DQN + 3 S2-DQN + 3 Explain Decision + 4 single-file panels
     for filename in _ALL_REAL_FILENAMES:
-        assert f"/samples/{filename}" in text, f"index page is missing a link to {filename}"
+        assert filename in text, f"default (/) page is missing a reference to {filename}"
 
 
-def test_render_index_html_matches_resolve_route_body() -> None:
-    # render_index_html is the pure function resolve_route delegates to;
-    # they must not silently diverge.
-    _status, _content_type, body = resolve_route("/")
+def test_root_route_serves_the_v2_shell_by_default() -> None:
+    # The 2026-09-14 routing flip: "/" is now an alias for "/v2", not
+    # the classic card grid. A parity audit (see PROGRESS.md) confirmed
+    # no panel/description/honesty-framing/legend/nav path present on
+    # the old grid was missing from the tabbed shell before this flip.
+    status_root, _ct_root, body_root = resolve_route("/")
+    status_v2, _ct_v2, body_v2 = resolve_route("/v2")
+    assert status_root == status_v2 == 200
+    assert body_root == body_v2 == render_index_v2_html().encode("utf-8")
+
+
+def test_index_html_alias_follows_the_default_not_the_classic_grid() -> None:
+    # "/index.html" means "whatever's current default" (the v2 shell),
+    # not "the classic grid" -- that lives at the explicit /classic path.
+    status, _content_type, body = resolve_route("/index.html")
+    assert status == 200
+    assert body == render_index_v2_html().encode("utf-8")
+
+
+def test_classic_route_serves_the_old_card_grid_unchanged() -> None:
+    # The old card-grid index is kept, byte-for-byte, at an explicit
+    # fallback path -- a presentation-critical safety net, not deleted
+    # just because /v2 became the default.
+    status, content_type, body = resolve_route("/classic")
+    assert status == 200
+    assert content_type.startswith("text/html")
     assert body.decode("utf-8") == render_index_html()
+
+
+def test_classic_html_alias_returns_same_body_as_classic() -> None:
+    status_a, _ct_a, body_a = resolve_route("/classic")
+    status_b, _ct_b, body_b = resolve_route("/classic.html")
+    assert status_a == status_b == 200
+    assert body_a == body_b
+
+
+def test_classic_route_references_every_real_panel_filename() -> None:
+    status, _content_type, body = resolve_route("/classic")
+    assert status == 200
+    text = body.decode("utf-8")
+    for filename in _ALL_REAL_FILENAMES:
+        assert f"/samples/{filename}" in text, f"classic page is missing a link to {filename}"
 
 
 def test_every_real_panel_file_route_returns_200() -> None:
@@ -146,16 +186,26 @@ def test_v2_shell_tab_data_covers_every_real_panel_exactly_once() -> None:
     assert len(seen_filenames) == len(set(seen_filenames))  # no file listed twice
 
 
-def test_classic_index_links_to_v2_shell() -> None:
-    status, _content_type, body = resolve_route("/")
-    assert status == 200
-    assert b'href="/v2"' in body
-
-
-def test_v2_shell_links_back_to_classic_index() -> None:
-    status, _content_type, body = resolve_route("/v2")
+def test_classic_index_links_back_to_the_default_v2_shell() -> None:
+    status, _content_type, body = resolve_route("/classic")
     assert status == 200
     assert b'href="/"' in body
+
+
+def test_v2_shell_links_to_classic_index() -> None:
+    status, _content_type, body = resolve_route("/v2")
+    assert status == 200
+    assert b'href="/classic"' in body
+
+
+def test_v2_shell_shows_a_file_count_badge_per_variant() -> None:
+    # Parity finding (2026-09-14 audit): the classic grid shows a
+    # "N file(s)" badge per card; the v2 shell must carry equivalent
+    # information, not silently drop it. It's computed client-side per
+    # active variant, so the check is against the JS scaffold + data.
+    body = render_index_v2_html()
+    assert "fileCountBadge" in body
+    assert "variant.files.length" in body
 
 
 def test_server_end_to_end_over_real_http() -> None:
@@ -167,7 +217,8 @@ def test_server_end_to_end_over_real_http() -> None:
 
         with urllib.request.urlopen(f"http://{host}:{port}/", timeout=5) as resp:
             assert resp.status == 200
-            assert b"SmartKeyNet" in resp.read()
+            root_body = resp.read()
+            assert b"SmartKeyNet" in root_body
 
         first_panel_file = PANELS[0].files[0].filename
         with urllib.request.urlopen(f"http://{host}:{port}/samples/{first_panel_file}", timeout=5) as resp:
@@ -178,6 +229,13 @@ def test_server_end_to_end_over_real_http() -> None:
             v2_body = resp.read()
             assert b"SmartKeyNet" in v2_body
             assert first_panel_file.encode("utf-8") in v2_body
+            assert v2_body == root_body  # "/" is an alias for "/v2", the default
+
+        with urllib.request.urlopen(f"http://{host}:{port}/classic", timeout=5) as resp:
+            assert resp.status == 200
+            classic_body = resp.read()
+            assert b"SmartKeyNet" in classic_body
+            assert f"/samples/{first_panel_file}".encode("utf-8") in classic_body
     finally:
         server.shutdown()
         server.server_close()

@@ -97,11 +97,12 @@ one place):
 python -m dashboard.app
 ```
 
-This prints `http://127.0.0.1:8000/` — open it in a browser for an
-index page linking all six panels. It's a minimal, standard-library-only
-(`http.server`) static file server (`dashboard/app.py`) over the exact
-same committed files listed below; it computes nothing and doesn't run
-`SmartKeyNetEnv` live.
+This prints `http://127.0.0.1:8000/` — open it in a browser for the
+tabbed dashboard shell linking every panel (the original card-grid
+index is kept, unchanged, at `/classic` as an explicit fallback). It's
+a minimal, standard-library-only (`http.server`) static file server
+(`dashboard/app.py`) over the exact same committed files listed below;
+it computes nothing and doesn't run `SmartKeyNetEnv` live.
 
 **Option 2 — open the files directly.** Every panel is **fully static,
 self-contained HTML** (inline CSS/SVG, no JS framework, no build step,
