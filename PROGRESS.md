@@ -11,6 +11,8 @@
 
 ## Next task
 
+**BASE PROJECT DONE — 2026-09-16.** Everything up to and including the dashboard default-route-flip session immediately below is complete, tested (760 passed/1 xfailed, confirmed fresh this session against a clean working tree), and committed — this is the reliable fallback state for the capstone review. See `SESSION_LOG.md`'s matching top entry for the checkpoint commit hash and for the housekeeping note (the flip session's own work was found uncommitted at this session's start and committed first, separately from this checkpoint). Everything after this point is explicitly stretch-goal/experimental work (a pcap-upload feasibility investigation) that may or may not pan out.
+
 **Dashboard default-route flip — parity audit passed, `/v2` is now the default at `/`, old grid kept at `/classic` — DONE 2026-09-14.** Follow-up to the visual-rebuild session immediately below, now that the person visually confirmed `/v2` in a real browser (closing that session's one stated gap). Strictly scoped to `dashboard/app.py` + `tests/test_dashboard_app.py` (`git diff --stat` confirms only those two files, plus a routing-description touch-up to `README.md`) — no `render_*.py` driver, sample data, or honesty-guard test logic touched.
 
 **Parity audit, checked against `dashboard/app.py`'s `PANELS` registry directly, not eyeballed:**

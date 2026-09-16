@@ -46,6 +46,18 @@
 
 ## Sessions (newest first)
 
+### [SOLO — BASE PROJECT DONE checkpoint] — 2026-09-16 — main
+
+**Marker entry, not a dev session.** Everything at and below this point — the real LSTM forecaster, the cold-start fixes (`RTIoT2022ReplayProvider` and bare `LSTMForecastProvider`), the recalibrated floor table, the full Phase 4b experimental campaign (Gate W3/W5 re-verified), and the dashboard rebuild (data refresh + `/v2` tabbed shell + the default-route flip) — is complete, tested, and committed. This is the reliable fallback state to go into the capstone review with, and the commit hash below is what to roll back to if anything after this point runs out of time or goes wrong.
+
+**Pre-checkpoint housekeeping, done first:** found the working tree was NOT clean at session start — the previous "Dashboard default-route flip" session (entry immediately below) had done complete, tested work (760 passed/1 xfailed, matching what it already claimed in these docs) but never actually committed it, the same failure mode as the 2026-08-30 recovery incident earlier in this file. Confirmed the diff matched that session's own stated scope and re-ran the full suite fresh before committing it as its own commit, separate from this checkpoint.
+
+**Baseline confirmed for this checkpoint:** `git status` clean, full suite re-run fresh: **760 passed, 1 xfailed**.
+
+**Everything from here forward in this log (below the checkpoint commit) is explicitly stretch-goal/experimental work** — a pcap-upload investigation (feed a self-captured `.pcap` through real feature extraction → the real LSTM forecaster → a real, live-stepped masked-DQN episode) — that may or may not pan out and is understood to be optional relative to the base project above.
+
+---
+
 ### [SOLO — Dashboard default-route flip: /v2 parity audit + routing] — 2026-09-14 — main
 
 **Session goal:** the prior session's stated follow-up — now that `/v2` has been visually confirmed in a real browser, run a parity audit against the old card-grid index before flipping the default route, fix anything found missing, then make `/v2` the default at `/` while keeping the old grid reachable at an explicit fallback path. Strictly scoped to `dashboard/app.py` + `tests/test_dashboard_app.py` (plus a routing-description touch-up to `README.md`) — no `render_*.py` driver, sample data, or honesty-guard test logic touched.
