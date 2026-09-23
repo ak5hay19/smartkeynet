@@ -28,10 +28,10 @@ _MOCKUP_ONLY_MARKERS = (
 )
 
 
-def test_panels_registry_has_nine_panels() -> None:
-    # Was 7; Living System gained two trained-DQN-driven cards (S1 + S2)
-    # this session, alongside the existing StaticThresholdPolicy-driven ones.
-    assert len(PANELS) == 9
+def test_panels_registry_has_ten_panels() -> None:
+    # Was 9; the 2026-09-23 posture-validation session added one new
+    # single-file panel (Posture Validation) alongside the existing ones.
+    assert len(PANELS) == 10
 
 
 def test_index_route_returns_200_html() -> None:
@@ -48,7 +48,7 @@ def test_index_route_references_every_real_panel_filename() -> None:
     status, _content_type, body = resolve_route("/")
     assert status == 200
     text = body.decode("utf-8")
-    assert len(_ALL_REAL_FILENAMES) == 19  # 3 Living System S1 + 3 S2 + 3 S1-DQN + 3 S2-DQN + 3 Explain Decision + 4 single-file panels
+    assert len(_ALL_REAL_FILENAMES) == 20  # 3 Living System S1 + 3 S2 + 3 S1-DQN + 3 S2-DQN + 3 Explain Decision + 5 single-file panels
     for filename in _ALL_REAL_FILENAMES:
         assert filename in text, f"default (/) page is missing a reference to {filename}"
 
@@ -164,14 +164,15 @@ def test_v2_shell_does_not_reference_the_mockup_file_or_its_fabricated_data() ->
 
 
 def test_v2_shell_groups_living_system_panels_into_one_tab() -> None:
-    # 9 real panels (4 Living System + Explain Decision + Dose-Response
-    # + S3 Comparison Table + Budgeting Brain + Migration Wave) collapse
-    # to 6 tabs -- Living System's 4 variants share one tab, switched
-    # via a client-side variant selector, everything else gets its own.
+    # 10 real panels (4 Living System + Explain Decision + Dose-Response
+    # + S3 Comparison Table + Budgeting Brain + Migration Wave + Posture
+    # Validation) collapse to 7 tabs -- Living System's 4 variants share
+    # one tab, switched via a client-side variant selector, everything
+    # else gets its own.
     from dashboard.app import _v2_panel_data
 
     tabs = _v2_panel_data()
-    assert len(tabs) == 6
+    assert len(tabs) == 7
     living_system_tabs = [t for t in tabs if t["tabLabel"] == "Living System"]
     assert len(living_system_tabs) == 1
     assert len(living_system_tabs[0]["variants"]) == 4

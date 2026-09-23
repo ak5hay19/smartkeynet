@@ -148,6 +148,11 @@ PANELS: tuple[Panel, ...] = (
         "S6's three scripted floor-ratchet events against a real held-out episode (real RTIoT2022ReplayProvider forecaster) from an agent never trained on S6, with an honesty-gated attribution.",
         (PanelFile("migration_wave.html", "Open panel"),),
     ),
+    Panel(
+        "Posture Validation",
+        "A real 100-decision validation (pcap-calm + real held-out RT-IoT2022 benign->attack transition + steady-state attack) confirming the upload demo's higher-threat_score/lower-floor anecdote is expected: CALM 66 / ELEVATED 4 / HIGH 30, zero floor-monotonicity violations, and the honest finding that ELEVATED posture is real but only transiently reachable.",
+        (PanelFile("posture_validation.html", "Open panel"),),
+    ),
 )
 
 # Flat filename -> on-disk path, the server's actual route whitelist.
