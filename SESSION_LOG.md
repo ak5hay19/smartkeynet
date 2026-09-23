@@ -46,6 +46,42 @@
 
 ## Sessions (newest first)
 
+### [SOLO — posture/floor-monotonicity validation, QA session] — 2026-09-23 — v2
+
+**Session goal:** the upload demo's results table (Phase 2, immediately below) showed a case where a HIGHER `threat_score` (0.1376, `logging`/S0) produced a LOWER floor (`SERVE_CLASSICAL`) than a lower `threat_score` (0.0689, `iot-telemetry`/S3, `SERVE_HYBRID`) — expected if both scores land in the same CALM posture bucket and sensitivity class does the differentiating work, but that needed confirming with real, broad data rather than assumed from one anecdote. Validation/QA only, per instruction — reused existing tested components (`PCAPExtractProvider`, `RTIoT2022ReplayProvider`, `dashboard.explain.explain_decision_from_env`) unmodified; zero changes to `env/`, `agents/`, the reward function, the action space, the floor table, or any checkpoint.
+
+**Step 1 — exact posture thresholds, confirmed in code, not inferred:** `env/forecast_provider.py::MovingAverageForecaster`/`forecaster/model.py::LSTMForecastProvider` both compute `posture_probs` as an RBF-softmax over three anchors `(0.0, 0.5, 1.0)` = (CALM, ELEVATED, HIGH) at a fixed temperature (0.15), then `env/environment.py::_prepare_decision` takes `argmax(posture_probs)`. Because `argmax(-((x-a)**2)/T)` over a common positive `T` is exactly "nearest anchor," the classification boundaries are the anchor midpoints **regardless of temperature**: **CALM is `threat_score < 0.25`, ELEVATED is `0.25 <= threat_score < 0.75`, HIGH is `threat_score >= 0.75`** — confirmed both analytically and by a direct 100,001-point numeric sweep through the real `posture_for_score` computation (crossings landed at 0.255/0.750 on a coarse 500-step stride, consistent with the analytic 0.25/0.75). Both flagged real threat_scores are comfortably inside CALM, neither borderline: 0.0689 is 0.1811 below the 0.25 boundary (27.6% of the way from 0 to the boundary); 0.1376 is 0.1124 below the boundary (55.0% of the way there) — closer proportionally than 0.0689, but with a full real 0.11 margin left, not close to flipping.
+
+**Step 2 — a real, varied 100-decision test, three real sources, no fabrication:**
+- **pcap (calm end):** `scratchpad/sample.pcap` (Phase 1/2's own real capture) via the unmodified `PCAPExtractProvider`, 30 real decisions.
+- **transition (genuinely exercises ELEVATED):** real held-out RT-IoT2022 rows via `held_out_replay_rows()`/`RTIoT2022ReplayProvider`, replaying a real chronological span straddling the benign→attack boundary in the held-out array (`start_offset = len(benign_features) - 40`) — a real escalation, not forced. 50 real decisions.
+- **attack, steady-state (confirms sustained HIGH):** real held-out ATTACK rows only, `start_offset=500`, 20 real decisions.
+- Total: **100 real decisions**, same live pipeline as the upload demo (forecaster → posture → floor → masking → DQN choice).
+
+**Step 3 — real distribution, reported in full:**
+
+| Posture bucket | Count | Floor-monotonicity (higher S-class ⇒ floor never lower, holding posture constant) |
+|---|---|---|
+| CALM | 66 | Holds: S0→CLASSICAL, S1→{CLASSICAL,PQC}, S2→PQC, S3→HYBRID |
+| ELEVATED | 4 | Holds: S0→CLASSICAL, S1→PQC, S3→HYBRID (no S2 request landed in this small real bucket) |
+| HIGH | 30 | Holds: S0→PQC, S1→PQC, S2→HYBRID, S3→HYBRID |
+
+**Zero real monotonicity violations** across all 100 decisions, checked pairwise by sensitivity class within each posture bucket, not eyeballed.
+
+Action distribution: `{SERVE_CLASSICAL: 34, REKEY_NOW: 35, SERVE_PQC: 15, REUSE: 16}` — 4 distinct actions, not saturated to one; `SERVE_HYBRID` was legal at several rows (S2/S3 floors) but the greedy DQN never chose it as cheapest-legal on this particular sample (a real, honestly-noted absence — not evidence of a bug, since `REUSE`/cheaper-tier `SERVE_*` actions cleared the floor whenever legal). Sensitivity classes seen: `{S0: 24, S1: 28, S2: 18, S3: 30}` — real variety from the independent random request generator, not hand-picked.
+
+**A real, honest finding worth flagging (Step 4 of this session's brief):** ELEVATED posture is real and reachable, but only **transiently** — every ELEVATED decision observed came from the few real rows straddling a genuine benign→attack transition (threat_score climbing 0.237→0.323→0.175→0.471→0.646 before crossing into HIGH at 0.788). Neither a steady benign span nor a steady attack span produces ELEVATED on its own; the model's real separation is closer to a sharp step (consistent with the standing 2026-09-14 "two-plateau step, not smooth rise" S5 dose-response finding) than a gradual ramp. Reported as a real property of the trained LSTM + this project's fixed anchor scheme, not something this session tuned or forced.
+
+**Testing and documentation:** new `tests/test_posture_variance_validation.py` (2 tests) — a committed regression test reusing the committed `tests/fixtures/pcap_flow_features_fixture.pcap` (not the gitignored `scratchpad/sample.pcap`, so it runs the same in CI/after a fresh clone) plus the same real held-out transition/attack spans (80 real decisions, trimmed for test speed, same 50-100 real-decision floor as this session's own instruction), asserting posture-bucket coverage of all three buckets, floor monotonicity with no violations, and action-choice variety (>=2 distinct actions) — guards this exact property against future regression. A second, checkpoint-free test locks in the analytic 0.25/0.75 boundary derivation itself. **Full suite: 819 passed, 1 xfailed** (817 prior + 2 new). `git status --short` / `git diff --stat` confirm only `tests/test_posture_variance_validation.py` is new — zero changes to `env/`, `agents/`, `forecaster/`, any checkpoint, or any `configs/scenarios/*.yaml` file.
+
+**What's working:** the anecdote from the upload demo is confirmed, not just plausible — both threat_scores are genuinely CALM by a real, code-derived boundary, and floor monotonicity holds across a real, varied 100-decision sample spanning all three posture buckets.
+**What's broken / incomplete:** ELEVATED posture is real but rare/transient in this real dataset+model combination — any future demo wanting to *show* ELEVATED specifically should use a transition-straddling replay window like this session's, not assume a steady span will produce it.
+**Blockers:** none.
+**Next session will:** Phase 3 (live capture, optional) or Phase 4-5 (use case + slides, rehearsal) per `docs/v2_gameplan.md` — this session's finding doesn't block either.
+**Hard Rules check:** none touched — read-only validation, `env/masking.py`'s floor table and `env/environment.py`'s posture/ratchet logic were read and reused, never edited.
+
+---
+
 ### [SOLO — Phase 2: real upload-and-run pcap demo, stretch goal] — 2026-09-23 — v2
 
 **Session goal:** turn Phase 1's tested, validated extractor/provider (`forecaster/pcap_flow_features.py` + `forecaster/pcap_extract_provider.py`, commit `69c6229`) into a real upload-and-run demo per `docs/v2_gameplan.md` Phase 2: a person uploads a real `.pcap` through a simple web interface and watches real extraction feed the real trained LSTM forecaster and a real trained masked-DQN checkpoint, decisions computed live at request time, not pre-rendered. Confirmed on branch `v2` first (`git branch --show-current`), per instruction. Scope held strictly: zero changes to `env/`, `agents/`, the reward function, the action space, the floor table, any checkpoint, or Phase 1's own `forecaster/pcap_flow_features.py`/`forecaster/pcap_extract_provider.py` (`git diff --stat` confirms only `dashboard/app.py` among existing files changed, +47 lines -- everything else is new).
