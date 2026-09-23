@@ -59,8 +59,12 @@ from __future__ import annotations
 import html
 import http.server
 import json
+import urllib.parse
 from pathlib import Path
 from typing import NamedTuple
+
+from dashboard.render_upload import render_upload_error_html, render_upload_form_html, render_upload_result_html
+from dashboard.upload_demo import InvalidPcapError, run_pcap_upload_demo
 
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
 
@@ -418,6 +422,7 @@ footer{{max-width:1200px;margin:14px auto 0;padding:16px 22px 0;font-family:var(
   </div>
   <span class="pill">Static, pre-rendered panels</span>
   <span class="pill">Nothing computed live &middot; nothing is a placeholder</span>
+  <a class="classic-link" href="/upload">Upload a pcap (live) &rarr;</a>
   <a class="classic-link" href="/classic">Classic card view</a>
 </header>
 
@@ -540,6 +545,9 @@ def resolve_route(path: str) -> tuple[int, str, bytes]:
     if path in ("/classic", "/classic.html"):
         return 200, "text/html; charset=utf-8", render_index_html().encode("utf-8")
 
+    if path in ("/upload", "/upload.html"):
+        return 200, "text/html; charset=utf-8", render_upload_form_html().encode("utf-8")
+
     if path.startswith("/samples/"):
         filename = path[len("/samples/") :]
         file_path = _ROUTES.get(filename)
@@ -549,12 +557,51 @@ def resolve_route(path: str) -> tuple[int, str, bytes]:
     return 404, "text/plain; charset=utf-8", b"Not Found"
 
 
+def resolve_upload_post(path: str, body: bytes, filename_header: str | None) -> tuple[int, str, bytes]:
+    """Pure POST handler for the v2 Phase 2 upload-and-run demo
+    (`dashboard/upload_demo.py`/`dashboard/render_upload.py`), mirroring
+    `resolve_route`'s "pure function, no socket" testability contract.
+
+    The uploaded pcap's raw bytes are sent as the request body directly
+    (not multipart/form-data) -- this server stays standard-library
+    only (no `cgi`, deprecated/slated for removal; no new dependency),
+    matching `dashboard/app.py`'s own module docstring's
+    zero-new-dependency convention. `filename_header` (the request's
+    `X-Filename` header, if any) is display-only.
+
+    Any real, honest failure (`InvalidPcapError` -- not a valid pcap,
+    zero extractable flows, oversized upload) renders a plain error
+    page (400) instead of a fabricated result, per this session's Step
+    5 instruction."""
+    if path not in ("/upload", "/upload.html"):
+        return 404, "text/plain; charset=utf-8", b"Not Found"
+
+    filename = urllib.parse.unquote(filename_header) if filename_header else "upload.pcap"
+
+    try:
+        result = run_pcap_upload_demo(body, filename)
+    except InvalidPcapError as exc:
+        return 400, "text/html; charset=utf-8", render_upload_error_html(filename, str(exc)).encode("utf-8")
+
+    return 200, "text/html; charset=utf-8", render_upload_result_html(result).encode("utf-8")
+
+
 class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
     """Thin adapter: delegates all routing/content decisions to
     `resolve_route` so that logic is testable without binding a socket."""
 
     def do_GET(self) -> None:  # noqa: N802 (stdlib-mandated name)
         status, content_type, body = resolve_route(self.path)
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:  # noqa: N802 (stdlib-mandated name)
+        content_length = int(self.headers.get("Content-Length", 0))
+        request_body = self.rfile.read(content_length) if content_length > 0 else b""
+        status, content_type, body = resolve_upload_post(self.path, request_body, self.headers.get("X-Filename"))
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
