@@ -1,0 +1,118 @@
+# SmartKeyNet "National Backbone" illustrative scenario config -- an ADDITIVE demo config, not a new
+# mechanism. Identical to s6_migration.yaml in every section except `migration_graph_seed` and
+# `migration_schedule` below (same "same deployment, not different hardware" convention as the other
+# scenario configs). `scenario: S6` is kept deliberately: it is the existing scenario key that makes
+# env/environment.py apply `migration_schedule` via RequestGenerator.set_tenant_sensitivity_class --
+# nothing in env/, agents/, or the floor table is touched or branched on.
+#
+# HELD-OUT EVAL ONLY (Hard Rule 8): `train_eligible: false`; experiments/train.py::train() refuses it.
+#
+# THE STORY (South Korea national backbone, illustrative): one shared quantum key pool serves several
+# government agencies. Display names are applied by dashboard/render_national_backbone.py to four
+# tenants; the sensitivity classes those tenants carry are NOT relabeled -- they are what
+# env/request_generator.py::build_tenant_graph really samples under `migration_graph_seed: 30`
+# (found by seed search, verified in tests):
+#   tenant_0 = S3  -> "Defense Ministry"  (highest class; never reclassified)
+#   tenant_1 = S3  -> "Health Ministry"   (highest class -- patient/biometric data)
+#   tenant_2 = S2  -> "Tax Authority"     (moderate/regulated)
+#   tenant_3 = S1  -> "Passport Office"   (routine; reclassified S1 -> S3 at step 100)
+# The other six tenants (tenant_4..9) share the same pool as unlabeled background load.
+
+scenario: S6  # one of S1..S6 (PLAN.md §5); S6 is held-out eval only (Hard Rule 8)
+
+# --- Hard Rule 8 guard (experiments/train.py::train(), 2026-08-24) ---
+# `train()` reads this key directly (`.get("train_eligible", True)`) and
+# raises ValueError before any training work happens if it's False.
+# This is the ONE config in the repo that sets it -- every other
+# config's absence of this key defaults to True (unaffected). Do not
+# remove this line or set it True to "unblock" a training run against
+# this file -- that is exactly the mistake Hard Rule 8 exists to
+# prevent (training on the schedule = memorizing the timeline =
+# experiment proves nothing).
+train_eligible: false
+
+seed: 0
+
+# --- env/forecast_provider.py, forecaster/model.py (Addition A) ---
+use_foresight: ewma  # off | ewma | lstm
+
+# --- env/pool_sim.py ---
+pool:
+  capacity_bits: 1_000_000
+  initial_fill_frac: 0.5
+  bits_per_hybrid_draw: 256  # ETSI GS QKD 014 key size (256-bit); PLAN.md §4 Datasets & Provenance:
+                              # "ETSI GS QKD 014 gives key sizes (256-bit)" -- Hard Rule 4, no invented number
+
+# --- env/masking.py (Hard Rule 2, 4, 5) ---
+key_lifetime:
+  max_key_age_steps: 500  # SP 800-57-derived cap L; forced rekey at/above this (Addition C)
+
+# --- env/environment.py reward (PLAN.md §4; Hard Rule 1 -- no security term, ever) ---
+reward:
+  w_lat: 1.0
+  w_en: 0.1
+  w_fr: 0.1
+  w_qkd: 1.0
+  r_starve: 10.0
+  c_rekey_base: 1.0
+  c_rekey_load_beta: 1.0
+
+# --- env/request_generator.py::build_tenant_graph (structural node count for S6's real graph) ---
+tenant_graph:
+  n_nodes: 10  # matches every other config's tenant_graph.n_nodes
+
+# --- env/request_generator.py random_request_generator's optional load-spike diagnostic (unrelated to S6
+# -- and inert under S6 anyway, since S6 doesn't use random_request_generator at all -- left present only
+# so this file has the same complete key set as every other scenario config) ---
+load_spike:
+  enabled: false
+  period_steps: 500
+  spike_duration_steps: 20
+  spike_rate_multiplier: 3.0
+  low_rate_multiplier: 0.3
+
+# --- env/environment.py S6 dispatch (Hard Rule 3, 4; design decision 15, 2026-08-24) ---
+# Required only when scenario: S6 (SmartKeyNetEnv.__init__ reads this key directly and raises KeyError
+# if it's missing under S6, same fail-fast convention as ddos.graph_seed under S4).
+migration_graph_seed: 30  # SEED SEARCH RESULT (see header): first seed in range(2000) whose real, unmodified
+                            # build_tenant_graph(n_nodes=10) assignment gives tenant_0=S3, tenant_1=S3,
+                            # tenant_2=S2, tenant_3=S1. 14 of 2000 seeds qualified; 30 is the lowest.
+
+# One scripted event, reusing S6's existing reclassification mechanism unchanged (env/environment.py
+# design decision 15): the Passport Office (tenant_3, S1 routine) is reclassified to S3 at step 100
+# -- "biometric ID data handled at the same tier as defense." Step 100 is mid-way through the 250-step
+# episode; chosen a priori, not tuned to the result.
+migration_schedule:
+  - step: 100
+    tenant_index: 3
+    new_sensitivity_class: 3  # S1 -> S3
+
+# --- agents/dqn.py (unchanged from default.yaml -- copied for a self-contained config file; irrelevant
+# to this scenario since train_eligible: false above means this file is never used for training) ---
+dqn:
+  gamma: 0.99
+  lr: 0.001
+  batch_size: 64
+  target_update_every: 1000
+  epsilon_start: 1.0
+  epsilon_end: 0.05
+  epsilon_decay_steps: 12_500
+
+# --- experiments/harness.py, agents/baselines.py ---
+baselines:
+  static_threshold_grid: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+# --- attack/steering_trace.py (PLAN.md §5 S5) ---
+steering_attack:
+  doses: [0.0, 0.25, 0.5, 0.75, 1.0]
+  duration_steps: 1000
+
+# --- experiments/train.py -- present only for key-set completeness; train_eligible: false above means
+# train() raises before this block is ever read for a real campaign against this file. ---
+training:
+  total_steps: 25_000
+  seed: 0
+  eval_every: 2_500
+  eval_seed: 999
+  eval_max_steps: 250
+  checkpoint_path: checkpoints/dqn_s6.pt  # unused: train_eligible false

@@ -153,6 +153,11 @@ PANELS: tuple[Panel, ...] = (
         "A real 100-decision validation (pcap-calm + real held-out RT-IoT2022 benign->attack transition + steady-state attack) confirming the upload demo's higher-threat_score/lower-floor anecdote is expected: CALM 66 / ELEVATED 4 / HIGH 30, zero floor-monotonicity violations, and the honest finding that ELEVATED posture is real but only transiently reachable.",
         (PanelFile("posture_validation.html", "Open panel"),),
     ),
+    Panel(
+        "National Backbone -- Illustrative Scenario",
+        "Illustrative: one shared key pool serving four labeled government agencies (Defense, Health, Tax, Passport Office), with the Passport Office reclassified S1 -> S3 mid-run via S6's existing mechanism. Real held-out episode; agency names are display labels only, tiers are the real seed-30 assignment. Honest limit stated on the panel: the pool never came under pressure in this run.",
+        (PanelFile("national_backbone.html", "Open panel"),),
+    ),
 )
 
 # Flat filename -> on-disk path, the server's actual route whitelist.

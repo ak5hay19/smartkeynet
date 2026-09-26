@@ -46,6 +46,25 @@
 
 ## Sessions (newest first)
 
+### [SOLO — South Korea "National Backbone" illustrative scenario panel] — 2026-09-26 — v2
+
+**Everything in this entry is South Korea scenario work; the last generalized point is commit `2e2313c` (GENERALIZED CASE CHECKPOINT, baseline 827 passed / 1 xfailed).**
+
+**Session goal:** build the four-agency shared-pool story (Defense / Health / Tax / Passport-reclassified) as one demoable panel, additive only.
+**What got done:**
+- `configs/scenarios/s_narrative_national_backbone.yaml` — identical to `s6_migration.yaml` except `migration_graph_seed: 30` and a one-event `migration_schedule` (step 100, tenant_3, S1 -> S3). Reuses S6's existing reclassification mechanism; no new pathway.
+- `dashboard/render_national_backbone.py` (pure renderer, identity-fidelity validator that raises on mislabeled rows), `dashboard/render_national_backbone_demo.py` (driver; reuses the migration-wave driver's episode collection, `checkpoints/dqn_s1.pt`, seed 900), `dashboard/samples/national_backbone.{html,json}`.
+- `Panel("National Backbone -- Illustrative Scenario")` registered in `dashboard/app.py` (11 panels / 21 files / 8 `/v2` tabs; also a `/classic` card).
+- 18 new tests (`tests/test_render_national_backbone.py`); 3 count assertions in `tests/test_dashboard_app.py` bumped (10->11, 20->21, 7->8). Full suite: **845 passed, 1 xfailed** (was 827).
+
+**Seed search (real result, no mapping-layer workaround for tiers):** scanned `build_tenant_graph` seeds 0-1999 for tenant_0=S3, tenant_1=S3, tenant_2=S2, tenant_3 in {S0,S1}. 14 qualified; lowest, **seed 30**, used (tenant_0..3 = S3,S3,S2,S1). Only the four display names are layered on top, shown beside the real `tenant_N` with a permanent on-page disclaimer.
+**Reclassification outcome (real):** Passport Office (tenant_3) S1 -> S3 at step 100; posture CALM before and after, so `attribute_floor_change` returned `scripted` (floor CLASSICAL -> HYBRID). Clean isolation, not forced. Real lag: last S1 request t=105, first S3 request t=127 (requests in flight keep the old class).
+**Floor guarantee (real):** 0 of 250 decisions (all tenants) served below floor.
+**HONEST LIMIT — no pool pressure:** pool_fill was 1.00 for the entire run. S6 has no QKD-degradation mechanism, and lowering `pool.capacity_bits` / `initial_fill_frac` (tried 20k, 5k, 2k) had no effect. The panel says so on-page; the "even under pool pressure" beat is NOT demonstrated here (S3 Comparison Table / Budgeting Brain cover scarcity). Creating pressure would need S3-style degradation — a different mechanic, deliberately not added.
+**Also noted:** Defense and Health are both S3, so they look identical (both HYBRID floor throughout); the "Health at a different tier than Defense" distinction is not real in this assignment.
+**Untouched (verified via git diff --stat):** env/, agents/, all other configs/scenarios/.
+**Next session will:** rehearsal / slides.
+
 ### [SOLO — GENERALIZED CASE CHECKPOINT — before South Korea narrative scenario] — 2026-09-26 — v2
 
 **GENERALIZED CASE CHECKPOINT — before South Korea narrative scenario.** This is the last point before any narrative-specific labeling begins. Everything on `v2` up to and including this commit (Phase 1/2 pcap extractor + upload demo, posture-variance validation and its dashboard panel) uses fully GENERALIZED tenant identities (`tenant_0..tenant_N`, no narrative labels). Everything logged ABOVE this entry after this point is the South Korea national-backbone scenario work specifically. To return to the generalized version: `git reset --hard <this commit's hash>`.

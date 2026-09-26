@@ -11,6 +11,8 @@
 
 ## Next task
 
+**National Backbone panel — DONE, branch `v2` — 2026-09-26 (South Korea scenario work; rollback point is `2e2313c`).** Four labeled agencies over real tenant_0..3 under `migration_graph_seed: 30` (found by seed search: S3,S3,S2,S1); Passport Office S1->S3 at step 100 via S6's existing mechanism, real attribution `scripted` (posture CALM throughout); 0/250 decisions below floor. **Honest limit: pool_fill stayed 1.00 the whole run — no shared-pool pressure was demonstrated.** Suite: 845 passed, 1 xfailed.
+
 **GENERALIZED CASE CHECKPOINT — before South Korea narrative scenario (2026-09-26, branch `v2`).** This exact commit is the last point before any narrative-specific labeling begins; all tenant identities up to here are generalized (`tenant_0..tenant_N`). Baseline: `827 passed, 1 xfailed`. Everything after this point in the log is the South Korea scenario work specifically. Roll back with `git reset --hard <this commit>`.
 
 **v2 Phase 3 (live capture, optional/skippable per `docs/v2_gameplan.md`) or Phase 4-5 (use case + slides, rehearsal) — Phase 2, the posture/floor-monotonicity validation QA session, and its new dashboard panel are all DONE as of 2026-09-23.**

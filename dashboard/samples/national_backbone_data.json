@@ -1,0 +1,692 @@
+{
+  "provenance": "Real held-out episode, seed=900, configs/scenarios/s_narrative_national_backbone.yaml (S6 mechanism, migration_graph_seed=30 found by seed search). Agency names are illustrative display labels over tenant_0..3; classes are the real, unmodified build_tenant_graph assignment.",
+  "graph_seed": 30,
+  "n_decisions": 250,
+  "n_below_floor": 0,
+  "agencies": [
+    {
+      "display_name": "Defense Ministry",
+      "tenant_id": "tenant_0",
+      "initial_class": "S3",
+      "observations": [
+        {
+          "step": 14,
+          "tenant": "tenant_0",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 56,
+          "tenant": "tenant_0",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 89,
+          "tenant": "tenant_0",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 121,
+          "tenant": "tenant_0",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 129,
+          "tenant": "tenant_0",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 202,
+          "tenant": "tenant_0",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 242,
+          "tenant": "tenant_0",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 244,
+          "tenant": "tenant_0",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 259,
+          "tenant": "tenant_0",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        }
+      ]
+    },
+    {
+      "display_name": "Health Ministry",
+      "tenant_id": "tenant_1",
+      "initial_class": "S3",
+      "observations": [
+        {
+          "step": 21,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 28,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 33,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 37,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 38,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 61,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 66,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 82,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 84,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 88,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 111,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 123,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 128,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 130,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 135,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 153,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 160,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 161,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 164,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 172,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 175,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 182,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 188,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 204,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 216,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 233,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 240,
+          "tenant": "tenant_1",
+          "service": "billing",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        }
+      ]
+    },
+    {
+      "display_name": "Tax Authority",
+      "tenant_id": "tenant_2",
+      "initial_class": "S2",
+      "observations": [
+        {
+          "step": 20,
+          "tenant": "tenant_2",
+          "service": "notify",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 22,
+          "tenant": "tenant_2",
+          "service": "auth",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 31,
+          "tenant": "tenant_2",
+          "service": "notify",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 45,
+          "tenant": "tenant_2",
+          "service": "notify",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 46,
+          "tenant": "tenant_2",
+          "service": "auth",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 109,
+          "tenant": "tenant_2",
+          "service": "notify",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 132,
+          "tenant": "tenant_2",
+          "service": "auth",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 171,
+          "tenant": "tenant_2",
+          "service": "notify",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 201,
+          "tenant": "tenant_2",
+          "service": "auth",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 210,
+          "tenant": "tenant_2",
+          "service": "auth",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 234,
+          "tenant": "tenant_2",
+          "service": "auth",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 237,
+          "tenant": "tenant_2",
+          "service": "auth",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 252,
+          "tenant": "tenant_2",
+          "service": "auth",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        },
+        {
+          "step": 261,
+          "tenant": "tenant_2",
+          "service": "auth",
+          "sensitivity_class": 2,
+          "posture": 0,
+          "floor": 1,
+          "served_tier": 1
+        }
+      ]
+    },
+    {
+      "display_name": "Passport Office",
+      "tenant_id": "tenant_3",
+      "initial_class": "S1",
+      "observations": [
+        {
+          "step": 23,
+          "tenant": "tenant_3",
+          "service": "notify",
+          "sensitivity_class": 1,
+          "posture": 0,
+          "floor": 0,
+          "served_tier": 0
+        },
+        {
+          "step": 60,
+          "tenant": "tenant_3",
+          "service": "ingest",
+          "sensitivity_class": 1,
+          "posture": 0,
+          "floor": 0,
+          "served_tier": 0
+        },
+        {
+          "step": 65,
+          "tenant": "tenant_3",
+          "service": "ingest",
+          "sensitivity_class": 1,
+          "posture": 0,
+          "floor": 0,
+          "served_tier": 0
+        },
+        {
+          "step": 67,
+          "tenant": "tenant_3",
+          "service": "notify",
+          "sensitivity_class": 1,
+          "posture": 0,
+          "floor": 0,
+          "served_tier": 0
+        },
+        {
+          "step": 76,
+          "tenant": "tenant_3",
+          "service": "ingest",
+          "sensitivity_class": 1,
+          "posture": 0,
+          "floor": 0,
+          "served_tier": 0
+        },
+        {
+          "step": 90,
+          "tenant": "tenant_3",
+          "service": "ingest",
+          "sensitivity_class": 1,
+          "posture": 0,
+          "floor": 0,
+          "served_tier": 0
+        },
+        {
+          "step": 105,
+          "tenant": "tenant_3",
+          "service": "notify",
+          "sensitivity_class": 1,
+          "posture": 0,
+          "floor": 0,
+          "served_tier": 0
+        },
+        {
+          "step": 127,
+          "tenant": "tenant_3",
+          "service": "ingest",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 147,
+          "tenant": "tenant_3",
+          "service": "notify",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 149,
+          "tenant": "tenant_3",
+          "service": "ingest",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 157,
+          "tenant": "tenant_3",
+          "service": "ingest",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 163,
+          "tenant": "tenant_3",
+          "service": "notify",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 167,
+          "tenant": "tenant_3",
+          "service": "notify",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 178,
+          "tenant": "tenant_3",
+          "service": "notify",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 186,
+          "tenant": "tenant_3",
+          "service": "notify",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 190,
+          "tenant": "tenant_3",
+          "service": "ingest",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 206,
+          "tenant": "tenant_3",
+          "service": "ingest",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 219,
+          "tenant": "tenant_3",
+          "service": "notify",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 222,
+          "tenant": "tenant_3",
+          "service": "notify",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        },
+        {
+          "step": 238,
+          "tenant": "tenant_3",
+          "service": "notify",
+          "sensitivity_class": 3,
+          "posture": 0,
+          "floor": 2,
+          "served_tier": 2
+        }
+      ]
+    }
+  ],
+  "reclass_event": {
+    "step": 100,
+    "tenant_id": "tenant_3",
+    "old_sensitivity_class": 1,
+    "new_sensitivity_class": 3,
+    "before": {
+      "step": 90,
+      "tenant": "tenant_3",
+      "service": "ingest",
+      "sensitivity_class": 1,
+      "posture": 0,
+      "floor": 0,
+      "served_tier": 0
+    },
+    "after": {
+      "step": 127,
+      "tenant": "tenant_3",
+      "service": "ingest",
+      "sensitivity_class": 3,
+      "posture": 0,
+      "floor": 2,
+      "served_tier": 2
+    },
+    "attribution": "scripted",
+    "attribution_note": "Real, attributable: the last observed decision before the event (t=90) showed floor=SERVE_CLASSICAL at S1+CALM; the first decision observed after the event that actually reflects the new class S3 (t=127) showed floor=SERVE_HYBRID at S3+CALM -- the SAME posture (CALM) throughout, so this floor increase is attributable to the scripted migration, not a posture shift."
+  }
+}
