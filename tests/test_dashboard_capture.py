@@ -178,3 +178,32 @@ def test_real_live_capture_post_route_end_to_end() -> None:
     assert content_type.startswith("text/html")
     assert "threat_score" in text
     assert "may differ from the network security context" in text
+
+
+# ---- wraparound disclosure note (results page) ----
+
+
+def test_result_page_shows_replay_note_when_flows_fewer_than_decisions() -> None:
+    from dataclasses import replace
+
+    from dashboard.render_upload import render_upload_result_html
+    from tests.test_dashboard_upload import _synthetic_result
+
+    base = _synthetic_result()  # 1 flow, 1 decision
+    result = replace(base, n_flows=1, decisions=base.decisions * 3)  # 3 decisions > 1 flow
+    text = render_upload_result_html(result)
+    assert "1 real flows extracted; this 3-decision episode revisits" in text
+    assert "not new traffic" in text
+
+
+def test_result_page_omits_replay_note_when_flows_cover_decisions() -> None:
+    from dataclasses import replace
+
+    from dashboard.render_upload import render_upload_result_html
+    from tests.test_dashboard_upload import _synthetic_result
+
+    base = _synthetic_result()
+    for n_flows in (1, 5):  # equal to, and greater than, the 1 decision
+        text = render_upload_result_html(replace(base, n_flows=n_flows))
+        assert "revisits" not in text
+        assert "Replay note" not in text

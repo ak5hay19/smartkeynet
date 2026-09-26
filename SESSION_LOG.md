@@ -46,6 +46,14 @@
 
 ## Sessions (newest first)
 
+### [SOLO — replay-wraparound disclosure note on the results page] — 2026-09-26 — v3-live-capture
+
+**Session goal:** disclose to the viewer that when a run's decision count exceeds its real flow count, the inherited `RTIoT2022ReplayProvider` modulo-wrap revisits real flows (real replay, not new traffic). Fix is disclosure only — `max_decisions`, episode length, and the provider logic are unchanged.
+**What got done:** `dashboard/render_upload.py::render_upload_result_html` gained one conditional "Replay note" (shown only when `n_flows < len(decisions)`, using that run's real N and X; omitted otherwise). Applies to both `/upload` and `/capture` since they share the renderer. 2 new tests in `tests/test_dashboard_capture.py` (note present when flows < decisions with the real numbers; absent when flows == or > decisions). Full suite 853 passed/1 xfailed (851 prior + 2).
+**What's broken / incomplete:** nothing. **Blockers:** none. **Hard Rules check:** untouched.
+
+---
+
 ### [SOLO — v2 Phase 3: real live packet capture, an alternate trigger for the existing pipeline] — 2026-09-23 — v3-live-capture
 
 **Session goal:** `docs/v2_gameplan.md`'s Phase 3 (explicitly optional/skippable) — a "start live capture" control that captures real traffic from this machine for a short, bounded duration, then runs it through the EXACT SAME pipeline Phase 1/2 already built and validated (tshark extraction -> `PCAPExtractProvider` -> LSTM -> masked DQN), producing the same results table — not a new pipeline.

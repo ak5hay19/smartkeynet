@@ -13,6 +13,8 @@
 
 **Phase 4-5 (use case + slides, rehearsal, per `docs/v2_gameplan.md`) is the one remaining item — Phase 1-3 (extractor, upload demo, live capture), the posture/floor-monotonicity validation QA session, and its dashboard panel are all DONE as of 2026-09-23.**
 
+**Replay-wraparound disclosure — DONE, branch `v3-live-capture` — 2026-09-26.** The results page now shows a "Replay note" when the episode's decision count exceeds the real extracted flow count (inherited modulo-wrap revisits real flows; real replay, not new traffic), with that run's real N/X; hidden otherwise. Purely additive to `render_upload_result_html`; `max_decisions`/provider logic unchanged. 2 new tests, full suite 853 passed/1 xfailed.
+
 **v2 Phase 3 — real live packet capture — DONE, branch `v3-live-capture` — 2026-09-23.** Branched from `v2`'s tip (`b274772`). An alternate TRIGGER for Phase 1/2's already-tested pipeline (tshark extraction -> `PCAPExtractProvider` -> LSTM -> masked DQN), not a new pipeline — a "start live capture" control captures real traffic from a chosen local interface for a short, fixed 20-second window, then hands the result to the exact same `run_pcap_upload_demo()` Phase 2's upload path already calls, producing the identical results page.
 
 **Step 1 (reachability), done before any build work:** confirmed real, not assumed — `tshark -i Wi-Fi -a duration:5 -w ...` captured 101 real packets with no permission wall on this machine (Npcap driver access works from this session's process), and the captured file fed cleanly into Phase 1's unmodified extractor (9 real flows, correct `(9, 39)` shape). Proceeded to build.

@@ -286,6 +286,16 @@ def render_upload_result_html(result: UploadDemoResult) -> str:
     )
     rows_html = "\n".join(_decision_row_html(r) for r in result.decisions)
 
+    n_decisions = len(result.decisions)
+    wraparound_note_html = ""
+    if result.n_flows < n_decisions:
+        wraparound_note_html = (
+            '<div class="caveat"><b>Replay note:</b> '
+            f"{result.n_flows} real flows extracted; this {n_decisions}-decision episode revisits "
+            "some flows more than once (a real replay of the same real flow, not new traffic) "
+            "since the episode length exceeds the flow count.</div>"
+        )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -306,7 +316,7 @@ def render_upload_result_html(result: UploadDemoResult) -> str:
 <div class="caveat">
   <b>Honesty note:</b> {html.escape(UPLOAD_CAVEAT_TEXT)}
 </div>
-
+{wraparound_note_html}
 <div class="summary-row">
   <div class="summary-card">Packets (total)<b>{result.n_packets_total}</b></div>
   <div class="summary-card">Packets used (IPv4 tcp/udp/icmp)<b>{result.n_packets_used}</b></div>
