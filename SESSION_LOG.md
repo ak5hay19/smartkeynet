@@ -46,6 +46,13 @@
 
 ## Sessions (newest first)
 
+### [SOLO — GENERALIZED CASE CHECKPOINT — before South Korea narrative scenario] — 2026-09-26 — v2
+
+**GENERALIZED CASE CHECKPOINT — before South Korea narrative scenario.** This is the last point before any narrative-specific labeling begins. Everything on `v2` up to and including this commit (Phase 1/2 pcap extractor + upload demo, posture-variance validation and its dashboard panel) uses fully GENERALIZED tenant identities (`tenant_0..tenant_N`, no narrative labels). Everything logged ABOVE this entry after this point is the South Korea national-backbone scenario work specifically. To return to the generalized version: `git reset --hard <this commit's hash>`.
+
+**Known-good baseline:** full suite `827 passed, 1 xfailed` (working tree clean at `b274772` before this docs-only commit).
+**What got done:** docs only (this entry + a PROGRESS.md note). No code changes.
+
 ### [SOLO — Posture Validation dashboard panel] — 2026-09-23 — v2
 
 **Session goal:** turn the immediately-preceding posture-variance/floor-monotonicity validation session's real, already-committed result (commit `83f23ba`) into an actual dashboard panel, matching the existing panels' visual language and honesty conventions, rather than leaving it as prose-only in PROGRESS.md/SESSION_LOG.md. Confirmed on branch `v2` first. Strictly a visualization session: reused `PCAPExtractProvider`/`RTIoT2022ReplayProvider`/`dashboard.explain.explain_decision_from_env`/`GreedyDQNPolicy` exactly as the validation session did — zero changes to `env/`, `agents/`, the reward function, the action space, the floor table, any checkpoint, or the validation test/logic itself.
