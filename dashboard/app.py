@@ -17,12 +17,27 @@ trained agent produces (see `dashboard/render_living_system_demo.py`'s
 module docstring for the full honest finding on what each one actually
 shows).
 
-This is a presentation-layer convenience over already-rendered, real
-static artifacts -- it computes nothing and runs no episode. It does
-not stream a live `SmartKeyNetEnv` (PLAN2.md Hard Rule 11 scopes live
-capture/streaming out) and does not regenerate panels on request; it
-only serves the committed files as they exist on disk right now,
-byte-for-byte.
+The ten `/samples/` panels are a presentation-layer convenience over
+already-rendered, real static artifacts -- serving them computes
+nothing and runs no episode; they are the committed files as they
+exist on disk right now, byte-for-byte, never regenerated on request.
+
+Two routes ARE live-computed, added in later sessions as deliberately
+scoped stretch work (v2 Phases 2-3, `docs/v2_gameplan.md`): `/upload`
+(Phase 2 -- a person uploads a `.pcap`, real extraction/forecast/DQN
+decisions are computed at request time) and `/capture` (Phase 3 -- an
+alternate trigger for the identical pipeline: a short, bounded live
+capture on a real local interface, via `dashboard/live_capture.py`,
+stands in for the uploaded file). Neither opens a continuously-running
+live tick against `SmartKeyNetEnv` or streams incremental results --
+each is a single bounded run-to-completion request that ends in the
+same static result page. This stays inside PLAN2.md Hard Rule 11
+(SS5.5): true live capture is explicitly scoped there as a stretch
+item that must never compete with the project's guaranteed
+deliverables, never as something permanently forbidden to build --
+`/capture` is exactly that stretch item, built only because the
+guaranteed deliverables were already complete and frozen before this
+branch started.
 
 Deliberately standard-library only (`http.server`), for the same
 zero-new-dependency reason `dashboard/render_explain.py` gives for its
@@ -63,7 +78,19 @@ import urllib.parse
 from pathlib import Path
 from typing import NamedTuple
 
-from dashboard.render_upload import render_upload_error_html, render_upload_form_html, render_upload_result_html
+from dashboard.live_capture import (
+    LiveCaptureError,
+    default_capture_interface,
+    list_capture_interfaces,
+    run_live_capture_demo,
+)
+from dashboard.render_upload import (
+    render_capture_form_html,
+    render_capture_unavailable_html,
+    render_upload_error_html,
+    render_upload_form_html,
+    render_upload_result_html,
+)
 from dashboard.upload_demo import InvalidPcapError, run_pcap_upload_demo
 
 _SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
@@ -433,6 +460,7 @@ footer{{max-width:1200px;margin:14px auto 0;padding:16px 22px 0;font-family:var(
   <span class="pill">Static, pre-rendered panels</span>
   <span class="pill">Nothing computed live &middot; nothing is a placeholder</span>
   <a class="classic-link" href="/upload">Upload a pcap (live) &rarr;</a>
+  <a class="classic-link" href="/capture">Live capture (local) &rarr;</a>
   <a class="classic-link" href="/classic">Classic card view</a>
 </header>
 
@@ -558,6 +586,18 @@ def resolve_route(path: str) -> tuple[int, str, bytes]:
     if path in ("/upload", "/upload.html"):
         return 200, "text/html; charset=utf-8", render_upload_form_html().encode("utf-8")
 
+    if path in ("/capture", "/capture.html"):
+        try:
+            interfaces = list_capture_interfaces()
+        except LiveCaptureError as exc:
+            return 200, "text/html; charset=utf-8", render_capture_unavailable_html(str(exc)).encode("utf-8")
+        default_index = default_capture_interface(interfaces).index
+        return (
+            200,
+            "text/html; charset=utf-8",
+            render_capture_form_html(tuple(interfaces), default_index).encode("utf-8"),
+        )
+
     if path.startswith("/samples/"):
         filename = path[len("/samples/") :]
         file_path = _ROUTES.get(filename)
@@ -596,6 +636,47 @@ def resolve_upload_post(path: str, body: bytes, filename_header: str | None) -> 
     return 200, "text/html; charset=utf-8", render_upload_result_html(result).encode("utf-8")
 
 
+def resolve_capture_post(path_with_query: str) -> tuple[int, str, bytes]:
+    """Pure POST handler for the v2 Phase 3 live-capture demo
+    (`dashboard/live_capture.py`/`dashboard/render_upload.py`),
+    mirroring `resolve_upload_post`'s "pure function, no socket"
+    testability contract. No request body is used (there's no file to
+    send, unlike `/upload`) -- the chosen interface travels as a
+    `?interface=<index>` query parameter instead.
+
+    Real, honest failures at either stage -- `LiveCaptureError` (the
+    capture step itself: bad interface, permission denied, zero
+    packets in the window) or `InvalidPcapError` (Phase 1/2's
+    unmodified extraction step, if the capture succeeded but yielded
+    zero extractable flows) -- render the exact same honest error page
+    `/upload` renders (Step 4: same error-handling philosophy, never a
+    fabricated result), rather than a 500 or a blank page."""
+    split = urllib.parse.urlsplit(path_with_query)
+    if split.path not in ("/capture", "/capture.html"):
+        return 404, "text/plain; charset=utf-8", b"Not Found"
+
+    query = urllib.parse.parse_qs(split.query)
+    interface_values = query.get("interface")
+    if not interface_values or not interface_values[0]:
+        return (
+            400,
+            "text/html; charset=utf-8",
+            render_upload_error_html("(live capture)", "No interface was selected.").encode("utf-8"),
+        )
+    interface_index = interface_values[0]
+
+    try:
+        result = run_live_capture_demo(interface_index)
+    except (LiveCaptureError, InvalidPcapError) as exc:
+        return (
+            400,
+            "text/html; charset=utf-8",
+            render_upload_error_html(f"live capture (interface {interface_index})", str(exc)).encode("utf-8"),
+        )
+
+    return 200, "text/html; charset=utf-8", render_upload_result_html(result).encode("utf-8")
+
+
 class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
     """Thin adapter: delegates all routing/content decisions to
     `resolve_route` so that logic is testable without binding a socket."""
@@ -611,7 +692,11 @@ class DashboardRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 (stdlib-mandated name)
         content_length = int(self.headers.get("Content-Length", 0))
         request_body = self.rfile.read(content_length) if content_length > 0 else b""
-        status, content_type, body = resolve_upload_post(self.path, request_body, self.headers.get("X-Filename"))
+        request_path = urllib.parse.urlsplit(self.path).path
+        if request_path in ("/capture", "/capture.html"):
+            status, content_type, body = resolve_capture_post(self.path)
+        else:
+            status, content_type, body = resolve_upload_post(self.path, request_body, self.headers.get("X-Filename"))
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))

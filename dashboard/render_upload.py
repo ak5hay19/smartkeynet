@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import html
 
+from dashboard.live_capture import CAPTURE_DURATION_SECONDS, CaptureInterface
 from dashboard.upload_demo import DecisionRow, UPLOAD_CAVEAT_TEXT, UploadDemoResult
 
 _BASE_STYLE = """
@@ -166,6 +167,100 @@ def render_upload_form_html() -> str:
 </html>"""
 
 
+def render_capture_form_html(interfaces: tuple[CaptureInterface, ...], default_index: str) -> str:
+    """The v2 Phase 3 live-capture form: an interface picker instead of
+    a file input, POSTing to `/capture?interface=<index>` (no request
+    body needed -- unlike `/upload`, there's no file to send). Reuses
+    this module's own style system and results/error pages verbatim
+    (Step 4: same results table, same honesty caveat, same error
+    philosophy as the upload flow -- this is an alternate TRIGGER for
+    the identical pipeline, not a new visual system)."""
+    options_html = "\n".join(
+        f'<option value="{html.escape(iface.index)}"'
+        f'{" selected" if iface.index == default_index else ""}>'
+        f"{html.escape(iface.friendly_name)} (interface #{html.escape(iface.index)})</option>"
+        for iface in interfaces
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartKeyNet -- Live capture</title>
+<style>{_BASE_STYLE}</style>
+</head>
+<body>
+{_topbar()}
+<main>
+<div class="upload-card">
+  <h1>Start a live capture</h1>
+  <p style="color:var(--text-dim);font-size:13px;line-height:1.5;">
+    Captures real traffic from a chosen interface on this machine for a
+    fixed {CAPTURE_DURATION_SECONDS}-second window, then runs it through
+    the exact same real pipeline as uploading a .pcap (tshark extraction,
+    the real trained LSTM threat forecaster, a real trained masked-DQN
+    checkpoint). See the honesty note on the results page before reading
+    anything into the output.
+  </p>
+  <select id="ifaceSelect" style="width:100%;padding:9px;background:var(--panel-2);color:var(--text);border:1px solid var(--line);border-radius:8px;margin:18px 0;font-family:var(--mono);font-size:12px;">
+{options_html}
+  </select>
+  <br>
+  <button id="captureBtn">Capture for {CAPTURE_DURATION_SECONDS}s and run the pipeline</button>
+  <div id="status"></div>
+</div>
+</main>
+<script>
+  const btn = document.getElementById('captureBtn');
+  const status = document.getElementById('status');
+  const ifaceSelect = document.getElementById('ifaceSelect');
+
+  btn.addEventListener('click', async () => {{
+    const iface = ifaceSelect.value;
+    btn.disabled = true;
+    status.textContent = 'Capturing live traffic for {CAPTURE_DURATION_SECONDS}s, then running the real pipeline -- this will take about {CAPTURE_DURATION_SECONDS} seconds...';
+    try {{
+      const resp = await fetch('/capture?interface=' + encodeURIComponent(iface), {{ method: 'POST' }});
+      const text = await resp.text();
+      document.open();
+      document.write(text);
+      document.close();
+    }} catch (e) {{
+      status.textContent = 'Capture failed: ' + e;
+      btn.disabled = false;
+    }}
+  }});
+</script>
+</body>
+</html>"""
+
+
+def render_capture_unavailable_html(message: str) -> str:
+    """An honest, plain page for when live capture can't even be
+    offered (e.g. no interfaces enumerable, tshark not on PATH) --
+    reuses the same error-box styling as `render_upload_error_html`,
+    never a fabricated interface list or a silent blank page."""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SmartKeyNet -- Live capture unavailable</title>
+<style>{_BASE_STYLE}</style>
+</head>
+<body>
+{_topbar()}
+<main>
+<div class="error-box">
+  <h1 style="margin-top:0;">Live capture is not available here</h1>
+  <p class="mono" style="font-size:12.5px;line-height:1.6;">{html.escape(message)}</p>
+  <p><a href="/upload">Use the upload flow instead &rarr;</a></p>
+</div>
+</main>
+</body>
+</html>"""
+
+
 def _decision_row_html(row: DecisionRow) -> str:
     legal_html = "".join(f'<span class="legal-chip">{html.escape(a)}</span>' for a in row.legal_actions)
     return f"""<tr>
@@ -191,6 +286,16 @@ def render_upload_result_html(result: UploadDemoResult) -> str:
     )
     rows_html = "\n".join(_decision_row_html(r) for r in result.decisions)
 
+    n_decisions = len(result.decisions)
+    wraparound_note_html = ""
+    if result.n_flows < n_decisions:
+        wraparound_note_html = (
+            '<div class="caveat"><b>Replay note:</b> '
+            f"{result.n_flows} real flows extracted; this {n_decisions}-decision episode revisits "
+            "some flows more than once (a real replay of the same real flow, not new traffic) "
+            "since the episode length exceeds the flow count.</div>"
+        )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -211,7 +316,7 @@ def render_upload_result_html(result: UploadDemoResult) -> str:
 <div class="caveat">
   <b>Honesty note:</b> {html.escape(UPLOAD_CAVEAT_TEXT)}
 </div>
-
+{wraparound_note_html}
 <div class="summary-row">
   <div class="summary-card">Packets (total)<b>{result.n_packets_total}</b></div>
   <div class="summary-card">Packets used (IPv4 tcp/udp/icmp)<b>{result.n_packets_used}</b></div>
