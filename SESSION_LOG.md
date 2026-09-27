@@ -50,7 +50,14 @@
 
 **Session goal:** produce one branch containing everything built across the project (base project, pcap upload demo, posture-variance validation, National Backbone scenario, live capture, replay-wraparound disclosure fix) without modifying `v2`, `v3-live-capture`, or `main`.
 **What got done:** created `final-demo` from `v2`'s tip (`67b4e19`), merged `v3-live-capture` (`a3e798e`) into it. Two conflicts, both in append-only docs (`PROGRESS.md`, `SESSION_LOG.md`) — resolved by keeping both branches' entries, none dropped. `dashboard/app.py` merged cleanly with no conflict (v2 only added the National Backbone `PANELS` entry; v3-live-capture's changes were all in disjoint hunks — docstring, imports, `/capture` route, POST dispatch).
-**What's working:** see this session's entry below the two merged stacks for full validation detail (test count, route checks, panel presence).
+**Validation (real, re-run on `final-demo` after the merge commit):**
+- Full suite: **871 passed, 1 xfailed.** Matches expectation exactly: base (common ancestor `b274772`) 827 passed/1 xfailed + `v2`'s 18 unique new tests (845-827, National Backbone) + `v3-live-capture`'s 26 unique new tests (853-827, 24 live-capture + 2 replay-wraparound) = 871. No test dropped, none double-counted.
+- `resolve_route('/upload')` -> 200; `resolve_route('/capture')` -> 200. Both live-computed routes present and functional.
+- `PANELS` registry: 11 panels, includes both "National Backbone -- Illustrative Scenario" (from `v2`) and "Posture Validation" (from the common ancestor, present exactly once, no duplication).
+- `dashboard/render_upload.py`'s replay-wraparound "Replay note" conditional (`result.n_flows < n_decisions`) present and unchanged from `v3-live-capture`.
+- Source-branch integrity re-checked after the merge commit: `git rev-parse v2` = `67b4e19...`, `v3-live-capture` = `a3e798e...`, `main` = `8712445...` — all three identical to their pre-merge tips (Step 0 of this session). Only `final-demo` gained a commit.
+
+**What's working:** the combined branch — base project, pcap upload demo, posture-variance validation panel, National Backbone scenario panel, live packet capture (`/capture`), and the replay-wraparound disclosure fix — all present and validated together on one branch for the first time.
 **What's broken / incomplete:** nothing scoped for this merge was left undone.
 **Blockers:** none.
 **Hard Rules check:** untouched — this was a merge/docs session only, zero changes to `env/`, `agents/`, the reward function, the action space, the floor table, or any checkpoint beyond what each source branch already committed.
