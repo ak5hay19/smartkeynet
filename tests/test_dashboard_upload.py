@@ -16,7 +16,14 @@ import pytest
 
 from dashboard.app import resolve_route, resolve_upload_post
 from dashboard.render_upload import render_upload_error_html, render_upload_form_html, render_upload_result_html
-from dashboard.upload_demo import DecisionRow, InvalidPcapError, UPLOAD_CAVEAT_TEXT, UploadDemoResult, run_pcap_upload_demo
+from dashboard.upload_demo import (
+    DecisionRow,
+    DEMO_TENANT_CAVEAT_TEXT,
+    InvalidPcapError,
+    UPLOAD_CAVEAT_TEXT,
+    UploadDemoResult,
+    run_pcap_upload_demo,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 REAL_LSTM_CHECKPOINT = _REPO_ROOT / "checkpoints" / "lstm_threat_forecaster.pt"
@@ -153,3 +160,13 @@ def test_upload_caveat_text_constant_appears_verbatim_in_the_rendered_result_pag
     assert "live demonstration of the real pipeline" in text
     assert "synthetic.pcap" in text
     assert "0.1234" in text
+
+
+def test_demo_tenant_caveat_text_constant_appears_verbatim_in_the_rendered_result_page() -> None:
+    # Disclosure-only note: tenant/service/sensitivity class come from an
+    # independent synthetic policy stream, not the real captured traffic --
+    # guards against this copy drifting from the module-level constant.
+    text = render_upload_result_html(_synthetic_result())
+    assert "independent synthetic policy stream" in DEMO_TENANT_CAVEAT_TEXT
+    assert "independent synthetic policy stream" in text
+    assert "Demo tenant note" in text

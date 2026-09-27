@@ -105,6 +105,16 @@ UPLOAD_CAVEAT_TEXT = (
     "not a validated detection claim on arbitrary traffic."
 )
 
+DEMO_TENANT_CAVEAT_TEXT = (
+    "Tenant, service, and sensitivity class in each row come from an "
+    "independent synthetic policy stream, not from the traffic itself -- "
+    "the same way a real deployment assigns sensitivity class by admin "
+    "policy rather than inferring it from packet content. threat_score, "
+    "posture, floor, legal actions, and the agent's chosen action are all "
+    "computed live from the real captured/uploaded traffic; only the "
+    "tenant/service/sensitivity label alongside them is not."
+)
+
 
 class InvalidPcapError(Exception):
     """A real, user-facing failure -- an uploaded file wasn't a valid

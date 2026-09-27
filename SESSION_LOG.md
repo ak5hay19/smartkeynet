@@ -46,6 +46,20 @@
 
 ## Sessions (newest first)
 
+### [SOLO — demo-tenant-provenance disclosure note] — 2026-09-27 — final-demo
+
+**Session goal:** disclosure-only follow-up to a read-only investigation (this session's own earlier report) confirming each `/upload`/`/capture` decision row's "Demo tenant / service" label and sensitivity class come from `env/request_generator.py::random_request_generator` — an independent synthetic policy stream, kept structurally separate from the real pcap-driven threat signal per Hard Rule 2 — not from the captured/uploaded traffic itself. Add a third visible note saying so, matching the existing "Honesty note"/"Replay note" banners. No logic changes.
+**What got done:**
+- `dashboard/upload_demo.py`: new `DEMO_TENANT_CAVEAT_TEXT` constant, styled after the existing `UPLOAD_CAVEAT_TEXT`.
+- `dashboard/render_upload.py::render_upload_result_html`: one more unconditional `<div class="caveat">` block ("Demo tenant note") rendered between the Honesty note and the (conditional) Replay note. Shared by both `/upload` and `/capture` since they use the same renderer.
+- 1 new test (`tests/test_dashboard_upload.py::test_demo_tenant_caveat_text_constant_appears_verbatim_in_the_rendered_result_page`), mirroring the existing Honesty-note guard test exactly. Full suite **872 passed, 1 xfailed** (871 prior + 1).
+**What's working:** the note renders on both routes, confirmed by direct call against a synthetic `UploadDemoResult` (same pattern the Honesty-note test already used).
+**What's broken / incomplete:** nothing scoped for this change was left undone.
+**Blockers:** none.
+**Hard Rules check:** Hard Rule 2 (threat head / tenant identity must not cross-contaminate) is the reason this note exists — untouched by this change, since nothing about `random_request_generator`, `env/environment.py`, or sensitivity-class assignment was modified. Documentation/display only.
+
+---
+
 ### [SOLO — final-demo merge of `v2` + `v3-live-capture`] — 2026-09-27 — final-demo
 
 **Session goal:** produce one branch containing everything built across the project (base project, pcap upload demo, posture-variance validation, National Backbone scenario, live capture, replay-wraparound disclosure fix) without modifying `v2`, `v3-live-capture`, or `main`.

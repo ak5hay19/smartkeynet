@@ -15,7 +15,7 @@ from __future__ import annotations
 import html
 
 from dashboard.live_capture import CAPTURE_DURATION_SECONDS, CaptureInterface
-from dashboard.upload_demo import DecisionRow, UPLOAD_CAVEAT_TEXT, UploadDemoResult
+from dashboard.upload_demo import DecisionRow, DEMO_TENANT_CAVEAT_TEXT, UPLOAD_CAVEAT_TEXT, UploadDemoResult
 
 _BASE_STYLE = """
 :root{
@@ -315,6 +315,9 @@ def render_upload_result_html(result: UploadDemoResult) -> str:
 
 <div class="caveat">
   <b>Honesty note:</b> {html.escape(UPLOAD_CAVEAT_TEXT)}
+</div>
+<div class="caveat">
+  <b>Demo tenant note:</b> {html.escape(DEMO_TENANT_CAVEAT_TEXT)}
 </div>
 {wraparound_note_html}
 <div class="summary-row">

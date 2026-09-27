@@ -11,6 +11,8 @@
 
 ## Next task
 
+**[final-demo, 2026-09-27] Demo-tenant-provenance disclosure note — DONE.** The `/upload` and `/capture` results page now carries a third caveat, "Demo tenant note," alongside the existing "Honesty note" and "Replay note": each row's tenant/service/sensitivity class comes from an independent synthetic policy stream (`random_request_generator`, kept structurally separate from the threat signal per Hard Rule 2), not from the real captured/uploaded traffic — only `threat_score`/posture/floor/legal actions/chosen action are live-computed from the real pcap. Disclosure only, zero logic changes. 1 new test, full suite 872 passed/1 xfailed (871 prior + 1).
+
 **[final-demo merge, 2026-09-27] Phase 4-5 (use case + slides, rehearsal, per `docs/v2_gameplan.md`) is the one remaining item — Phase 1-3 (extractor, upload demo, live capture), the posture/floor-monotonicity validation QA session and its dashboard panel, the National Backbone illustrative scenario panel, and the replay-wraparound disclosure fix are all DONE.** (Merge of `v2` + `v3-live-capture`; see below for each branch's own "Next task" notes as they stood before this merge.)
 
 **National Backbone panel — DONE, branch `v2` — 2026-09-26 (South Korea scenario work; rollback point is `2e2313c`).** Four labeled agencies over real tenant_0..3 under `migration_graph_seed: 30` (found by seed search: S3,S3,S2,S1); Passport Office S1->S3 at step 100 via S6's existing mechanism, real attribution `scripted` (posture CALM throughout); 0/250 decisions below floor. **Honest limit: pool_fill stayed 1.00 the whole run — no shared-pool pressure was demonstrated.** Suite (on `v2` alone): 845 passed, 1 xfailed.
