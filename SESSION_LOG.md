@@ -46,6 +46,22 @@
 
 ## Sessions (newest first)
 
+### [SOLO — camera-ready baselines re-measurement + reuse-first] — 2026-11-16 — camera-ready-baselines
+
+**Session goal:** reviewers asked for a clearer comparison against well-tuned non-RL baselines and about rekey overhead; the paper quoted always-PQC/random only from an earlier configuration. Re-measure every non-learned baseline under the current (Phase 4b / Gate W3) configuration; optionally add a reuse-first heuristic. No training.
+**What got done:**
+- `experiments/remeasure_baselines.py` (new, reproducible; `python -m experiments.remeasure_baselines`, ~2 min): restates the Gate W3 forecaster wiring from the gitignored `scratchpad/phase4b_common.py` (unchanged logic), hard-gates on Step 1, then measures always-PQC, always-hybrid, random (RNG seeds 0/1/2), the tuned threshold + full grid, reuse-first, and — read-only — re-evaluates the DQN checkpoints. Writes `docs/baselines_remeasured_results.json`.
+- **Step 1:** `StaticThresholdPolicy(0.9)` reproduced S1 -64,648.4475 and S3 -38,566.8700 exactly (|diff| 0). DQN re-eval reproduced -11,524.57 / -10,784.76 exactly.
+- `agents/reuse_first.py` + `tests/test_reuse_first.py` (7 tests): REUSE if legal else lowest legal action; never outside the mask (all 31 non-empty masks; real S1/S3 episodes: 0 illegal, 0 floor violations).
+- `docs/baselines_remeasured.md`: per-scenario tables, cost ratios vs the published DQN, action mix, the exact command, caveats.
+**Result, reported plainly:** reuse-first = -5,062.76 ± 171.15 on S1 *and* S3, i.e. 0.44x / 0.47x the masked DQN's cost (about 2x cheaper), below-floor 0.0000, 39.9 fresh keys/episode (DQN ~202 / ~181). It beats the DQN, it does not tie it. Other baselines (total_reward): always-PQC -16,939.03; always-hybrid -64,776.61 (S1) / -59,346.00 (S3); random(seed 0) -29,562.86 (seeds 1,2: -30,686.53, -30,399.91); tuned threshold -64,648.45 / -38,566.87. Gate W3 (DQN vs tuned threshold) unchanged.
+**What's working:** everything above; full suite count only went up (see below).
+**What's broken / incomplete:** *why* the DQN under-reuses was not investigated (training horizon / exploration / reward scale / state features — open). No wall-clock handshake cost is measured anywhere (the env's cost model is `_LATENCY_UNITS`); only fresh-key issuance counts and waiting ticks. Always-PQC/random/reuse-first are bit-identical on S1 vs S3 because S3's pool degradation never bites policies that don't draw heavily (verified: identical per-step reward trace for always-PQC on seed 900 while S3 pool fill reaches 0.60) — S3 does not stress reuse-first. Earlier paper figures for always-PQC/random (-16,906.98 / -31,904.80) differ from the re-measured ones; likely because the earlier run used no real-replay `forecast_provider_factory`, not isolated.
+**Blockers:** none. **Not merged to `main`** — author decides after reading `docs/baselines_remeasured.md`.
+**Hard Rules check:** Hard Rule 7 central — a heuristic beating the DQN is reported, not hidden; Hard Rule 2 untouched (reuse-first inherits the mask, never touches floors). Nothing in `env/`, `agents/baselines.py`, `agents/dqn.py`, `experiments/harness.py`, reward, action space, floor table, or any checkpoint was modified (checkpoints only read).
+
+---
+
 ### [SOLO — README.md refresh] — 2026-11-16 — main
 
 **Session goal:** README.md was badly stale and is the public face of the repo (after `final-demo` -> `main`, 2026-09-27); bring it in line with PROGRESS.md / SESSION_LOG.md / `dashboard/samples/*.json`. README.md only.
