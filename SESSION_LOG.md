@@ -46,6 +46,24 @@
 
 ## Sessions (newest first)
 
+### [SOLO — README.md refresh] — 2026-11-16 — main
+
+**Session goal:** README.md was badly stale and is the public face of the repo (after `final-demo` -> `main`, 2026-09-27); bring it in line with PROGRESS.md / SESSION_LOG.md / `dashboard/samples/*.json`. README.md only.
+**What got done:** rewrote `README.md` — real forecaster (not "stub"/"not started"), 872 passed/1 xfailed, Gate W3 5.61x/3.58x, S3 masked-vs-soft 0.0000 vs 0.0802 below-floor and 0.00 vs 4.42 regret (cross-checked against `results_data.json`), S5 step (0.0000 at alpha<=0.1, <=0.0072 through 0.5, 0.2984 at >=0.6 — checked against `results_data.json`), 11 panels + live `/upload`/`/capture` (+ tshark/Npcap requirement, 25 MiB upload cap, fixed 20 s capture) + the three result-page caveats incl. demo-tenant provenance, per-demo checkpoint/CSV/tshark dependency table, regeneration commands (`data/get_data.py`, `forecaster.train_threat_lstm`, `forecast_provider_factory` training conventions), current caveats replacing the obsolete placeholder-saturation and EWMA-era Table V ones. Repo map and scenario table kept; added forecaster/pcap/upload rows.
+**Deliberate deviations from the brief (sourced from the repo, flagged to the user):**
+- Floor table: the brief said "11 of 12 cells engineering judgment, 1 cell (S3, calm) CNSA-grounded". `env/masking.py::_FLOOR_TABLE_CALIBRATION` and PROGRESS.md's 2026-09-14 recalibration say **9 `judgment` + 3 `citation_with_judgment`** (all three S3 cells share the CNSA 2.0 basis; only (S3, CALM)'s *value* changed). README follows the code/PROGRESS.
+- S5: "0.0000 through alpha ~0.5" is `<=0.0072` through alpha=0.5 (0.0000 only through 0.1); README states the exact curve.
+- `forecaster/dataset.py` and `forecaster/train.py` are still `NotImplementedError` stubs, so the README keeps them listed as stubs (superseded in practice) rather than deleting the bullet.
+- Zero-attacked-floor-violations is documented only for the 2026-08-26 sweep; README says so instead of extending it to the 2026-09-14 re-run.
+- "872 passed" was measured with checkpoints, `data/raw` CSV and tshark present; real-data tests are `requires_*`-skip-guarded, and the clean-clone passed/skipped split was NOT measured — README says so.
+**Numbers not sourced / omitted:** none required by the brief were missing; the Table V column-by-column comparison was not re-measured under Phase 4b, so the README says that instead of quoting it.
+**What's working:** README now consistent with PROGRESS.md.
+**What's broken / incomplete:** `docs/smartkeynet_ieee_paper_5.tex` (last commit 2026-08-30) still predates Phase 4b; `docs/report.md` still a skeleton; `api/main.py` still a stub. Not touched per scope.
+**Blockers:** none.
+**Hard Rules check:** docs-only; Hard Rule 7 (report numbers as measured) applied — nothing in the README was rounded up or inferred from memory.
+
+---
+
 ### [SOLO — demo-tenant-provenance disclosure note] — 2026-09-27 — final-demo
 
 **Session goal:** disclosure-only follow-up to a read-only investigation (this session's own earlier report) confirming each `/upload`/`/capture` decision row's "Demo tenant / service" label and sensitivity class come from `env/request_generator.py::random_request_generator` — an independent synthetic policy stream, kept structurally separate from the real pcap-driven threat signal per Hard Rule 2 — not from the captured/uploaded traffic itself. Add a third visible note saying so, matching the existing "Honesty note"/"Replay note" banners. No logic changes.
