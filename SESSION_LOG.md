@@ -46,6 +46,18 @@
 
 ## Sessions (newest first)
 
+### [SOLO — S5 attacked-floor verification on the current sweep] — 2026-11-16 — camera-ready-baselines
+
+**Session goal:** verify on the CURRENT S5 sweep (Phase 4b / 2026-09-14 cold-start-fix re-run; Fig. 4: plateau 0.2984 at alpha >= 0.6) that every masked-agent decision met the floor computed from the ATTACKED posture — previously documented only for the 2026-08-26 sweep. Read-only.
+**What got done:** `experiments/s5_attacked_floor_check.py` (new) calls the existing `run_scenario_under_attack` per (alpha, seed, policy), same setup as the Phase 4b sweep (S2, `dqn_s2.pt` + `s2_hndl.yaml` vs `soft_reward_baseline_s2.pt` + `soft_reward_baseline_s2.yaml`, real `LSTMForecastProvider` as base+shadow, 11 alphas, seeds 900-904). A transparent wrapper logs each decision's shown floor and mask legality; both harness counts (`floor_violations` vs attacked floor, `below_floor_true_count`) were recomputed independently from `delivered_tier_log`/`true_floor_log` — agreed on all 110 episodes. Harness NOT modified (it exposes the count).
+**Results:** Step 1 — V(pi) matches the published sweep and `dashboard/samples/results_data.json` to 4 decimals in all 22 cells. Masked: **0/13,750 decisions below the attacked floor**, 0 illegal choices, 0 violating episodes; V(pi) vs TRUE floor 0.0000 -> 0.0072 -> 0.2984 (373/1,250). Soft-reward: 4,693/13,750 below the attacked floor, in all 55 episodes. Shown floor < true floor on 1/3/6/9 (alpha 0.2-0.5) then 492/1,250 (alpha >= 0.6) decisions: the attack works on the shown floor, the masked agent obeys it.
+**Conclusion for the paper:** the sentence "cleared the floor it was shown" is true for the current Fig. 4 numbers; it must not be read as V(pi)=0 (the zero is by construction — the mask enforces the shown floor — and Fig. 4 measures exactly the gap to the true floor).
+**What's broken / incomplete:** nothing scoped. Limits: one masked checkpoint (training seed 0), 5 eval seeds, the zero-padded `[qber, load]` input caveat unchanged.
+**Blockers:** none. **Not merged to `main`.**
+**Hard Rules check:** Hard Rule 2 — this is its empirical confirmation on the current sweep, not a new guarantee; Hard Rule 7 — the soft-reward contrast and the V(pi)-vs-shown-floor distinction are reported, not smoothed.
+
+---
+
 ### [SOLO — camera-ready baselines re-measurement + reuse-first] — 2026-11-16 — camera-ready-baselines
 
 **Session goal:** reviewers asked for a clearer comparison against well-tuned non-RL baselines and about rekey overhead; the paper quoted always-PQC/random only from an earlier configuration. Re-measure every non-learned baseline under the current (Phase 4b / Gate W3) configuration; optionally add a reuse-first heuristic. No training.
